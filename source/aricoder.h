@@ -191,7 +191,6 @@ class ArithmeticEncoder
     std::unique_ptr<ArithmeticBitWriter> bitwriter_ = std::make_unique<ArithmeticBitWriter>();
 	
 	// arithmetic coding variables
-	unsigned int ccode = 0;
 	unsigned int clow = 0;
 	unsigned int chigh = CODER_LIMIT100 - 1;
 	unsigned int cstep = 0;

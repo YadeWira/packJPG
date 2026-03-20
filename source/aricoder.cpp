@@ -363,6 +363,12 @@ void model_s::shift_context( int c )
 	// shifting is not possible if max_order is below 1
 	// or context index is negative
 	if ( ( max_order < 2 ) || ( c < 0 ) ) return;
+
+	// Fix #33: clamp c to max_context - 1 to prevent heap-buffer-overflow.
+	// links[] is allocated with size max_context, but callers may pass values
+	// larger than max_context (e.g. unsigned char ctx_eobx up to 255 when
+	// max_context is only 8), causing an out-of-bounds read on the links vector.
+	if ( c >= max_context ) c = max_context - 1;
 	
 	// shift each orders' context
 	for (int i = max_order; i > 1; i-- ) {
@@ -652,6 +658,9 @@ void model_b::shift_context( int c )
 	// shifting is not possible if max_order is below 1
 	// or context index is negative
 	if ( (max_order < 2 ) || ( c < 0 ) ) return;
+
+	// Fix #33: clamp c to max_context - 1 (same fix as model_s::shift_context).
+	if ( c >= max_context ) c = max_context - 1;
 	
 	// shift each orders' context
 	for (int i = max_order; i > 1; i-- ) {

@@ -6,7 +6,7 @@ CC       = clang
 CPP      = clang++
 RC       = windres -O coff
 # Updated to C++17: std::filesystem is now built-in, no need for -lstdc++fs
-CPPFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math -fsched-spec-load -fomit-frame-pointer -std=c++17
+CPPFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17
 LDFLAGS  = -static -static-libgcc -static-libstdc++ 
 CSRC     = $(wildcard *.c)
 CPPSRC   = $(wildcard *.cpp)
