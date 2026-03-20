@@ -1,4 +1,4 @@
-packJPG v2.5k (01/22/2016)
+packJPG v2.6 (03/19/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -28,7 +28,7 @@ permissions will only be given where necessary on a case by case basis.
 This offer is aimed mainly at closed source freeware developers seeking 
 to add PJG support to their software projects. 
 
-Copyright 2006...2014 by HTW Aalen University and Matthias Stirner.
+Copyright 2006...2026 by Yade Bravo & Matthias Stirner.
 
 
 Usage of packJPG
@@ -63,12 +63,13 @@ Usage examples:
 Command line switches
 ~~~~~~~~~~~~~~~~~~~~~
 
- -ver  verify files after processing
- -v?   level of verbosity; 0,1 or 2 is allowed (default 0)
- -np   no pause after processing files
- -o    overwrite existing files
- -p    proceed on warnings
- -d    discard meta-info
+ -ver      verify files after processing
+ -v?       level of verbosity; 0,1 or 2 is allowed (default 0)
+ -np       no pause after processing files
+ -o        overwrite existing files
+ -od<path> write output files to directory <path>
+ -p        proceed on warnings
+ -d        discard meta-info
 
 By default, compression is cancelled on warnings. If warnings are 
 skipped by using "-p", most files with warnings can also be compressed, 
@@ -102,6 +103,7 @@ Usage examples:
  "packJPG -ver lena.jpg"
  "packJPG -d tiffany.jpg"
  "packJPG -p *.jpg"
+ "packJPG -od/tmp/output *.jpg"
 
 
 Known Limitations 
@@ -133,11 +135,21 @@ http://www.elektronik.htw-aalen.de/packJPG/binaries/old/
 Open source release / developer info
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The packJPG source codes is found inside the "source" subdirectory. 
-Additional documents aimed to developers, containing detailed 
+The packJPG source code is found inside the "source" subdirectory. 
+Additional documents aimed at developers, containing detailed 
 instructions on compiling the source code and using special 
-functionality, are included in the "packJPG" subdirectory. 
- 
+functionality, are included in the "packJPG" subdirectory.
+
+The source code requires a C++17 compliant compiler. Tested with
+clang 18 and g++ 13. Cross-compilation for Windows is supported via
+mingw-w64. See the Makefile for build targets:
+
+ make               build for the current platform
+ make linux-x64     bin/packJPG_linux_x64
+ make win-x64       bin/packJPG_win_x64.exe
+ make win-x86       bin/packJPG_win_x86.exe
+ make all-platforms all three binaries at once
+
 
 History
 ~~~~~~~
@@ -235,21 +247,35 @@ v2.5j (01/15/14) (public)
  - various source code optimizations (using cppcheck)
 
 v2.5k (01/22/16) (public)
- - Updated contact info
+ - updated contact info
  - fixed a minor bug
+
+v2.6 (03/19/2026) (public)
+ - ported to C++17; removed dependency on std::experimental::filesystem
+ - clang 18 support: removed GCC-only -fsched-spec-load flag
+ - fixed segfault: current_order going negative on malformed input (#41/#35)
+ - fixed heap-buffer-overflow: shift_context() lacked bounds check on links[] (#33)
+ - fixed global-buffer-overflow: qtable_id not validated before indexing qtables[] (#32)
+ - fixed global-buffer-overflow: errormessage buffer 128->512 bytes, sprintf->snprintf (#30)
+ - fixed alloc-dealloc mismatch: BitWriter::get_c_bytes() now uses malloc (#31)
+ - fixed memory leaks: early returns in read_jpeg() now clean up all allocations (#34)
+ - fixed undefined behaviour: DEVLI macro triggered negative shift when s=0
+ - removed dead code: plocoi, median_int, median_float, unused ccode field
+ - new switch: [-od<path>] write output files to a specified directory (#37)
+ - performance: BitWriter and MemoryWriter pre-allocate buffers using input size hint
+ - cross-compilation targets for Linux x64, Windows x64 and Windows x86 added to Makefile
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 
 Acknowledgements
 ~~~~~~~~~~~~~~~~
 
 packJPG is the result of countless hours of research and development. It
-is part of my final year project for Hochschule Aalen.
+is part of Matthias Stirner's final year project for Hochschule Aalen.
 
-Prof. Dr. Gerhard Seelmann from Hochschule Aalen supported my
+Prof. Dr. Gerhard Seelmann from Hochschule Aalen supported the
 development of packJPG with his extensive knowledge in the field of data
 compression. Without his advice, packJPG would not be possible.
-
-The official developer blog for packJPG is hosted by encode.ru.
 
 packJPG logo and icon are designed by Michael Kaufmann.
 
@@ -257,12 +283,15 @@ packJPG logo and icon are designed by Michael Kaufmann.
 Contact
 ~~~~~~~
 
-The official developer blog for packJPG:
+Project repository:
+ https://github.com/YadeWira/packJPG
+
+Original developer blog:
  http://packjpg.encode.ru/
- 
+
 For questions and bug reports:
  packjpg (at) matthiasstirner.com
 
 
 ____________________________________
-packJPG by Matthias Stirner, 01/2016
+packJPG by Yade Bravo, 03/2026
