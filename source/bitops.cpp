@@ -228,7 +228,13 @@ std::vector<std::uint8_t> BitWriter::get_bytes() {
 
 unsigned char* BitWriter::get_c_bytes() {
     pad(); // Pad the last bits of the current byte before returning the written bytes.
-    unsigned char* c_bytes = new unsigned char[bytes_.size()];
+    // Fix #31: use malloc (not new[]) so callers can safely free() the returned pointer.
+    // The rest of the codebase (packjpg.cpp) releases huffdata with free(), so this
+    // must be consistent to avoid an alloc-dealloc mismatch.
+    auto* c_bytes = static_cast<unsigned char*>(std::malloc(bytes_.size()));
+    if (c_bytes == nullptr) {
+        return nullptr;
+    }
     std::copy(std::begin(bytes_), std::end(bytes_), c_bytes);
     return c_bytes;
 }

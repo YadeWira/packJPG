@@ -442,7 +442,9 @@ int model_s::convert_int_to_symbol( int c, symbol *s )
 	// return high and low count for the escape symbol
 	s->low_count  = totals[ 1 ];
 	s->high_count = totals[ 0 ];
-	current_order--;
+	// Fix #41: clamp current_order to 0 (null_table) to prevent out-of-bounds
+	// access on contexts[] when processing malformed/fuzzed input files.
+	if ( current_order > 0 ) current_order--;
 	return 1;
 }
 
@@ -453,6 +455,9 @@ int model_s::convert_int_to_symbol( int c, symbol *s )
 	
 void model_s::get_symbol_scale( symbol *s )
 {
+	// Fix #41: ensure current_order is within valid range before accessing contexts[].
+	// A malformed file can drive current_order negative via repeated escape symbols.
+	if ( current_order < 0 ) current_order = 0;
 	// getting the scale is easy: totalize the table_s, use accumulated count -> done
 	totalize_table( contexts[ current_order ] );
 	s->scale = totals[ 0 ];
@@ -481,7 +486,9 @@ int model_s::convert_symbol_to_int(uint32_t count, symbol *s)
 	s->high_count = totals[c - 1]; // This is guaranteed to not go out of bounds since the search started at index 1 of totals.
 	// send escape if escape symbol encountered
 	if (c == 1) {
-		current_order--;
+		// Fix #41: clamp current_order to 0 (null_table) to prevent out-of-bounds
+		// access on contexts[] when processing malformed/fuzzed input files.
+		if ( current_order > 0 ) current_order--;
 		return ESCAPE_SYMBOL;
 	}
 	

@@ -306,7 +306,10 @@ packJPG by Matthias Stirner, 01/2016
 // #define QUN_V(v,cm,bp)	( ( QUANT(cm,bp) > 0 ) ? ( ( v > 0 ) ? ( v + (QUANT(cm,bp)/2) ) /  QUANT(cm,bp) : ( v - (QUANT(cm,bp)/2) ) /  QUANT(cm,bp) ) : 0 )
 
 #define ENVLI(s,v)		( ( v > 0 ) ? v : ( v - 1 ) + ( 1 << s ) )
-#define DEVLI(s,n)		( ( n >= ( 1 << (s - 1) ) ) ? n : n + 1 - ( 1 << s ) )
+// Fix UB: when s==0 the original expression evaluates 1<<(s-1) = 1<<(-1) which
+// is undefined behaviour. When s==0 there are no extra bits to read, so n==0
+// and the coefficient must be 0 — return 0 directly in that case.
+#define DEVLI(s,n)		( (s) == 0 ? 0 : ( ( (n) >= ( 1 << ((s) - 1) ) ) ? (n) : (n) + 1 - ( 1 << (s) ) ) )
 #define E_ENVLI(s,v)	( v - ( 1 << s ) )
 #define E_DEVLI(s,n)	( n + ( 1 << s ) )
 
@@ -2130,6 +2133,9 @@ INTERN bool read_jpeg( void )
 	if ( segment == NULL ) {
 		sprintf( errormessage, MEM_ERRMSG );
 		errorlevel = 2;
+		// Fix #34: hdrw and huffw were already allocated above — free them before returning.
+		delete ( hdrw );
+		delete ( huffw );
 		return false;
 	}
 	
@@ -2176,6 +2182,10 @@ INTERN bool read_jpeg( void )
 								if ( rst_err == NULL ) {
 									sprintf( errormessage, MEM_ERRMSG );
 									errorlevel = 2;
+									// Fix #34: cleanup before early return.
+									delete ( hdrw );
+									delete ( huffw );
+									free ( segment );
 									return false;
 								}
 							}
@@ -2186,6 +2196,10 @@ INTERN bool read_jpeg( void )
 							if ( rst_err == NULL ) {
 								sprintf( errormessage, MEM_ERRMSG );
 								errorlevel = 2;
+								// Fix #34: cleanup before early return.
+								delete ( hdrw );
+								delete ( huffw );
+								free ( segment );
 								return false;
 							}
 							if ( crst > 255 ) {
@@ -2277,6 +2291,8 @@ INTERN bool read_jpeg( void )
 	if ( ( hdrs == 0 ) || ( hufs == 0 ) ) {
 		sprintf( errormessage, "unexpected end of data encountered" );
 		errorlevel = 2;
+		// Fix #34: segment is not freed until later — free it now before returning.
+		free( segment );
 		return false;
 	}
 	
