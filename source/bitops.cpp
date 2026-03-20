@@ -9,7 +9,9 @@ reading and writing of arrays
 #include <array>
 #include <cstdio>
 #include <cstdlib>
-#include <experimental/filesystem>
+// Use standard filesystem (C++17). The old experimental/filesystem header
+// was required for C++14 but is removed in recent clang/libstdc++ releases.
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -454,7 +456,7 @@ void FileWriter::reset() {
 
 std::size_t FileWriter::num_bytes_written() {
 	std::fflush(fptr_);
-	return std::experimental::filesystem::file_size(file_path_);
+	return std::filesystem::file_size(file_path_);
 }
 
 bool FileWriter::error() {

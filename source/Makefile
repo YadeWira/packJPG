@@ -2,11 +2,12 @@
 # Created by Matthias Stirner, 01/2016
 
 TARGET   = packJPG
-CC       = gcc
-CPP      = g++
+CC       = clang
+CPP      = clang++
 RC       = windres -O coff
-CPPFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math -fsched-spec-load -fomit-frame-pointer -std=c++14
-LDFLAGS  = -static -static-libgcc -static-libstdc++ -lstdc++fs
+# Updated to C++17: std::filesystem is now built-in, no need for -lstdc++fs
+CPPFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math -fsched-spec-load -fomit-frame-pointer -std=c++17
+LDFLAGS  = -static -static-libgcc -static-libstdc++ 
 CSRC     = $(wildcard *.c)
 CPPSRC   = $(wildcard *.cpp)
 DEPS     = $(wildcard *.h) Makefile
