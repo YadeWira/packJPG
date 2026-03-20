@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <functional>
 #include <limits>
+#include <cstring>
 
 template <std::uint8_t bit>
 void ArithmeticBitWriter::write_bit() {
@@ -273,7 +274,7 @@ model_s::model_s( int max_s, int max_c, int max_o, int c_lim ) :
 		scoreboard(new bool[max_s]),
 		contexts(max_o + 3)
 {
-	std::fill(scoreboard, scoreboard + max_symbol, false);
+	memset(scoreboard, 0, max_symbol * sizeof(bool)); // Opt: memset faster than std::fill
 	
 	// set up null table
 	table_s* null_table = new table_s;
@@ -349,7 +350,7 @@ void model_s::update_model( int symbol )
 	
 	// reset scoreboard and current order
 	current_order = max_order;
-	std::fill(scoreboard, scoreboard + max_symbol, false);
+	memset(scoreboard, 0, max_symbol * sizeof(bool)); // Opt: memset faster than std::fill
 	sb0_count = max_symbol;
 }
 
@@ -410,14 +411,18 @@ void model_s::flush_model()
 	
 void model_s::exclude_symbols(int c)
 {
-	// exclusions are back to normal after update_model is used	
+	// exclusions are back to normal after update_model is used
 
-	for ( c = c + 1; c < max_symbol; c++ ) {
-		if ( !scoreboard[ c ] ) {
-			scoreboard[ c ] = true;
-			sb0_count--;
-		}
+	// Opt: replace byte-by-byte loop with memset — same result, one instruction.
+	// Original: for(c=c+1; c<max_symbol; c++) { if(!scoreboard[c]) { scoreboard[c]=true; sb0_count--; } }
+	// We can't just memset blindly because sb0_count tracks how many are still false.
+	// So we count how many we're newly setting, then bulk-set.
+	c = c + 1;
+	if ( c >= max_symbol ) return;
+	for ( int i = c; i < max_symbol; i++ ) {
+		if ( !scoreboard[ i ] ) sb0_count--;
 	}
+	memset( scoreboard + c, true, max_symbol - c );
 }
 
 

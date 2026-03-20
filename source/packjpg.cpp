@@ -1,5 +1,5 @@
 /*
-packJPG v2.5k (01/22/2016)
+packJPG v2.6 (03/19/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -238,6 +238,23 @@ v2.5j (01/15/14) (public)
 v2.5k (01/22/16) (public)
  - Updated contact info
  - fixed a minor bug
+
+v2.6 (03/19/25) (public)
+ - Ported to C++17 (replaced std::experimental::filesystem)
+ - Removed GCC-only -fsched-spec-load flag from Makefile (clang compatibility)
+ - Fixed segfault: current_order going negative in model_s (issue #41/#35)
+ - Fixed alloc-dealloc mismatch: BitWriter::get_c_bytes() now uses malloc (issue #31)
+ - Fixed memory leaks: early returns in read_jpeg() now clean up hdrw/huffw/segment (issue #34)
+ - Fixed undefined behaviour: DEVLI macro with s=0 caused negative shift (UB)
+ - Fixed global-buffer-overflow: errormessage buffer 128→512, sprintf→snprintf (issue #30)
+ - Fixed heap-buffer-overflow: shift_context() now clamps c to max_context-1 (issue #33)
+ - Fixed global-buffer-overflow: qtable_id validated against 4 before indexing qtables[] (issue #32)
+ - Removed unused dead code: plocoi, median_int, median_float, ccode field in ArithmeticEncoder
+ - Performance: BitWriter and MemoryWriter now pre-reserve buffer using input size hint
+ - Performance: scoreboard reset uses memset instead of std::fill
+ - Performance: exclude_symbols() bulk-sets scoreboard with memset
+ - New flag: -od<path> writes output files to specified directory (issue #37)
+ - Maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 
 Acknowledgements
@@ -669,6 +686,7 @@ INTERN int  errorlevel;
 INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
+INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
@@ -1203,6 +1221,10 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-o" ) == 0 ) {
 			overwrite = true;
 		}
+		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
+			// Feature #37: -od<path> sets output directory
+			outdir = (*argv) + 3;
+		}
 		#if defined(DEV_BUILD)
 		else if ( strcmp((*argv), "-dev") == 0 ) {
 			developer = true;
@@ -1554,6 +1576,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
+	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
 	#if defined(DEV_BUILD)
@@ -2124,7 +2147,9 @@ INTERN bool read_jpeg( void )
 	hdrs = 0; // size of header data, start with 0
 	
 	// start huffman writer
+	// Opt: pre-reserve ~90% of input size to avoid reallocs — huffdata is usually the bulk.
 	huffw = new MemoryWriter();
+	huffw->reserve( str_in->get_size() );
 	hufs  = 0; // size of image data, start with 0
 	
 	// alloc memory for segment data first
@@ -2809,7 +2834,8 @@ INTERN bool recode_jpeg( void )
 	
 	
 	// open huffman coded image data in BitWriter
-	huffw = new BitWriter(padbit);
+	// Opt: pre-reserve hufs bytes to avoid reallocs — output will be close to input size.
+	huffw = new BitWriter(padbit, hufs);
 	
 	// init storage writer
 	std::vector<std::uint8_t> storw; // Storage for correction bits.
@@ -6627,13 +6653,37 @@ INTERN inline void progress_bar( int current, int last )
 #if !defined(BUILD_LIB)
 INTERN inline char* create_filename( const char* base, const char* extension )
 {
-	int len = strlen( base ) + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;	
-	char* filename = (char*) calloc( len, sizeof( char ) );	
-	
-	// create a filename from base & extension
-	strcpy( filename, base );
+	// Feature #37: if outdir is set, put the output file there instead of next to the input.
+	const char* basename_only = base;
+	if ( outdir != NULL ) {
+		// Find last path separator to get just the filename part
+		const char* sep = strrchr( base, '/' );
+	#if defined(_WIN32) || defined(WIN32)
+		const char* sep2 = strrchr( base, '\\' );
+		if ( sep2 > sep ) sep = sep2;
+	#endif
+		if ( sep != NULL ) basename_only = sep + 1;
+	}
+
+	int dirlen  = ( outdir != NULL ) ? strlen( outdir ) + 1 : 0; // +1 for separator
+	int len = dirlen + strlen( basename_only ) + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;
+	char* filename = (char*) calloc( len, sizeof( char ) );
+
+	if ( outdir != NULL ) {
+		strcpy( filename, outdir );
+		// ensure trailing separator
+		int dl = strlen( outdir );
+		if ( dl > 0 && outdir[ dl-1 ] != '/'
+	#if defined(_WIN32) || defined(WIN32)
+			&& outdir[ dl-1 ] != '\\'
+	#endif
+		) strcat( filename, "/" );
+		strcat( filename, basename_only );
+	} else {
+		strcpy( filename, base );
+	}
 	set_extension( filename, extension );
-	
+
 	return filename;
 }
 #endif
@@ -7204,3 +7254,4 @@ INTERN bool dump_pgm( void )
 /* ----------------------- End of developers functions -------------------------- */
 
 /* ----------------------- End of file -------------------------- */
+

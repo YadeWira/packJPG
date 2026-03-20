@@ -46,6 +46,7 @@ private:
 class BitWriter {
 public:
 	BitWriter(std::uint8_t padbit);
+	BitWriter(std::uint8_t padbit, std::size_t size_hint); // Opt: pre-allocate buffer
 	~BitWriter();
 	/*
 	* Writes the first (lowest) n bits from val (n is assumed to be less than or equal to 16).
@@ -260,6 +261,9 @@ public:
 	void reset() override;
 	std::size_t num_bytes_written() override;
 	bool error() override;
+
+	// Opt: pre-allocate internal buffer to avoid repeated reallocs
+	void reserve(std::size_t n) { data_.reserve(n); }
 
 private:
 	std::vector<std::uint8_t> data_;

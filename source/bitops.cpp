@@ -180,6 +180,12 @@ int BitReader::peof() {
 
 BitWriter::BitWriter(std::uint8_t padbit) : padbit_(padbit) {}
 
+BitWriter::BitWriter(std::uint8_t padbit, std::size_t size_hint) : padbit_(padbit) {
+    // Opt: pre-allocate to avoid repeated reallocs in the hot path.
+    // size_hint is the compressed input size — output will be similar.
+    bytes_.reserve(size_hint);
+}
+
 BitWriter::~BitWriter() {}
 
 std::uint32_t rbits32(std::uint32_t val, std::size_t n) {
