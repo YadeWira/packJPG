@@ -40,20 +40,27 @@ $CXX $CFLAGS -DUNIX \
 echo ""
 echo "==> Windows x64"
 WIN64="x86_64-w64-mingw32-g++"
+WINDRES64="x86_64-w64-mingw32-windres"
 if ! command -v $WIN64 &>/dev/null; then
     echo "    [--] $WIN64 not found, skipping Windows x64"
     echo "         Install with: sudo apt install mingw-w64"
 else
+    ICONS64=""
+    if command -v $WINDRES64 &>/dev/null; then
+        $WINDRES64 -O coff icons.rc -o icons_x64.o \
+            && ICONS64="icons_x64.o" \
+            && echo "    [OK] icons compiled for x64"
+    else
+        echo "    [!!] $WINDRES64 not found — binary will have no icon"
+    fi
+
     $WIN64 $CFLAGS \
         -o "$OUT/packJPG_win_x64.exe" \
-        $SRC icons.res \
-        -static -static-libgcc -static-libstdc++ \
-        2>/dev/null || \
-    $WIN64 $CFLAGS \
-        -o "$OUT/packJPG_win_x64.exe" \
-        $SRC \
+        $SRC $ICONS64 \
         -static -static-libgcc -static-libstdc++ \
         && ok "bin/packJPG_win_x64.exe"
+
+    [ -f icons_x64.o ] && rm -f icons_x64.o
 fi
 
 # --- Windows x86 (32-bit) ----------------------------------------------------
@@ -61,20 +68,27 @@ fi
 echo ""
 echo "==> Windows x86 (32-bit)"
 WIN32="i686-w64-mingw32-g++"
+WINDRES32="i686-w64-mingw32-windres"
 if ! command -v $WIN32 &>/dev/null; then
     echo "    [--] $WIN32 not found, skipping Windows x86"
     echo "         Install with: sudo apt install mingw-w64"
 else
+    ICONS32=""
+    if command -v $WINDRES32 &>/dev/null; then
+        $WINDRES32 -O coff icons.rc -o icons_x86.o \
+            && ICONS32="icons_x86.o" \
+            && echo "    [OK] icons compiled for x86"
+    else
+        echo "    [!!] $WINDRES32 not found — binary will have no icon"
+    fi
+
     $WIN32 $CFLAGS \
         -o "$OUT/packJPG_win_x86.exe" \
-        $SRC icons.res \
-        -static -static-libgcc -static-libstdc++ \
-        2>/dev/null || \
-    $WIN32 $CFLAGS \
-        -o "$OUT/packJPG_win_x86.exe" \
-        $SRC \
+        $SRC $ICONS32 \
         -static -static-libgcc -static-libstdc++ \
         && ok "bin/packJPG_win_x86.exe"
+
+    [ -f icons_x86.o ] && rm -f icons_x86.o
 fi
 
 # --- Summary -----------------------------------------------------------------

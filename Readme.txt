@@ -1,4 +1,4 @@
-packJPG v2.6 (03/19/2026)
+packJPG v2.7 (03/20/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -48,6 +48,9 @@ files. Filenames for output files are created automatically. In default
 mode, files are never overwritten. If a filename is already in use,
 packJPG creates a new filename by adding underscores.
 
+On Windows, wildcard expansion (e.g. "*.jpg") is handled internally by
+packJPG since cmd.exe does not expand wildcards automatically.
+
 If "-" is used as a filename input from stdin is assumed and output is
 written to stdout. This can be useful for example if jpegtran is to be
 used as a preprocessor.
@@ -58,6 +61,7 @@ Usage examples:
  "packJPG lena.jpg"
  "packJPG kodim??.jpg"
  "packJPG - < sail.pjg > sail.jpg"
+ "packJPG -th0 -o -np -od/tmp/out *.jpg"
 
 
 Command line switches
@@ -67,7 +71,8 @@ Command line switches
  -v?       level of verbosity; 0,1 or 2 is allowed (default 0)
  -np       no pause after processing files
  -o        overwrite existing files
- -od<path> write output files to directory <path>
+ -od<path> write output files to directory <path> (created if needed)
+ -th<n>    number of worker threads; 0 = auto-detect (default: 1)
  -p        proceed on warnings
  -d        discard meta-info
 
@@ -97,6 +102,21 @@ options will most likely lead to reconstructed JPG files not being
 bitwise identical to the original JPG files. In turn, the verification 
 process may fail on various files although nothing actually went wrong. 
 
+Multi-threaded mode (-th)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The "-th<n>" switch enables parallel batch processing using n worker
+threads. Use "-th0" to auto-detect the number of CPU cores (on x86
+builds the auto limit is 2; on x64 there is no cap).
+
+In multi-threaded mode, verification is always enabled automatically:
+each file is compressed and immediately decompressed and compared
+bit-for-bit before the output is written. This ensures no silent
+corruption can occur even under heavy parallel load.
+
+Single-threaded mode (default, no -th flag) behaves exactly as in
+previous versions.
+
 Usage examples:
 
  "packJPG -v1 -o baboon.pjg"
@@ -104,6 +124,8 @@ Usage examples:
  "packJPG -d tiffany.jpg"
  "packJPG -p *.jpg"
  "packJPG -od/tmp/output *.jpg"
+ "packJPG -th0 -o -np -od/tmp/output *.jpg"
+ "packJPG -th4 -o -np *.jpg"
 
 
 Known Limitations 
@@ -117,7 +139,7 @@ even if they work perfectly with other image processing software. The
 command line switch "-p" can be used to increase error tolerance and 
 compatibility.
 
-If you try to drag and drop to many files at once, there might be a 
+If you try to drag and drop too many files at once, there might be a 
 windowed error message about missing privileges. In that case you can 
 try it again with less files or consider using the command prompt. 
 packJPG has been tested to work perfectly with thousands of files from 
@@ -142,13 +164,14 @@ functionality, are included in the "packJPG" subdirectory.
 
 The source code requires a C++17 compliant compiler. Tested with
 clang 18 and g++ 13. Cross-compilation for Windows is supported via
-mingw-w64. See the Makefile for build targets:
+mingw-w64. Run build_all.sh to build all three targets at once:
 
- make               build for the current platform
- make linux-x64     bin/packJPG_linux_x64
- make win-x64       bin/packJPG_win_x64.exe
- make win-x86       bin/packJPG_win_x86.exe
- make all-platforms all three binaries at once
+ ./build_all.sh            build Linux x64, Windows x64, Windows x86
+ make                      build for the current platform
+ make linux-x64            bin/packJPG_linux_x64
+ make win-x64              bin/packJPG_win_x64.exe
+ make win-x86              bin/packJPG_win_x86.exe
+ make all-platforms        all three binaries at once
 
 
 History
@@ -264,6 +287,15 @@ v2.6 (03/19/2026) (public)
  - new switch: [-od<path>] write output files to a specified directory (#37)
  - performance: BitWriter and MemoryWriter pre-allocate buffers using input size hint
  - cross-compilation targets for Linux x64, Windows x64 and Windows x86 added to Makefile
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
+v2.7 (03/20/2026) (public)
+ - new switch: [-th<n>] multi-threaded batch processing (0 = auto-detect cores)
+ - multi-threaded mode automatically enables bit-for-bit verification per file
+ - Windows: wildcard expansion now handled internally (*.jpg works in cmd.exe)
+ - [-od<path>] now creates the output directory automatically if it does not exist
+ - build: fixed icon embedding for Windows x64/x86 targets (windres -O coff)
+ - build: wall-clock time now reported correctly in multi-threaded mode
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 

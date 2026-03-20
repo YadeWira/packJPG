@@ -1,5 +1,5 @@
 /*
-packJPG v2.6 (03/19/2026)
+packJPG v2.7 (03/20/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -256,6 +256,12 @@ v2.6 (03/19/25) (public)
  - New flag: -od<path> writes output files to specified directory (issue #37)
  - Maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
+v2.7 (03/20/2026) (public)
+ - Windows: wildcard expansion in initialize_options (*.jpg, *.pjg now work from cmd.exe)
+ - Build: fixed icon embedding for Windows x64/x86 (windres -O coff)
+ - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores; x86 capped at 2)
+ - Thread-safe output buffering in process_ui (per-file atomic console writes)
+
 
 Acknowledgements
 ~~~~~~~~~~~~~~~~
@@ -295,6 +301,13 @@ packJPG by Matthias Stirner, 01/2016
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <filesystem>
+#if defined(_WIN32) || defined(WIN32)
+	#include <windows.h>
+#endif
 
 #include "bitops.h"
 #include "aricoder.h"
@@ -310,6 +323,7 @@ packJPG by Matthias Stirner, 01/2016
 #endif
 
 #define INTERN static
+#define THREAD_LOCAL static thread_local
 
 #define INIT_MODEL_S(a,b,c) new model_s( a, b, c, 255 )
 #define INIT_MODEL_B(a,b)   new model_b( a, b, 255 )
@@ -563,39 +577,39 @@ INTERN int lib_out_type = -1;
 	global variables: data storage
 	----------------------------------------------- */
 
-INTERN unsigned short qtables[4][64];				// quantization tables
-INTERN huffCodes      hcodes[2][4];				// huffman codes
-INTERN huffTree       htrees[2][4];				// huffman decoding trees
-INTERN unsigned char  htset[2][4];					// 1 if huffman table is set
+THREAD_LOCAL unsigned short qtables[4][64];				// quantization tables
+THREAD_LOCAL huffCodes      hcodes[2][4];				// huffman codes
+THREAD_LOCAL huffTree       htrees[2][4];				// huffman decoding trees
+THREAD_LOCAL unsigned char  htset[2][4];					// 1 if huffman table is set
 
-INTERN unsigned char* grbgdata		   =   NULL;	// garbage data
-INTERN unsigned char* hdrdata          =   NULL;   // header data
-INTERN unsigned char* huffdata         =   NULL;   // huffman coded data
-INTERN int            hufs             =    0  ;   // size of huffman data
-INTERN int            hdrs             =    0  ;   // size of header
-INTERN int            grbs             =    0  ;   // size of garbage
+THREAD_LOCAL unsigned char* grbgdata		   =   NULL;	// garbage data
+THREAD_LOCAL unsigned char* hdrdata          =   NULL;   // header data
+THREAD_LOCAL unsigned char* huffdata         =   NULL;   // huffman coded data
+THREAD_LOCAL int            hufs             =    0  ;   // size of huffman data
+THREAD_LOCAL int            hdrs             =    0  ;   // size of header
+THREAD_LOCAL int            grbs             =    0  ;   // size of garbage
 
-INTERN unsigned int*  rstp             =   NULL;   // restart markers positions in huffdata
-INTERN unsigned int*  scnp             =   NULL;   // scan start positions in huffdata
-INTERN int            rstc             =    0  ;   // count of restart markers
-INTERN int            scnc             =    0  ;   // count of scans
-INTERN int            rsti             =    0  ;   // restart interval
-INTERN char           padbit           =    -1 ;   // padbit (for huffman coding)
-INTERN unsigned char* rst_err          =   NULL;   // number of wrong-set RST markers per scan
+THREAD_LOCAL unsigned int*  rstp             =   NULL;   // restart markers positions in huffdata
+THREAD_LOCAL unsigned int*  scnp             =   NULL;   // scan start positions in huffdata
+THREAD_LOCAL int            rstc             =    0  ;   // count of restart markers
+THREAD_LOCAL int            scnc             =    0  ;   // count of scans
+THREAD_LOCAL int            rsti             =    0  ;   // restart interval
+THREAD_LOCAL char           padbit           =    -1 ;   // padbit (for huffman coding)
+THREAD_LOCAL unsigned char* rst_err          =   NULL;   // number of wrong-set RST markers per scan
 
-INTERN unsigned char* zdstdata[4]      = { NULL }; // zero distribution (# of non-zeroes) lists (for higher 7x7 block)
-INTERN unsigned char* eobxhigh[4]      = { NULL }; // eob in x direction (for higher 7x7 block)
-INTERN unsigned char* eobyhigh[4]      = { NULL }; // eob in y direction (for higher 7x7 block)
-INTERN unsigned char* zdstxlow[4]		= { NULL }; // # of non zeroes for first row
-INTERN unsigned char* zdstylow[4]		= { NULL }; // # of non zeroes for first collumn
-INTERN signed short*  colldata[4][64]  = {{NULL}}; // collection sorted DCT coefficients
+THREAD_LOCAL unsigned char* zdstdata[4]      = { NULL }; // zero distribution (# of non-zeroes) lists (for higher 7x7 block)
+THREAD_LOCAL unsigned char* eobxhigh[4]      = { NULL }; // eob in x direction (for higher 7x7 block)
+THREAD_LOCAL unsigned char* eobyhigh[4]      = { NULL }; // eob in y direction (for higher 7x7 block)
+THREAD_LOCAL unsigned char* zdstxlow[4]		= { NULL }; // # of non zeroes for first row
+THREAD_LOCAL unsigned char* zdstylow[4]		= { NULL }; // # of non zeroes for first collumn
+THREAD_LOCAL signed short*  colldata[4][64]  = {{NULL}}; // collection sorted DCT coefficients
 
-INTERN unsigned char* freqscan[4]      = { NULL }; // optimized order for frequency scans (only pointers to scans)
-INTERN unsigned char  zsrtscan[4][64];				// zero optimized frequency scan
+THREAD_LOCAL unsigned char* freqscan[4]      = { NULL }; // optimized order for frequency scans (only pointers to scans)
+THREAD_LOCAL unsigned char  zsrtscan[4][64];				// zero optimized frequency scan
 
-INTERN int adpt_idct_8x8[ 4 ][ 8 * 8 * 8 * 8 ];	// precalculated/adapted values for idct (8x8)
-INTERN int adpt_idct_1x8[ 4 ][ 1 * 1 * 8 * 8 ];	// precalculated/adapted values for idct (1x8)
-INTERN int adpt_idct_8x1[ 4 ][ 8 * 8 * 1 * 1 ];	// precalculated/adapted values for idct (8x1)
+THREAD_LOCAL int adpt_idct_8x8[ 4 ][ 8 * 8 * 8 * 8 ];	// precalculated/adapted values for idct (8x8)
+THREAD_LOCAL int adpt_idct_1x8[ 4 ][ 1 * 1 * 8 * 8 ];	// precalculated/adapted values for idct (1x8)
+THREAD_LOCAL int adpt_idct_8x1[ 4 ][ 8 * 8 * 1 * 1 ];	// precalculated/adapted values for idct (8x1)
 
 
 /* -----------------------------------------------
@@ -603,50 +617,50 @@ INTERN int adpt_idct_8x1[ 4 ][ 8 * 8 * 1 * 1 ];	// precalculated/adapted values 
 	----------------------------------------------- */
 
 // seperate info for each color component
-INTERN componentInfo cmpnfo[ 4 ];
+THREAD_LOCAL componentInfo cmpnfo[ 4 ];
 
-INTERN int cmpc        = 0; // component count
-INTERN int imgwidth    = 0; // width of image
-INTERN int imgheight   = 0; // height of image
+THREAD_LOCAL int cmpc        = 0; // component count
+THREAD_LOCAL int imgwidth    = 0; // width of image
+THREAD_LOCAL int imgheight   = 0; // height of image
 
-INTERN int sfhm        = 0; // max horizontal sample factor
-INTERN int sfvm        = 0; // max verical sample factor
-INTERN int mcuv        = 0; // mcus per line
-INTERN int mcuh        = 0; // mcus per collumn
-INTERN int mcuc        = 0; // count of mcus
+THREAD_LOCAL int sfhm        = 0; // max horizontal sample factor
+THREAD_LOCAL int sfvm        = 0; // max verical sample factor
+THREAD_LOCAL int mcuv        = 0; // mcus per line
+THREAD_LOCAL int mcuh        = 0; // mcus per collumn
+THREAD_LOCAL int mcuc        = 0; // count of mcus
 
 
 /* -----------------------------------------------
 	global variables: info about current scan
 	----------------------------------------------- */
 
-INTERN int cs_cmpc      =   0  ; // component count in current scan
-INTERN int cs_cmp[ 4 ]  = { 0 }; // component numbers  in current scan
-INTERN int cs_from      =   0  ; // begin - band of current scan ( inclusive )
-INTERN int cs_to        =   0  ; // end - band of current scan ( inclusive )
-INTERN int cs_sah       =   0  ; // successive approximation bit pos high
-INTERN int cs_sal       =   0  ; // successive approximation bit pos low
+THREAD_LOCAL int cs_cmpc      =   0  ; // component count in current scan
+THREAD_LOCAL int cs_cmp[ 4 ]  = { 0 }; // component numbers  in current scan
+THREAD_LOCAL int cs_from      =   0  ; // begin - band of current scan ( inclusive )
+THREAD_LOCAL int cs_to        =   0  ; // end - band of current scan ( inclusive )
+THREAD_LOCAL int cs_sah       =   0  ; // successive approximation bit pos high
+THREAD_LOCAL int cs_sal       =   0  ; // successive approximation bit pos low
 	
 
 /* -----------------------------------------------
 	global variables: info about files
 	----------------------------------------------- */
 	
-INTERN char*  jpgfilename = NULL;	// name of JPEG file
-INTERN char*  pjgfilename = NULL;	// name of PJG file
-INTERN int    jpgfilesize;			// size of JPEG file
-INTERN int    pjgfilesize;			// size of PJG file
-INTERN int    jpegtype = 0;			// type of JPEG coding: 0->unknown, 1->sequential, 2->progressive
-INTERN int    filetype;				// type of current file
-INTERN std::unique_ptr<Reader> str_in;	// input stream
-INTERN std::unique_ptr<Writer> str_out;	// output stream
+THREAD_LOCAL char*  jpgfilename = NULL;	// name of JPEG file
+THREAD_LOCAL char*  pjgfilename = NULL;	// name of PJG file
+THREAD_LOCAL int    jpgfilesize;			// size of JPEG file
+THREAD_LOCAL int    pjgfilesize;			// size of PJG file
+THREAD_LOCAL int    jpegtype = 0;			// type of JPEG coding: 0->unknown, 1->sequential, 2->progressive
+THREAD_LOCAL int    filetype;				// type of current file
+THREAD_LOCAL std::unique_ptr<Reader> str_in;	// input stream
+THREAD_LOCAL std::unique_ptr<Writer> str_out;	// output stream
 
 #if !defined(BUILD_LIB)
-INTERN std::unique_ptr<Reader> str_str;	// storage stream
+THREAD_LOCAL std::unique_ptr<Reader> str_str;	// storage stream
 
 INTERN char** filelist = NULL;		// list of files to process 
 INTERN int    file_cnt = 0;			// count of files in list
-INTERN int    file_no  = 0;			// number of current file
+THREAD_LOCAL int    file_no  = 0;			// number of current file
 
 INTERN char** err_list = NULL;		// list of error messages 
 INTERN int*   err_tp   = NULL;		// list of error types
@@ -668,9 +682,9 @@ INTERN int    dev_size_zdl[ 4 ] = { 0 };
 	global variables: messages
 	----------------------------------------------- */
 
-INTERN char errormessage [ MSG_SIZE ];
-INTERN bool (*errorfunction)();
-INTERN int  errorlevel;
+THREAD_LOCAL char errormessage [ MSG_SIZE ];
+THREAD_LOCAL bool (*errorfunction)();
+THREAD_LOCAL int  errorlevel;
 // meaning of errorlevel:
 // -1 -> wrong input
 // 0 -> no error
@@ -692,22 +706,25 @@ INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / 
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
 
 INTERN bool developer  = false;	// allow developers functions yes/no
-INTERN bool auto_set   = true;	// automatic find best settings yes/no
-INTERN int  action = A_COMPRESS;// what to do with JPEG/PJG files
+THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
+THREAD_LOCAL int  action = A_COMPRESS;// what to do with JPEG/PJG files
 
 INTERN FILE*  msgout   = stdout;// stream for output of messages
-INTERN bool   pipe_on  = false;	// use stdin/stdout instead of filelist
+INTERN int    num_threads = 1;  // number of worker threads (1 = single-threaded)
+INTERN std::atomic<int> g_files_done{0}; // files completed so far (for MT progress bar)
+THREAD_LOCAL std::string tl_ui_buf;     // per-thread output buffer for MT mode
+THREAD_LOCAL bool   pipe_on  = false;	// use stdin/stdout instead of filelist
 #else
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
-INTERN bool auto_set   = true;	// automatic find best settings yes/no
+THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
 INTERN int  action = A_COMPRESS;// what to do with JPEG/PJG files
 #endif
 
-INTERN unsigned char nois_trs[ 4 ] = {6,6,6,6}; // bit pattern noise threshold
-INTERN unsigned char segm_cnt[ 4 ] = {10,10,10,10}; // number of segments
+THREAD_LOCAL unsigned char nois_trs[ 4 ] = {6,6,6,6}; // bit pattern noise threshold
+THREAD_LOCAL unsigned char segm_cnt[ 4 ] = {10,10,10,10}; // number of segments
 #if !defined( BUILD_LIB )
-INTERN unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
+THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 #endif
 
 
@@ -715,11 +732,11 @@ INTERN unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 26;
+INTERN const unsigned char appversion = 27;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/19/2026";
+INTERN const char*  versiondate  = "03/20/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -740,7 +757,8 @@ int main( int argc, char** argv )
 {	
 	snprintf( errormessage, MSG_SIZE, "no errormessage specified" );
 	
-	clock_t begin, end;
+	using WallClock = std::chrono::steady_clock;
+	WallClock::time_point begin, end;
 	
 	int error_cnt = 0;
 	int warn_cnt  = 0;
@@ -785,26 +803,120 @@ int main( int argc, char** argv )
 	reset_buffers();
 	
 	// process file(s) - this is the main function routine
-	begin = clock();
-	for ( file_no = 0; file_no < file_cnt; file_no++ ) {	
-		// process current file
-		process_ui();
-		// store error message and type if any
-		if ( errorlevel > 0 ) {
-			err_list[ file_no ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
-			err_tp[ file_no ] = errorlevel;
-			if ( err_list[ file_no ] != NULL )
-				strcpy( err_list[ file_no ], errormessage );
+	begin = WallClock::now();
+	if ( num_threads <= 1 ) {
+		// --- single-threaded (original behavior) ---
+		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
+			// process current file
+			process_ui();
+			// store error message and type if any
+			if ( errorlevel > 0 ) {
+				err_list[ file_no ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
+				err_tp[ file_no ] = errorlevel;
+				if ( err_list[ file_no ] != NULL )
+					strcpy( err_list[ file_no ], errormessage );
+			}
+			// count errors / warnings / file sizes
+			if ( errorlevel >= err_tol ) error_cnt++;
+			else {
+				if ( errorlevel == 1 ) warn_cnt++;
+				acc_jpgsize += jpgfilesize;
+				acc_pjgsize += pjgfilesize;
+			}
 		}
-		// count errors / warnings / file sizes
-		if ( errorlevel >= err_tol ) error_cnt++;
-		else {
-			if ( errorlevel == 1 ) warn_cnt++;
-			acc_jpgsize += jpgfilesize;
-			acc_pjgsize += pjgfilesize;
+	} else {
+		// --- multi-threaded ---
+		// Force verification in MT mode to catch any silent corruption.
+		// Each file is compressed then immediately decompressed and compared bit-for-bit.
+		if ( verify_lv < 1 ) verify_lv = 1;
+		if ( verbosity >= 0 )
+			fprintf( msgout, "Using %i threads (verify enabled)\n", num_threads );
+		g_files_done.store( 0 );
+		std::atomic<int> g_next_file( 0 );
+		std::mutex stats_mtx;
+
+		// Capture settings from main thread before spawning workers.
+		// nois_trs, segm_cnt, auto_set are thread_local so each worker
+		// starts with defaults — we need to copy the parsed values in.
+		unsigned char main_nois_trs[4], main_segm_cnt[4];
+		bool main_auto_set = auto_set;
+		for ( int i = 0; i < 4; i++ ) {
+			main_nois_trs[i] = nois_trs[i];
+			main_segm_cnt[i] = segm_cnt[i];
 		}
+
+		auto worker = [&]() {
+			// propagate main-thread settings into this thread's locals
+			auto_set = main_auto_set;
+			for ( int i = 0; i < 4; i++ ) {
+				nois_trs[i] = main_nois_trs[i];
+				segm_cnt[i] = main_segm_cnt[i];
+			}
+			int fn;
+			while ( ( fn = g_next_file.fetch_add( 1 ) ) < file_cnt ) {
+				file_no = fn;
+				process_ui();
+				// accumulate stats under lock (each fn is unique so err_list/err_tp are safe)
+				// acquire lock once: flush output + update stats + redraw bar
+				{
+					std::lock_guard<std::mutex> lk( stats_mtx );
+
+					// --- stats ---
+					if ( errorlevel > 0 ) {
+						err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
+						err_tp[ fn ] = errorlevel;
+						if ( err_list[ fn ] != NULL )
+							strcpy( err_list[ fn ], errormessage );
+					}
+					if ( errorlevel >= err_tol ) error_cnt++;
+					else {
+						if ( errorlevel == 1 ) warn_cnt++;
+						acc_jpgsize += jpgfilesize;
+						acc_pjgsize += pjgfilesize;
+					}
+					int done = ++g_files_done;
+
+					// --- console (all under the same lock) ---
+					// if this file produced output (errors/warnings), print it cleanly
+					if ( !tl_ui_buf.empty() ) {
+						// erase current bar line, print error, then redraw bar below
+						fprintf( msgout, "\r%*s\r", BARLEN + 34, "" );
+						fwrite( tl_ui_buf.data(), 1, tl_ui_buf.size(), msgout );
+					}
+					// draw/update progress bar
+					int barpos = ( done * BARLEN ) / file_cnt;
+					fprintf( msgout, "\rProcessing file %3i of %3i [", done, file_cnt );
+					for ( int b = 0; b < barpos; b++ )
+					#if defined(_WIN32)
+						fprintf( msgout, "\xFE" );
+					#else
+						fprintf( msgout, "X" );
+					#endif
+					for ( int b = barpos; b < BARLEN; b++ )
+						fprintf( msgout, " " );
+					fprintf( msgout, "]" );
+					fflush( msgout );
+				}
+			}
+		};
+
+		std::vector<std::thread> threads;
+		threads.reserve( num_threads );
+		for ( int i = 0; i < num_threads; i++ )
+			threads.emplace_back( worker );
+		for ( auto& t : threads )
+			t.join();
+		// overwrite last progress bar line with final completed state
+		fprintf( msgout, "\rProcessed    %3i of %3i [", file_cnt, file_cnt );
+		for ( int b = 0; b < BARLEN; b++ )
+		#if defined(_WIN32)
+			fprintf( msgout, "\xFE" );
+		#else
+			fprintf( msgout, "X" );
+		#endif
+		fprintf( msgout, "]\n" );
 	}
-	end = clock();
+	end = WallClock::now();
 	
 	// errors summary: only needed for -v2 or progress bar
 	if ( ( verbosity == -1 ) || ( verbosity == 2 ) ) {
@@ -836,7 +948,7 @@ int main( int argc, char** argv )
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( action == A_COMPRESS ) ) {
 		acc_jpgsize /= 1024.0; acc_pjgsize /= 1024.0;
-		total = (double) ( end - begin ) / CLOCKS_PER_SEC; 
+		total = std::chrono::duration<double>( end - begin ).count(); 
 		kbps  = ( total > 0 ) ? ( acc_jpgsize / total ) : acc_jpgsize;
 		cr    = ( acc_jpgsize > 0 ) ? ( 100.0 * acc_pjgsize / acc_jpgsize ) : 0;
 		
@@ -1218,12 +1330,30 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-np" ) == 0 ) {
 			wait_exit = false;
 		}
+		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
+			if ( tmp_val == 0 ) {
+				// auto: detect cores, cap at 2 for x86, uncapped for x64
+				int cores = (int) std::thread::hardware_concurrency();
+				if ( cores < 1 ) cores = 1;
+				#if defined(_WIN64) || defined(__x86_64__) || defined(__amd64__)
+				num_threads = cores;
+				#else
+				num_threads = ( cores > 2 ) ? 2 : cores;
+				#endif
+			} else {
+				num_threads = ( tmp_val < 1 ) ? 1 : tmp_val;
+			}
+		}
 		else if ( strcmp((*argv), "-o" ) == 0 ) {
 			overwrite = true;
 		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
+			// Create directory if it doesn't exist
+			std::error_code ec;
+			std::filesystem::create_directories( outdir, ec );
+			// ec is silently ignored — if it fails, the error will surface later when writing files
 		}
 		#if defined(DEV_BUILD)
 		else if ( strcmp((*argv), "-dev") == 0 ) {
@@ -1304,8 +1434,44 @@ INTERN void initialize_options( int argc, char** argv )
 			*(tmp_flp++) = (char*) "-";
 		}
 		else {
-			// if argument is not switch, it's a filename
+			// if argument is not switch, it's a filename (or wildcard on Windows)
+			#if defined(_WIN32) || defined(WIN32)
+			// On Windows the shell does not expand wildcards, so we do it here.
+			if ( strchr( *argv, '*' ) != NULL || strchr( *argv, '?' ) != NULL ) {
+				WIN32_FIND_DATAA fd;
+				HANDLE hFind = FindFirstFileA( *argv, &fd );
+				if ( hFind != INVALID_HANDLE_VALUE ) {
+					// Extract directory prefix from the pattern (e.g. "imgs\*.jpg" → "imgs\")
+					char dir_prefix[MAX_PATH] = "";
+					const char* last_sep = strrchr( *argv, '\\' );
+					const char* last_sep2 = strrchr( *argv, '/' );
+					if ( last_sep2 > last_sep ) last_sep = last_sep2;
+					if ( last_sep != NULL ) {
+						size_t prefix_len = (size_t)(last_sep - *argv) + 1;
+						strncpy( dir_prefix, *argv, prefix_len );
+						dir_prefix[ prefix_len ] = '\0';
+					}
+					do {
+						// Skip . and ..
+						if ( strcmp( fd.cFileName, "." ) == 0 || strcmp( fd.cFileName, ".." ) == 0 )
+							continue;
+						size_t len = strlen( dir_prefix ) + strlen( fd.cFileName ) + 1;
+						char* fn = (char*) malloc( len );
+						if ( fn ) {
+							strcpy( fn, dir_prefix );
+							strcat( fn, fd.cFileName );
+							*(tmp_flp++) = fn;
+						}
+					} while ( FindNextFileA( hFind, &fd ) );
+					FindClose( hFind );
+				}
+				// If no match found, skip silently (same behavior as Linux shell)
+			} else {
+				*(tmp_flp++) = *argv;
+			}
+			#else
 			*(tmp_flp++) = *argv;
+			#endif
 		}		
 	}
 	
@@ -1345,6 +1511,20 @@ INTERN void process_ui( void )
 	clock_t begin, end;
 	const char* actionmsg  = NULL;
 	const char* errtypemsg = NULL;
+
+	// In multi-threaded mode we buffer all output into a thread_local string
+	// so the worker lambda can flush it atomically together with the progress bar.
+	tl_ui_buf.clear();
+	bool   use_buf = ( num_threads > 1 );
+	// Local printf macro: writes to buffer or directly to msgout
+	#define UIPRINTF( ... ) \
+		do { if ( use_buf ) { \
+			char _tmp[1024]; \
+			snprintf( _tmp, sizeof(_tmp), __VA_ARGS__ ); \
+			tl_ui_buf += _tmp; \
+		} else fprintf( msgout, __VA_ARGS__ ); } while(0)
+	// progress bar (-1) doesn't work reliably across threads — treat as local_verbosity 0
+	int local_verbosity = ( use_buf && verbosity < 0 ) ? 0 : verbosity;
 	int total, bpms;
 	float cr;	
 	
@@ -1366,13 +1546,15 @@ INTERN void process_ui( void )
 		pipe_on = false;
 	}
 	
-	if ( verbosity >= 0 ) { // standard UI
-		fprintf( msgout,  "\nProcessing file %i of %i \"%s\" -> ",
+	if ( local_verbosity >= 0 ) { // standard UI
+		if ( !use_buf ) {
+			// single-thread: print header before processing
+			fprintf( msgout, "\nProcessing file %i of %i \"%s\" -> ",
 					file_no + 1, file_cnt, filelist[ file_no ] );
-		
-		if ( verbosity > 1 )
-			fprintf( msgout,  "\n----------------------------------------" );
-		
+			if ( local_verbosity > 1 )
+				fprintf( msgout, "\n----------------------------------------" );
+		}
+
 		// check input file and determine filetype
 		execute( check_file );
 		
@@ -1389,13 +1571,13 @@ INTERN void process_ui( void )
 			case A_PGM_DUMP:	actionmsg = "Converting"; break;
 		}
 		
-		if ( verbosity < 2 ) fprintf( msgout, "%s -> ", actionmsg );
+		if ( !use_buf && local_verbosity < 2 ) fprintf( msgout, "%s -> ", actionmsg );
 	}
 	else { // progress bar UI
 		// update progress message
-		fprintf( msgout, "Processing file %2i of %2i ", file_no + 1, file_cnt );
+		UIPRINTF( "Processing file %2i of %2i ", file_no + 1, file_cnt );
 		progress_bar( file_no, file_cnt );
-		fprintf( msgout, "\r" );
+		UIPRINTF( "\r" );
 		execute( check_file );
 	}
 	fflush( msgout );
@@ -1428,29 +1610,31 @@ INTERN void process_ui( void )
 	cr    = ( jpgfilesize > 0 ) ? ( 100.0 * pjgfilesize / jpgfilesize ) : 0;
 
 	
-	if ( verbosity >= 0 ) { // standard UI
-		if ( verbosity > 1 )
-			fprintf( msgout,  "\n----------------------------------------" );
+	if ( local_verbosity >= 0 ) { // standard UI
+		if ( local_verbosity > 1 && !use_buf )
+			fprintf( msgout, "\n----------------------------------------" );
 		
-		// display success/failure message
-		switch ( verbosity ) {
-			case 0:			
-				if ( errorlevel < err_tol ) {
-					if ( action == A_COMPRESS ) fprintf( msgout,  "%.2f%%", cr );
-					else fprintf( msgout, "DONE" );
-				}
-				else fprintf( msgout,  "ERROR" );
-				if ( errorlevel > 0 ) fprintf( msgout,  "\n" );
-				break;
-			
-			case 1:
-				fprintf( msgout, "%s\n",  ( errorlevel < err_tol ) ? "DONE" : "ERROR" );
-				break;
-			
-			case 2:
-				if ( errorlevel < err_tol ) fprintf( msgout,  "\n-> %s OK\n", actionmsg );
-				else  fprintf( msgout,  "\n-> %s ERROR\n", actionmsg );
-				break;
+		// display success/failure message (single-thread only for non-errors in MT)
+		if ( !use_buf ) {
+			switch ( local_verbosity ) {
+				case 0:			
+					if ( errorlevel < err_tol ) {
+						if ( action == A_COMPRESS ) fprintf( msgout, "%.2f%%", cr );
+						else fprintf( msgout, "DONE" );
+					}
+					else fprintf( msgout, "ERROR" );
+					if ( errorlevel > 0 ) fprintf( msgout, "\n" );
+					break;
+				
+				case 1:
+					fprintf( msgout, "%s\n",  ( errorlevel < err_tol ) ? "DONE" : "ERROR" );
+					break;
+				
+				case 2:
+					if ( errorlevel < err_tol ) fprintf( msgout, "\n-> %s OK\n", actionmsg );
+					else  fprintf( msgout, "\n-> %s ERROR\n", actionmsg );
+					break;
+			}
 		}
 		
 		// set type of error message
@@ -1460,34 +1644,40 @@ INTERN void process_ui( void )
 			case 2: errtypemsg = "fatal error"; break;
 		}
 		
-		// error/ warning message
+		// error/warning message — always shown, even in MT mode
 		if ( errorlevel > 0 ) {
-			fprintf( msgout, " %s -> %s:\n", get_status( errorfunction ), errtypemsg  );
-			fprintf( msgout, " %s\n", errormessage );
+			UIPRINTF( "\nProcessing file %i of %i \"%s\" -> %s -> %s:\n",
+				file_no + 1, file_cnt, filelist[ file_no ], actionmsg, errtypemsg );
+			UIPRINTF( " %s\n", errormessage );
 		}
-		if ( (verbosity > 0) && (errorlevel < err_tol) && (action == A_COMPRESS) ) {
+		if ( !use_buf && (local_verbosity > 0) && (errorlevel < err_tol) && (action == A_COMPRESS) ) {
 			if ( total >= 0 ) {
-				fprintf( msgout,  " time taken  : %7i msec\n", total );
-				fprintf( msgout,  " byte per ms : %7i byte\n", bpms );
+				fprintf( msgout, " time taken  : %7i msec\n", total );
+				fprintf( msgout, " byte per ms : %7i byte\n", bpms );
 			}
 			else {
-				fprintf( msgout,  " time taken  : %7s msec\n", "N/A" );
-				fprintf( msgout,  " byte per ms : %7s byte\n", "N/A" );
+				fprintf( msgout, " time taken  : %7s msec\n", "N/A" );
+				fprintf( msgout, " byte per ms : %7s byte\n", "N/A" );
 			}
-			fprintf( msgout,  " comp. ratio : %7.2f %%\n", cr );		
+			fprintf( msgout, " comp. ratio : %7.2f %%\n", cr );		
 		}	
-		if ( ( verbosity > 1 ) && ( action == A_COMPRESS ) )
-			fprintf( msgout,  "\n" );
+		if ( !use_buf && ( local_verbosity > 1 ) && ( action == A_COMPRESS ) )
+			fprintf( msgout, "\n" );
 	}
 	else { // progress bar UI
 		// if this is the last file, update progress bar one last time
 		if ( file_no + 1 == file_cnt ) {
 			// update progress message
-			fprintf( msgout, "Processed %2i of %2i files ", file_no + 1, file_cnt );
+			UIPRINTF( "Processed %2i of %2i files ", file_no + 1, file_cnt );
 			progress_bar( 1, 1 );
-			fprintf( msgout, "\r" );
+			UIPRINTF( "\r" );
 		}	
 	}
+
+	// In MT mode, output is flushed by the worker lambda after updating stats.
+	// In single-thread mode, output was written directly to msgout via UIPRINTF.
+
+	#undef UIPRINTF
 }
 #endif
 
@@ -1576,6 +1766,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
+	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
