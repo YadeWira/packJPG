@@ -2012,7 +2012,7 @@ INTERN bool compare_output( void )
 	                                  std::end(verif_data));
 	if (result.first != std::end(orig_data) || result.second != std::end(verif_data)) {
 		const auto first_diff = std::distance(std::begin(orig_data), result.first);
-        snprintf( errormessage, MSG_SIZE, "difference found at 0x%ld", first_diff );
+        snprintf( errormessage, MSG_SIZE, "difference found at 0x%llx", (long long) first_diff );
 		errorlevel = 2;
 		return false;
 	}
@@ -7254,4 +7254,3 @@ INTERN bool dump_pgm( void )
 /* ----------------------- End of developers functions -------------------------- */
 
 /* ----------------------- End of file -------------------------- */
-
