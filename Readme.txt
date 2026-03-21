@@ -1,4 +1,4 @@
-packJPG v2.7 (03/20/2026)
+packJPG v2.8 (03/21/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -73,6 +73,9 @@ Command line switches
  -o        overwrite existing files
  -od<path> write output files to directory <path> (created if needed)
  -th<n>    number of worker threads; 0 = auto-detect (default: 1)
+ -r        recurse into subdirectories
+ -list     list PJG file info without decompressing
+ -dry      dry run: simulate without writing output files
  -p        proceed on warnings
  -d        discard meta-info
 
@@ -114,8 +117,36 @@ each file is compressed and immediately decompressed and compared
 bit-for-bit before the output is written. This ensures no silent
 corruption can occur even under heavy parallel load.
 
+Pressing Ctrl+C during multi-threaded processing stops all workers
+cleanly, removes any partial output files, and prints a summary of
+how many files were completed before the interrupt.
+
 Single-threaded mode (default, no -th flag) behaves exactly as in
 previous versions.
+
+Dry run mode (-dry)
+~~~~~~~~~~~~~~~~~~~
+
+The "-dry" switch simulates compression without writing any output
+files. Useful for previewing compression ratios before committing
+to a batch operation.
+
+ "packJPG -dry -np *.jpg"       preview ratios, no files written
+ "packJPG -dry -th0 -np *.jpg"  same, using all cores
+
+Listing PJG files (-list)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The "-list" switch displays information about PJG files without
+decompressing them:
+
+ "packJPG -list -np *.pjg"
+ "packJPG -list -r -np /path/to/archive/"
+
+Output example:
+ photos/lena.pjg
+   version : v2.8
+   packed  : 288.1 KB
 
 Usage examples:
 
@@ -126,6 +157,8 @@ Usage examples:
  "packJPG -od/tmp/output *.jpg"
  "packJPG -th0 -o -np -od/tmp/output *.jpg"
  "packJPG -th4 -o -np *.jpg"
+ "packJPG -dry -np *.jpg"
+ "packJPG -list -r -np photos/"
 
 
 Known Limitations 
@@ -287,7 +320,7 @@ v2.6 (03/19/2026) (public)
  - new switch: [-od<path>] write output files to a specified directory (#37)
  - performance: BitWriter and MemoryWriter pre-allocate buffers using input size hint
  - cross-compilation targets for Linux x64, Windows x64 and Windows x86 added to Makefile
- - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+ - maintainer: Yade Bravo (https://github.com/YadeWira)
 
 v2.7 (03/20/2026) (public)
  - new switch: [-th<n>] multi-threaded batch processing (0 = auto-detect cores)
@@ -296,7 +329,20 @@ v2.7 (03/20/2026) (public)
  - [-od<path>] now creates the output directory automatically if it does not exist
  - build: fixed icon embedding for Windows x64/x86 targets (windres -O coff)
  - build: wall-clock time now reported correctly in multi-threaded mode
- - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+ - maintainer: Yade Bravo (https://github.com/YadeWira)
+
+v2.8 (03/21/2026) (public)
+ - compression: improved AC sign context using top-left diagonal neighbor
+   (mod_sgn 9->27 states), ~0.04% better ratio on typical camera photos
+ - new switch: [-r] recurse into subdirectories
+ - new switch: [-list] display PJG file info without decompressing
+ - new switch: [-dry] dry run: simulate without writing output files
+ - MT mode: Ctrl+C stops workers cleanly, removes partial output files
+ - summary now reports speed in MB/s
+ - thread info shows detected core count
+ - fixed: -list no longer creates empty .jpg output files
+ - fixed: MT progress bar no longer shows stray characters after completion
+ - maintainer: Yade Bravo (https://github.com/YadeWira)
 
 
 Acknowledgements

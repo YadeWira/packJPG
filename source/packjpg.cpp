@@ -1,5 +1,5 @@
 /*
-packJPG v2.7 (03/20/2026)
+packJPG v2.8 (03/21/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -262,6 +262,21 @@ v2.7 (03/20/2026) (public)
  - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores; x86 capped at 2)
  - Thread-safe output buffering in process_ui (per-file atomic console writes)
 
+v2.8 (03/21/2026) (public)
+ - Improved sign context in AC high encoder/decoder: adds top-left diagonal neighbor
+   (mod_sgn 9→27 states), yielding ~0.04% better compression ratio
+ - New flag: [-r] recurse into subdirectories
+ - New flag: [-list] display PJG file info without decompressing
+ - New flag: [-dry] dry run: simulate compression without writing output files
+ - MT mode: Ctrl+C (SIGINT) stops workers cleanly and removes partial output files
+ - [-od<path>] now creates output directory automatically if missing
+ - Progress bar in multi-threaded mode: errors print cleanly above bar
+ - Summary now reports speed in MB/s instead of kbyte/s
+ - Thread info shows detected core count: "Using N of M detected thread(s)"
+ - Fixed: -list no longer creates empty .jpg output files
+ - Fixed: final MT progress bar no longer shows stray characters
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
 
 Acknowledgements
 ~~~~~~~~~~~~~~~~
@@ -305,6 +320,7 @@ packJPG by Matthias Stirner, 01/2016
 #include <atomic>
 #include <mutex>
 #include <filesystem>
+#include <csignal>
 #if defined(_WIN32) || defined(WIN32)
 	#include <windows.h>
 #endif
@@ -563,6 +579,10 @@ INTERN bool dump_dist( void );
 INTERN bool dump_pgm( void );
 #endif
 
+#if !defined(BUILD_LIB)
+INTERN bool list_pjg( void );
+#endif
+
 
 /* -----------------------------------------------
 	global variables: library only variables
@@ -700,18 +720,21 @@ THREAD_LOCAL int  errorlevel;
 INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
+INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
 
 INTERN bool developer  = false;	// allow developers functions yes/no
+INTERN bool recursive  = false;	// recurse into subdirectories yes/no
 THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
 THREAD_LOCAL int  action = A_COMPRESS;// what to do with JPEG/PJG files
 
 INTERN FILE*  msgout   = stdout;// stream for output of messages
 INTERN int    num_threads = 1;  // number of worker threads (1 = single-threaded)
 INTERN std::atomic<int> g_files_done{0}; // files completed so far (for MT progress bar)
+INTERN std::atomic<bool> g_interrupted{false}; // set by SIGINT handler
 THREAD_LOCAL std::string tl_ui_buf;     // per-thread output buffer for MT mode
 THREAD_LOCAL bool   pipe_on  = false;	// use stdin/stdout instead of filelist
 #else
@@ -732,11 +755,11 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 27;
+INTERN const unsigned char appversion = 28;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/20/2026";
+INTERN const char*  versiondate  = "03/21/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -766,7 +789,7 @@ int main( int argc, char** argv )
 	double acc_jpgsize = 0;
 	double acc_pjgsize = 0;
 	
-	int kbps;
+	double mbps;
 	double cr;
 	double total;
 	
@@ -783,7 +806,7 @@ int main( int argc, char** argv )
 	
 	// check if user input is wrong, show help screen if it is
 	if ( ( file_cnt == 0 ) ||
-		( ( !developer ) && ( (action != A_COMPRESS) || (!auto_set) || (verify_lv > 1) ) ) ) {
+		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST) || (!auto_set) || (verify_lv > 1) ) ) ) {
 		show_help();
 		return -1;
 	}
@@ -829,9 +852,18 @@ int main( int argc, char** argv )
 		// Force verification in MT mode to catch any silent corruption.
 		// Each file is compressed then immediately decompressed and compared bit-for-bit.
 		if ( verify_lv < 1 ) verify_lv = 1;
-		if ( verbosity >= 0 )
-			fprintf( msgout, "Using %i threads (verify enabled)\n", num_threads );
+		if ( verbosity >= 0 ) {
+			int detected = (int) std::thread::hardware_concurrency();
+			if ( detected < 1 ) detected = 1;
+			fprintf( msgout, "Using %i of %i detected thread(s) (verify enabled)\n",
+				num_threads, detected );
+		}
 		g_files_done.store( 0 );
+		g_interrupted.store( false );
+
+		// install SIGINT handler so Ctrl+C stops workers cleanly
+		std::signal( SIGINT, []( int ) { g_interrupted.store( true ); } );
+
 		std::atomic<int> g_next_file( 0 );
 		std::mutex stats_mtx;
 
@@ -853,7 +885,7 @@ int main( int argc, char** argv )
 				segm_cnt[i] = main_segm_cnt[i];
 			}
 			int fn;
-			while ( ( fn = g_next_file.fetch_add( 1 ) ) < file_cnt ) {
+			while ( !g_interrupted.load() && ( fn = g_next_file.fetch_add( 1 ) ) < file_cnt ) {
 				file_no = fn;
 				process_ui();
 				// accumulate stats under lock (each fn is unique so err_list/err_tp are safe)
@@ -906,6 +938,29 @@ int main( int argc, char** argv )
 			threads.emplace_back( worker );
 		for ( auto& t : threads )
 			t.join();
+
+		// restore default SIGINT behavior
+		std::signal( SIGINT, SIG_DFL );
+
+		if ( g_interrupted.load() ) {
+			fprintf( msgout, "\n\n[interrupted] cleaning up...\n" );
+			// remove any incomplete output files from files not yet processed
+			for ( int fi = g_files_done.load(); fi < file_cnt; fi++ ) {
+				if ( filelist[fi] == NULL ) continue;
+				std::error_code ec;
+				// try to remove .pjg and .jpg outputs that may have been partially written
+				std::filesystem::path p( filelist[fi] );
+				std::filesystem::path out_pjg = p; out_pjg.replace_extension(".pjg");
+				std::filesystem::path out_jpg = p; out_jpg.replace_extension(".jpg");
+				std::filesystem::remove( out_pjg, ec );
+				std::filesystem::remove( out_jpg, ec );
+			}
+			end = WallClock::now();
+			fprintf( msgout, "-> %i of %i file(s) processed before interrupt\n",
+				g_files_done.load(), file_cnt );
+			goto cleanup;
+		}
+
 		// overwrite last progress bar line with final completed state
 		fprintf( msgout, "\rProcessed    %3i of %3i [", file_cnt, file_cnt );
 		for ( int b = 0; b < BARLEN; b++ )
@@ -914,10 +969,11 @@ int main( int argc, char** argv )
 		#else
 			fprintf( msgout, "X" );
 		#endif
-		fprintf( msgout, "]\n" );
+		fprintf( msgout, "]   \n" ); // trailing spaces erase any leftover chars
 	}
 	end = WallClock::now();
-	
+
+	cleanup:
 	// errors summary: only needed for -v2 or progress bar
 	if ( ( verbosity == -1 ) || ( verbosity == 2 ) ) {
 		// print summary of errors to screen
@@ -947,19 +1003,21 @@ int main( int argc, char** argv )
 		file_cnt, error_cnt, warn_cnt );
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( action == A_COMPRESS ) ) {
+		// acc_jpgsize in bytes → convert to MB for MB/s
+		double acc_jpg_mb = acc_jpgsize / ( 1024.0 * 1024.0 );
 		acc_jpgsize /= 1024.0; acc_pjgsize /= 1024.0;
 		total = std::chrono::duration<double>( end - begin ).count(); 
-		kbps  = ( total > 0 ) ? ( acc_jpgsize / total ) : acc_jpgsize;
+		mbps  = ( total > 0 ) ? ( acc_jpg_mb / total ) : acc_jpg_mb;
 		cr    = ( acc_jpgsize > 0 ) ? ( 100.0 * acc_pjgsize / acc_jpgsize ) : 0;
 		
 		fprintf( msgout,  " --------------------------------- \n" );
 		if ( total >= 0 ) {
 			fprintf( msgout,  " total time        : %8.2f sec\n", total );
-			fprintf( msgout,  " avrg. kbyte per s : %8i byte\n", kbps );
+			fprintf( msgout,  " avrg. speed       : %8.2f MB/s\n", mbps );
 		}
 		else {
 			fprintf( msgout,  " total time        : %8s sec\n", "N/A" );
-			fprintf( msgout,  " avrg. kbyte per s : %8s byte\n", "N/A" );
+			fprintf( msgout,  " avrg. speed       : %8s MB/s\n", "N/A" );
 		}
 		fprintf( msgout,  " avrg. comp. ratio : %8.2f %%\n", cr );		
 		fprintf( msgout,  " --------------------------------- \n" );
@@ -1289,7 +1347,22 @@ EXPORT const char* pjglib_short_name( void )
 	reads in commandline arguments
 	----------------------------------------------- */
 	
-#if !defined(BUILD_LIB)	
+#if !defined(BUILD_LIB)
+
+/* -----------------------------------------------
+	recursively collect files from a directory
+	----------------------------------------------- */
+static void collect_files_recursive( const std::filesystem::path& dir,
+                                     std::vector<std::string>& out )
+{
+	std::error_code ec;
+	for ( auto& entry : std::filesystem::recursive_directory_iterator( dir,
+	        std::filesystem::directory_options::skip_permission_denied, ec ) ) {
+		if ( entry.is_regular_file( ec ) )
+			out.push_back( entry.path().string() );
+	}
+}
+
 INTERN void initialize_options( int argc, char** argv )
 {	
 	int tmp_val;
@@ -1329,6 +1402,15 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 		else if ( strcmp((*argv), "-np" ) == 0 ) {
 			wait_exit = false;
+		}
+		else if ( strcmp((*argv), "-r" ) == 0 ) {
+			recursive = true;
+		}
+		else if ( strcmp((*argv), "-list" ) == 0 ) {
+			action = A_LIST;
+		}
+		else if ( strcmp((*argv), "-dry" ) == 0 ) {
+			dry_run = true;
 		}
 		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
 			if ( tmp_val == 0 ) {
@@ -1434,7 +1516,7 @@ INTERN void initialize_options( int argc, char** argv )
 			*(tmp_flp++) = (char*) "-";
 		}
 		else {
-			// if argument is not switch, it's a filename (or wildcard on Windows)
+			// if argument is not switch, it's a filename, wildcard, or directory
 			#if defined(_WIN32) || defined(WIN32)
 			// On Windows the shell does not expand wildcards, so we do it here.
 			if ( strchr( *argv, '*' ) != NULL || strchr( *argv, '?' ) != NULL ) {
@@ -1473,6 +1555,40 @@ INTERN void initialize_options( int argc, char** argv )
 			*(tmp_flp++) = *argv;
 			#endif
 		}		
+	}
+
+	// if -r is set, expand any directories in the filelist
+	if ( recursive ) {
+		std::vector<std::string> extra_files;
+		for ( int fi = 0; filelist[ fi ] != NULL; fi++ ) {
+			std::error_code ec;
+			std::filesystem::path p( filelist[ fi ] );
+			if ( std::filesystem::is_directory( p, ec ) ) {
+				filelist[ fi ] = NULL; // remove directory entry
+				collect_files_recursive( p, extra_files );
+			}
+		}
+		if ( !extra_files.empty() ) {
+			// count existing entries
+			int existing = 0;
+			for ( ; filelist[ existing ] != NULL; existing++ );
+			// realloc filelist to fit extra files
+			filelist = (char**) realloc( filelist,
+				( existing + extra_files.size() + 1 ) * sizeof( char* ) );
+			// compact (remove NULLs from directory entries)
+			int wi = 0;
+			for ( int fi = 0; fi < existing + (int)extra_files.size(); fi++ ) {
+				if ( fi < existing && filelist[ fi ] != NULL )
+					filelist[ wi++ ] = filelist[ fi ];
+			}
+			// append extra files
+			for ( auto& s : extra_files ) {
+				char* fn = (char*) malloc( s.size() + 1 );
+				strcpy( fn, s.c_str() );
+				filelist[ wi++ ] = fn;
+			}
+			filelist[ wi ] = NULL;
+		}
 	}
 	
 	// count number of files (or filenames) in filelist
@@ -1524,7 +1640,8 @@ INTERN void process_ui( void )
 			tl_ui_buf += _tmp; \
 		} else fprintf( msgout, __VA_ARGS__ ); } while(0)
 	// progress bar (-1) doesn't work reliably across threads — treat as local_verbosity 0
-	int local_verbosity = ( use_buf && verbosity < 0 ) ? 0 : verbosity;
+	// A_LIST also forces verbosity 0: its output is printed inside list_pjg
+	int local_verbosity = ( ( use_buf && verbosity < 0 ) || action == A_LIST ) ? 0 : verbosity;
 	int total, bpms;
 	float cr;	
 	
@@ -1534,7 +1651,7 @@ INTERN void process_ui( void )
 	jpgfilesize = 0;
 	pjgfilesize = 0;	
 	#if !defined(DEV_BUILD)
-	action = A_COMPRESS;
+	if ( action != A_LIST ) action = A_COMPRESS;
 	#endif
 	
 	// compare file name, set pipe if needed
@@ -1547,7 +1664,10 @@ INTERN void process_ui( void )
 	}
 	
 	if ( local_verbosity >= 0 ) { // standard UI
-		if ( !use_buf ) {
+		if ( action == A_LIST ) {
+			// -list: print filename as header, details follow from list_pjg
+			fprintf( msgout, "\n%s\n", filelist[ file_no ] );
+		} else if ( !use_buf ) {
 			// single-thread: print header before processing
 			fprintf( msgout, "\nProcessing file %i of %i \"%s\" -> ",
 					file_no + 1, file_cnt, filelist[ file_no ] );
@@ -1569,9 +1689,11 @@ INTERN void process_ui( void )
 			case A_TXT_INFO:	actionmsg = "Extracting info"; break;		
 			case A_DIST_INFO:	actionmsg = "Extracting distributions";	break;		
 			case A_PGM_DUMP:	actionmsg = "Converting"; break;
+			case A_LIST:		actionmsg = "Listing"; break;
 		}
 		
-		if ( !use_buf && local_verbosity < 2 ) fprintf( msgout, "%s -> ", actionmsg );
+		if ( !use_buf && local_verbosity < 2 && action != A_LIST )
+			fprintf( msgout, "%s -> ", actionmsg );
 	}
 	else { // progress bar UI
 		// update progress message
@@ -1594,7 +1716,8 @@ INTERN void process_ui( void )
     str_out.reset(nullptr);
     str_str.reset(nullptr);
 	// delete if broken or if output not needed
-	if ( ( !pipe_on ) && ( ( errorlevel >= err_tol ) || ( action != A_COMPRESS ) ) ) {
+	if ( ( !pipe_on ) && ( action != A_LIST ) &&
+	     ( ( errorlevel >= err_tol ) || ( action != A_COMPRESS ) ) ) {
 		if ( filetype == F_JPG ) {
 			if ( file_exists( pjgfilename ) ) remove( pjgfilename );
 		} else if ( filetype == F_PJG ) {
@@ -1620,7 +1743,8 @@ INTERN void process_ui( void )
 				case 0:			
 					if ( errorlevel < err_tol ) {
 						if ( action == A_COMPRESS ) fprintf( msgout, "%.2f%%", cr );
-						else fprintf( msgout, "DONE" );
+						else if ( action != A_LIST ) fprintf( msgout, "DONE" );
+						// A_LIST: output already printed inside list_pjg
 					}
 					else fprintf( msgout, "ERROR" );
 					if ( errorlevel > 0 ) fprintf( msgout, "\n" );
@@ -1651,12 +1775,16 @@ INTERN void process_ui( void )
 			UIPRINTF( " %s\n", errormessage );
 		}
 		if ( !use_buf && (local_verbosity > 0) && (errorlevel < err_tol) && (action == A_COMPRESS) ) {
+			double file_mb = jpgfilesize / (1024.0 * 1024.0);
+			double file_mbps = ( total > 0 ) ? ( file_mb / ( total / 1000.0 ) ) : file_mb;
 			if ( total >= 0 ) {
 				fprintf( msgout, " time taken  : %7i msec\n", total );
+				fprintf( msgout, " speed       : %7.2f MB/s\n", file_mbps );
 				fprintf( msgout, " byte per ms : %7i byte\n", bpms );
 			}
 			else {
 				fprintf( msgout, " time taken  : %7s msec\n", "N/A" );
+				fprintf( msgout, " speed       : %7s MB/s\n", "N/A" );
 				fprintf( msgout, " byte per ms : %7s byte\n", "N/A" );
 			}
 			fprintf( msgout, " comp. ratio : %7.2f %%\n", cr );		
@@ -1767,6 +1895,9 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
+	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
+	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
+	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
@@ -1878,6 +2009,11 @@ INTERN void process_file( void )
 				execute( adapt_icos );
 				execute( dump_pgm );
 				break;
+			case A_LIST:
+				// -list only works on .pjg files
+				snprintf( errormessage, MSG_SIZE, "-list is only supported for PJG files" );
+				errorlevel = 2;
+				break;
 			#else
 			default:
 				break;
@@ -1956,6 +2092,9 @@ INTERN void process_file( void )
 			default:
 				break;
 			#endif
+			case A_LIST:
+				execute( list_pjg );
+				break;
 		}
 	}	
 	#if !defined(BUILD_LIB) && defined(DEV_BUILD)
@@ -2082,6 +2221,8 @@ INTERN bool check_file( void )
 		try {
 			if (pipe_on) {
 				str_out = std::make_unique<StreamWriter>();
+			} else if ( dry_run ) {
+				str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
 			} else {
 				str_out = std::make_unique<FileWriter>(std::string(pjgfilename));
 			}
@@ -2123,6 +2264,10 @@ INTERN bool check_file( void )
 		// open output stream, check for errors
         if (pipe_on) {
             str_out = std::make_unique<StreamWriter>();
+        } else if ( action == A_LIST ) {
+            // no output file for -list
+        } else if ( dry_run ) {
+            str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
         } else {
             str_out = std::make_unique<FileWriter>(std::string(jpgfilename));
         }
@@ -5225,7 +5370,7 @@ INTERN bool pjg_encode_ac_high( ArithmeticEncoder* enc, int cmp )
 	// init models for bitlenghts and -patterns
 	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
-	mod_sgn = INIT_MODEL_B( 9, 1 );
+	mod_sgn = INIT_MODEL_B( 27, 1 );
 	
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
@@ -5327,9 +5472,11 @@ INTERN bool pjg_encode_ac_high( ArithmeticEncoder* enc, int cmp )
 					bt = BITN( absv, bp );
 					encode_ari( enc, mod_res, bt );
 				}
-				// encode sign				
-				ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0; // sign context
-				if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ]; // IMPROVE !!!!!!!!!!!
+				// encode sign (left + top + top-left diagonal context)
+				ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0;
+				if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ];
+				if ( p_x > 0 && p_y > 0 ) { int diag = sgn_store[ dpos - 1 - w ]; if ( diag > 0 ) ctx_sgn += 9 * diag; }
+				if ( ctx_sgn > 26 ) ctx_sgn = 26;
 				mod_sgn->shift_context( ctx_sgn );
 				encode_ari( enc, mod_sgn, sgn );
 				// store absolute value/sign, decrement zdst
@@ -5889,7 +6036,7 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 	// init models for bitlenghts and -patterns
 	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
-	mod_sgn = INIT_MODEL_B( 9, 1 );
+	mod_sgn = INIT_MODEL_B( 27, 1 );
 	
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
@@ -5989,9 +6136,11 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 					absv = absv << 1;
 					if ( bt ) absv |= 1; 
 				}
-				// decode sign
-				ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0; // sign context
-				if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ]; // IMPROVE! !!!!!!!!!!!
+				// decode sign (left + top + top-left diagonal context)
+				ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0;
+				if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ];
+				if ( p_x > 0 && p_y > 0 ) { int diag = sgn_store[ dpos - 1 - w ]; if ( diag > 0 ) ctx_sgn += 9 * diag; }
+				if ( ctx_sgn > 26 ) ctx_sgn = 26;
 				mod_sgn->shift_context( ctx_sgn );
 				sgn = decode_ari( dec, mod_sgn );
 				// copy to colldata
@@ -6724,6 +6873,16 @@ INTERN int idct_2d_fst_1x8( int cmp, int dpos, int ix, int iy )
 	returns predictor for collection data
 	----------------------------------------------- */
 #if defined(USE_PLOCOI)
+// LOCO-I predictor: median(a+b-c, min(a,b), max(a,b))
+static inline int plocoi( int a, int b, int c ) {
+	int mx = ( a > b ) ? a : b;
+	int mn = ( a < b ) ? a : b;
+	int pred = a + b - c;
+	if ( pred < mn ) return mn;
+	if ( pred > mx ) return mx;
+	return pred;
+}
+
 INTERN int dc_coll_predictor( int cmp, int dpos )
 {
 	signed short* coefs = colldata[ cmp ][ 0 ];
@@ -6885,18 +7044,25 @@ INTERN inline char* create_filename( const char* base, const char* extension )
 #if !defined(BUILD_LIB)
 INTERN inline char* unique_filename( const char* base, const char* extension )
 {
-	int len = strlen( base ) + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;	
-	char* filename = (char*) calloc( len, sizeof( char ) );	
-	
-	// create a unique filename using underscores
-	strcpy( filename, base );
-	set_extension( filename, extension );
+	// If outdir is set, start from create_filename which applies outdir,
+	// then add underscores until the name is unique.
+	char* filename;
+	if ( outdir != NULL ) {
+		filename = create_filename( base, extension );
+	} else {
+		int len = strlen( base ) + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;
+		filename = (char*) calloc( len, sizeof( char ) );
+		strcpy( filename, base );
+		set_extension( filename, extension );
+	}
+
+	// add underscores until unique
 	while ( file_exists( filename ) ) {
-		len += sizeof( char );
+		int len = strlen( filename ) + 2;
 		filename = (char*) realloc( filename, len );
 		add_underscore( filename );
 	}
-	
+
 	return filename;
 }
 #endif
@@ -7443,5 +7609,50 @@ INTERN bool dump_pgm( void )
 #endif
 
 /* ----------------------- End of developers functions -------------------------- */
+
+
+/* -----------------------------------------------
+	list info about a PJG file without decompressing
+	----------------------------------------------- */
+
+#if !defined(BUILD_LIB)
+INTERN bool list_pjg( void )
+{
+	long pjg_size = (long) str_in->get_size();
+
+	// read version from header: skip 2-byte magic, read hcode
+	str_in->rewind();
+	unsigned char magic[2];
+	str_in->read( magic, 2 );
+	unsigned char hcode = 0;
+	str_in->read_byte( &hcode );
+	// if hcode == 0x00 it's a custom-settings block — skip 8 bytes then read actual version
+	if ( hcode == 0x00 ) {
+		str_in->skip( 8 );
+		str_in->read_byte( &hcode );
+	}
+	int ver_major = hcode / 10;
+	int ver_minor = hcode % 10;
+
+	auto fmt_size = []( long bytes ) -> std::string {
+		char buf[32];
+		if ( bytes >= 1024 * 1024 )
+			snprintf( buf, sizeof(buf), "%.2f MB", bytes / (1024.0*1024.0) );
+		else if ( bytes >= 1024 )
+			snprintf( buf, sizeof(buf), "%.1f KB", bytes / 1024.0 );
+		else
+			snprintf( buf, sizeof(buf), "%ld B", bytes );
+		return buf;
+	};
+
+	fprintf( msgout, "  version : v%i.%i\n", ver_major, ver_minor );
+	fprintf( msgout, "  packed  : %s\n", fmt_size( pjg_size ).c_str() );
+
+	pjgfilesize = (int) pjg_size;
+	jpgfilesize  = 0;
+
+	return true;
+}
+#endif
 
 /* ----------------------- End of file -------------------------- */
