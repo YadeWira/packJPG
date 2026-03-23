@@ -768,8 +768,9 @@ INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
-INTERN bool compress_only   = false;	// -c: skip PJG files, only compress JPG
-INTERN bool decompress_only = false;	// -x: skip JPG files, only decompress PJG
+INTERN bool compress_only   = false;	// -c: only compress JPG files
+INTERN bool decompress_only = false;	// -x: only decompress PJG files
+INTERN bool mix_mode        = false;	// -mix: auto-detect with warning
 INTERN bool module_mode = false;	// machine-friendly output: OK/ERROR + time only
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
@@ -838,6 +839,8 @@ int main( int argc, char** argv )
 	
 	double acc_jpgsize = 0;
 	double acc_pjgsize = 0;
+	int acc_jpg_cnt = 0;
+	int acc_pjg_cnt = 0;
 	
 	double mbps;
 	double cr;
@@ -901,6 +904,8 @@ int main( int argc, char** argv )
 				if ( errorlevel == 1 ) warn_cnt++;
 				acc_jpgsize += jpgfilesize;
 				acc_pjgsize += pjgfilesize;
+				if ( filetype == F_JPG ) acc_jpg_cnt++;
+				else if ( filetype == F_PJG ) acc_pjg_cnt++;
 			}
 		}
 	} else {
@@ -963,6 +968,8 @@ int main( int argc, char** argv )
 							if ( errorlevel == 1 ) warn_cnt++;
 							acc_jpgsize += jpgfilesize;
 							acc_pjgsize += pjgfilesize;
+							if ( filetype == F_JPG ) acc_jpg_cnt++;
+							else if ( filetype == F_PJG ) acc_pjg_cnt++;
 						}
 					}
 					int done = ++g_files_done;
@@ -1058,6 +1065,11 @@ int main( int argc, char** argv )
 	}
 	
 	// show statistics
+	if ( mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
+		fprintf( msgout, "\n[WARNING] Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", acc_jpg_cnt, acc_pjg_cnt );
+		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
+		fprintf( msgout, "  Use -c (compress only) or -x (decompress only) for safer operation.\n" );
+	}
 	if ( module_mode ) {
 		// machine-friendly output for external tools (e.g. FreeArc)
 		total = std::chrono::duration<double>( end - begin ).count();
@@ -1458,6 +1470,24 @@ INTERN void initialize_options( int argc, char** argv )
 	
 	
 	// read in arguments
+	// First argument can be a subcommand: c, x, mix, list
+	if ( argc > 1 ) {
+		const char* subcmd = argv[1];
+		if ( strcmp(subcmd, "a") == 0 ) {
+			compress_only = true;
+			argv++; argc--;
+		} else if ( strcmp(subcmd, "x") == 0 ) {
+			decompress_only = true;
+			argv++; argc--;
+		} else if ( strcmp(subcmd, "mix") == 0 ) {
+			mix_mode = true;
+			argv++; argc--;
+		} else if ( strcmp(subcmd, "list") == 0 ) {
+			action = A_LIST;
+			argv++; argc--;
+		}
+	}
+
 	while ( --argc > 0 ) {
 		argv++;
 		// switches begin with '-'
@@ -1484,17 +1514,8 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-r" ) == 0 ) {
 			recursive = true;
 		}
-		else if ( strcmp((*argv), "-list" ) == 0 ) {
-			action = A_LIST;
-		}
 		else if ( strcmp((*argv), "-dry" ) == 0 ) {
 			dry_run = true;
-		}
-		else if ( strcmp((*argv), "-c" ) == 0 ) {
-			compress_only = true;
-		}
-		else if ( strcmp((*argv), "-x" ) == 0 ) {
-			decompress_only = true;
 		}
 		else if ( strcmp((*argv), "-module" ) == 0 ) {
 			module_mode = true;
@@ -1627,14 +1648,16 @@ INTERN void initialize_options( int argc, char** argv )
 						dir_prefix[ prefix_len ] = '\0';
 					}
 					do {
-						// Skip . and .. and directories
+						// Skip . and ..
 						if ( wcscmp( fd.cFileName, L"." ) == 0 || wcscmp( fd.cFileName, L".." ) == 0 )
 							continue;
-						if ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+						// When -r is active, include subdirectories so they can be recursed later.
+						// Without -r, skip directories as before.
+						if ( ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) && !recursive )
 							continue;
 						// Convert wide filename back to UTF-8
 						char fname_utf8[MAX_PATH];
-						WideCharToMultiByte( CP_UTF8, 0, fd.cFileName, -1, fname_utf8, MAX_PATH, NULL, NULL );
+						WideCharToMultiByte( CP_ACP, 0, fd.cFileName, -1, fname_utf8, MAX_PATH, NULL, NULL );
 						size_t len = strlen( dir_prefix ) + strlen( fname_utf8 ) + 1;
 						char* fn = (char*) malloc( len );
 						if ( fn ) {
@@ -1998,7 +2021,15 @@ INTERN void show_help( void )
 	fprintf( msgout, "Website: %s\n", website );
 	fprintf( msgout, "Email  : %s\n", email );
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "Usage: %s [switches] [filename(s)]", appname );
+	fprintf( msgout, "Usage: %s <subcommand> [switches] [filename(s)]\n", appname );
+	fprintf( msgout, "\n" );
+	fprintf( msgout, "Subcommands:\n" );
+	fprintf( msgout, " a         compress only: process JPG files, skip PJG\n" );
+	fprintf( msgout, " x         decompress only: process PJG files, skip JPG\n" );
+	fprintf( msgout, " mix       mixed mode: auto-detect (warns if both directions used)\n" );
+	fprintf( msgout, " list      list PJG file info without decompressing\n" );
+	fprintf( msgout, "\n" );
+	fprintf( msgout, "Switches:" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, " [-ver]   verify files after processing\n" );
