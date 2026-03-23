@@ -1,0 +1,18 @@
+# Normalize line endings to LF in the repository
+* text=auto eol=lf
+
+# Windows batch files need CRLF
+*.bat text eol=crlf
+
+# Binaries — no line ending conversion
+*.exe binary
+*.obj binary
+*.o   binary
+*.a   binary
+*.lib binary
+*.dll binary
+*.pjg binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.ico binary
