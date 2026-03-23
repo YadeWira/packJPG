@@ -273,6 +273,7 @@ v2.9 (03/23/2026) (public)
  - fixed: -list no longer creates empty output files
  - fixed: MT progress bar stray characters
  - help screen now shows program description
+ - unknown file types now skipped silently (no error shown for .exe, .png, etc.)
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 v2.8b (03/23/2026) (public)
@@ -891,8 +892,12 @@ int main( int argc, char** argv )
 					strcpy( err_list[ file_no ], errormessage );
 			}
 			// count errors / warnings / file sizes
-			if ( errorlevel >= err_tol ) error_cnt++;
-			else {
+			// unknown filetype (F_UNK) is silently skipped — not counted as error
+			if ( filetype == F_UNK ) {
+				// silent skip: don't count, don't store error message
+			} else if ( errorlevel >= err_tol ) {
+				error_cnt++;
+			} else {
 				if ( errorlevel == 1 ) warn_cnt++;
 				acc_jpgsize += jpgfilesize;
 				acc_pjgsize += pjgfilesize;
@@ -945,17 +950,20 @@ int main( int argc, char** argv )
 					std::lock_guard<std::mutex> lk( stats_mtx );
 
 					// --- stats ---
-					if ( errorlevel > 0 ) {
-						err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
-						err_tp[ fn ] = errorlevel;
-						if ( err_list[ fn ] != NULL )
-							strcpy( err_list[ fn ], errormessage );
-					}
-					if ( errorlevel >= err_tol ) error_cnt++;
-					else {
-						if ( errorlevel == 1 ) warn_cnt++;
-						acc_jpgsize += jpgfilesize;
-						acc_pjgsize += pjgfilesize;
+					// unknown filetype is silently skipped
+					if ( filetype != F_UNK ) {
+						if ( errorlevel > 0 ) {
+							err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
+							err_tp[ fn ] = errorlevel;
+							if ( err_list[ fn ] != NULL )
+								strcpy( err_list[ fn ], errormessage );
+						}
+						if ( errorlevel >= err_tol ) error_cnt++;
+						else {
+							if ( errorlevel == 1 ) warn_cnt++;
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
+						}
 					}
 					int done = ++g_files_done;
 
@@ -2393,11 +2401,10 @@ INTERN bool check_file( void )
 		auto_set = true;
 	}
 	else {
-		// file is neither
+		// file is neither — skip silently (no error shown for .exe, .png, etc.)
 		filetype = F_UNK;
-		snprintf( errormessage, MSG_SIZE, "filetype of file \"%s\" is unknown", filename );
-		errorlevel = 2;
-		return false;		
+		errorlevel = 1; // warning level: skipped silently, not counted as error
+		return false;
 	}
 	
 	
