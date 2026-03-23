@@ -11,6 +11,7 @@ cd "$(dirname "$0")"
 
 SRC="aricoder.cpp bitops.cpp packjpg.cpp"
 CFLAGS="-I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17"
+CFLAGS_NATIVE="$CFLAGS -march=native"  # CPU-specific, not for distribution
 OUT="bin"
 
 mkdir -p "$OUT"
@@ -35,6 +36,12 @@ $CXX $CFLAGS -DUNIX \
     $SRC \
     && ok "bin/packJPG_linux_x64"
 
+# native build (optimized for this machine only, not for distribution)
+$CXX $CFLAGS_NATIVE -DUNIX \
+    -o "$OUT/packJPG_linux_x64_native" \
+    $SRC \
+    && ok "bin/packJPG_linux_x64_native (native, do not distribute)"
+
 # --- Windows x64 -------------------------------------------------------------
 
 echo ""
@@ -58,6 +65,7 @@ else
         -o "$OUT/packJPG_win_x64.exe" \
         $SRC $ICONS64 \
         -static -static-libgcc -static-libstdc++ \
+    && x86_64-w64-mingw32-strip --strip-unneeded "$OUT/packJPG_win_x64.exe" \
         && ok "bin/packJPG_win_x64.exe"
 
     [ -f icons_x64.o ] && rm -f icons_x64.o
@@ -86,6 +94,7 @@ else
         -o "$OUT/packJPG_win_x86.exe" \
         $SRC $ICONS32 \
         -static -static-libgcc -static-libstdc++ \
+    && i686-w64-mingw32-strip --strip-unneeded "$OUT/packJPG_win_x86.exe" \
         && ok "bin/packJPG_win_x86.exe"
 
     [ -f icons_x86.o ] && rm -f icons_x86.o

@@ -262,6 +262,36 @@ v2.7 (03/20/2026) (public)
  - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores; x86 capped at 2)
  - Thread-safe output buffering in process_ui (per-file atomic console writes)
 
+v2.9 (03/23/2026) (public)
+ - new flag: [-c] compress only — skip PJG files silently
+ - new flag: [-x] decompress only — skip JPG files silently
+ - new flag: [-module] machine-friendly output: OK/ERROR + elapsed seconds
+ - fixed: crash with accented/special characters in path (Windows drag & drop)
+ - fixed: file count wrong with wildcard expansion on Windows
+ - fixed: comp. ratio 0.00%% with mixed file types
+ - fixed: -module now added to help screen
+ - fixed: -list no longer creates empty output files
+ - fixed: MT progress bar stray characters
+ - help screen now shows program description
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
+v2.8b (03/23/2026) (public)
+ - fixed: crash with accented/special characters in path (Windows drag & drop)
+   uses safe_path() helper: CP_ACP -> wchar_t -> filesystem::path on Windows
+ - fixed: all filesystem operations wrapped in try/catch to prevent file destruction
+ - fixed: comp. ratio now shows correctly regardless of mixed file types
+ - new flag: [-c] compress only — skip PJG files silently
+ - new flag: [-x] decompress only — skip JPG files silently
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
+v2.8a (03/22/2026) (public)
+ - fixed: Windows wildcard expansion buffer overflow (file count wrong with *.jpg)
+ - fixed: Windows wildcard now uses Wide API (FindFirstFileW) for accented filenames
+ - fixed: recursive mode (-r) now only collects .jpg/.jpeg/.pjg files
+ - fixed: wildcard expansion now skips directories
+ - minimum supported Windows version: 7 (dropped XP)
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
 v2.8 (03/21/2026) (public)
  - Improved sign context in AC high encoder/decoder: adds top-left diagonal neighbor
    (mod_sgn 9→27 states), yielding ~0.04% better compression ratio
@@ -321,9 +351,25 @@ packJPG by Matthias Stirner, 01/2016
 #include <mutex>
 #include <filesystem>
 #include <csignal>
+
 #if defined(_WIN32) || defined(WIN32)
 	#include <windows.h>
 #endif
+
+// Helper: convert a char* path (CP_ACP on Windows, UTF-8 on Linux) to
+// std::filesystem::path safely — avoids filesystem_error on accented chars.
+static std::filesystem::path safe_path( const char* s )
+{
+	if ( s == NULL ) return std::filesystem::path();
+	#if defined(_WIN32) || defined(WIN32)
+	// argv on Windows is CP_ACP — convert to wchar_t first
+	wchar_t wbuf[32768];
+	if ( MultiByteToWideChar( CP_ACP, 0, s, -1, wbuf, 32768 ) > 0 )
+		return std::filesystem::path( wbuf );
+	// fallback: let filesystem try (may throw on bad chars)
+	#endif
+	return std::filesystem::path( s );
+}
 
 #include "bitops.h"
 #include "aricoder.h"
@@ -721,6 +767,9 @@ INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
+INTERN bool compress_only   = false;	// -c: skip PJG files, only compress JPG
+INTERN bool decompress_only = false;	// -x: skip JPG files, only decompress PJG
+INTERN bool module_mode = false;	// machine-friendly output: OK/ERROR + time only
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
@@ -755,11 +804,11 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 28;
+INTERN const unsigned char appversion = 29;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/21/2026";
+INTERN const char*  versiondate  = "03/23/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -799,10 +848,12 @@ int main( int argc, char** argv )
 	// read options from command line
 	initialize_options( argc, argv );
 	
-	// write program info to screen
-	fprintf( msgout,  "\n--> %s v%i.%i%s (%s) by %s <--\n",
-			apptitle, appversion / 10, appversion % 10, subversion, versiondate, author );
-	fprintf( msgout, "Copyright %s\nAll rights reserved\n\n", copyright );
+	// write program info to screen (suppressed in module mode)
+	if ( !module_mode ) {
+		fprintf( msgout,  "\n--> %s v%i.%i%s (%s) by %s <--\n",
+				apptitle, appversion / 10, appversion % 10, subversion, versiondate, author );
+		fprintf( msgout, "Copyright %s\nAll rights reserved\n\n", copyright );
+	}
 	
 	// check if user input is wrong, show help screen if it is
 	if ( ( file_cnt == 0 ) ||
@@ -949,7 +1000,7 @@ int main( int argc, char** argv )
 				if ( filelist[fi] == NULL ) continue;
 				std::error_code ec;
 				// try to remove .pjg and .jpg outputs that may have been partially written
-				std::filesystem::path p( filelist[fi] );
+				std::filesystem::path p = safe_path( filelist[fi] );
 				std::filesystem::path out_pjg = p; out_pjg.replace_extension(".pjg");
 				std::filesystem::path out_jpg = p; out_jpg.replace_extension(".jpg");
 				std::filesystem::remove( out_pjg, ec );
@@ -999,10 +1050,18 @@ int main( int argc, char** argv )
 	}
 	
 	// show statistics
+	if ( module_mode ) {
+		// machine-friendly output for external tools (e.g. FreeArc)
+		total = std::chrono::duration<double>( end - begin ).count();
+		if ( error_cnt == 0 )
+			fprintf( msgout, "OK %.2f\n", total );
+		else
+			fprintf( msgout, "ERROR %i %.2f\n", error_cnt, total );
+	} else {
 	fprintf( msgout,  "\n\n-> %i file(s) processed, %i error(s), %i warning(s)\n",
 		file_cnt, error_cnt, warn_cnt );
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
-	 ( action == A_COMPRESS ) ) {
+	 ( acc_jpgsize > 0 || acc_pjgsize > 0 ) ) {
 		// acc_jpgsize in bytes → convert to MB for MB/s
 		double acc_jpg_mb = acc_jpgsize / ( 1024.0 * 1024.0 );
 		acc_jpgsize /= 1024.0; acc_pjgsize /= 1024.0;
@@ -1042,6 +1101,7 @@ int main( int argc, char** argv )
 		}
 		#endif
 	}
+	} // end if (!module_mode)
 	
 	// pause before exit
 	if ( wait_exit && ( msgout != stderr ) ) {
@@ -1352,13 +1412,20 @@ EXPORT const char* pjglib_short_name( void )
 /* -----------------------------------------------
 	recursively collect files from a directory
 	----------------------------------------------- */
+static bool is_jpg_or_pjg( const std::filesystem::path& p )
+{
+	auto ext = p.extension().string();
+	for ( auto& ch : ext ) ch = (char)tolower( (unsigned char)ch );
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg";
+}
+
 static void collect_files_recursive( const std::filesystem::path& dir,
                                      std::vector<std::string>& out )
 {
 	std::error_code ec;
 	for ( auto& entry : std::filesystem::recursive_directory_iterator( dir,
 	        std::filesystem::directory_options::skip_permission_denied, ec ) ) {
-		if ( entry.is_regular_file( ec ) )
+		if ( entry.is_regular_file( ec ) && is_jpg_or_pjg( entry.path() ) )
 			out.push_back( entry.path().string() );
 	}
 }
@@ -1371,8 +1438,11 @@ INTERN void initialize_options( int argc, char** argv )
 	
 	
 	// get memory for filelist & preset with NULL
-	filelist = (char**) calloc( argc, sizeof( char* ) );
-	for ( i = 0; i < argc; i++ )
+	// Allocate generously: wildcard expansion on Windows can yield many more
+	// files than argc. 65536 entries covers any realistic batch.
+	const int FILELIST_MAX = 65536;
+	filelist = (char**) calloc( FILELIST_MAX, sizeof( char* ) );
+	for ( i = 0; i < FILELIST_MAX; i++ )
 		filelist[ i ] = NULL;
 	
 	// preset temporary filelist pointer
@@ -1412,6 +1482,17 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-dry" ) == 0 ) {
 			dry_run = true;
 		}
+		else if ( strcmp((*argv), "-c" ) == 0 ) {
+			compress_only = true;
+		}
+		else if ( strcmp((*argv), "-x" ) == 0 ) {
+			decompress_only = true;
+		}
+		else if ( strcmp((*argv), "-module" ) == 0 ) {
+			module_mode = true;
+			wait_exit = false;
+			verbosity = 0; // suppress all output except final OK/ERROR line
+		}
 		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
 			if ( tmp_val == 0 ) {
 				// auto: detect cores, cap at 2 for x86, uncapped for x64
@@ -1434,7 +1515,7 @@ INTERN void initialize_options( int argc, char** argv )
 			outdir = (*argv) + 3;
 			// Create directory if it doesn't exist
 			std::error_code ec;
-			std::filesystem::create_directories( outdir, ec );
+			std::filesystem::create_directories( safe_path( outdir ), ec );
 			// ec is silently ignored — if it fails, the error will surface later when writing files
 		}
 		#if defined(DEV_BUILD)
@@ -1519,9 +1600,13 @@ INTERN void initialize_options( int argc, char** argv )
 			// if argument is not switch, it's a filename, wildcard, or directory
 			#if defined(_WIN32) || defined(WIN32)
 			// On Windows the shell does not expand wildcards, so we do it here.
+			// Use Wide API (FindFirstFileW) to handle accented/Unicode filenames.
 			if ( strchr( *argv, '*' ) != NULL || strchr( *argv, '?' ) != NULL ) {
-				WIN32_FIND_DATAA fd;
-				HANDLE hFind = FindFirstFileA( *argv, &fd );
+				// Convert pattern to wide string
+				wchar_t wpattern[MAX_PATH];
+				MultiByteToWideChar( CP_ACP, 0, *argv, -1, wpattern, MAX_PATH );
+				WIN32_FIND_DATAW fd;
+				HANDLE hFind = FindFirstFileW( wpattern, &fd );
 				if ( hFind != INVALID_HANDLE_VALUE ) {
 					// Extract directory prefix from the pattern (e.g. "imgs\*.jpg" → "imgs\")
 					char dir_prefix[MAX_PATH] = "";
@@ -1534,17 +1619,22 @@ INTERN void initialize_options( int argc, char** argv )
 						dir_prefix[ prefix_len ] = '\0';
 					}
 					do {
-						// Skip . and ..
-						if ( strcmp( fd.cFileName, "." ) == 0 || strcmp( fd.cFileName, ".." ) == 0 )
+						// Skip . and .. and directories
+						if ( wcscmp( fd.cFileName, L"." ) == 0 || wcscmp( fd.cFileName, L".." ) == 0 )
 							continue;
-						size_t len = strlen( dir_prefix ) + strlen( fd.cFileName ) + 1;
+						if ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+							continue;
+						// Convert wide filename back to UTF-8
+						char fname_utf8[MAX_PATH];
+						WideCharToMultiByte( CP_UTF8, 0, fd.cFileName, -1, fname_utf8, MAX_PATH, NULL, NULL );
+						size_t len = strlen( dir_prefix ) + strlen( fname_utf8 ) + 1;
 						char* fn = (char*) malloc( len );
 						if ( fn ) {
 							strcpy( fn, dir_prefix );
-							strcat( fn, fd.cFileName );
+							strcat( fn, fname_utf8 );
 							*(tmp_flp++) = fn;
 						}
-					} while ( FindNextFileA( hFind, &fd ) );
+					} while ( FindNextFileW( hFind, &fd ) );
 					FindClose( hFind );
 				}
 				// If no match found, skip silently (same behavior as Linux shell)
@@ -1562,10 +1652,11 @@ INTERN void initialize_options( int argc, char** argv )
 		std::vector<std::string> extra_files;
 		for ( int fi = 0; filelist[ fi ] != NULL; fi++ ) {
 			std::error_code ec;
-			std::filesystem::path p( filelist[ fi ] );
+			std::filesystem::path p;
+			try { p = safe_path( filelist[ fi ] ); } catch (...) { continue; }
 			if ( std::filesystem::is_directory( p, ec ) ) {
 				filelist[ fi ] = NULL; // remove directory entry
-				collect_files_recursive( p, extra_files );
+				try { collect_files_recursive( p, extra_files ); } catch (...) {}
 			}
 		}
 		if ( !extra_files.empty() ) {
@@ -1627,6 +1718,14 @@ INTERN void process_ui( void )
 	clock_t begin, end;
 	const char* actionmsg  = NULL;
 	const char* errtypemsg = NULL;
+
+	// In module mode, suppress all per-file output — only final OK/ERROR is shown
+	if ( module_mode ) {
+		// still need to process the file, just skip all UI
+		check_file();
+		if ( errorlevel < 2 ) process_file();
+		return;
+	}
 
 	// In multi-threaded mode we buffer all output into a thread_local string
 	// so the worker lambda can flush it atomically together with the progress bar.
@@ -1884,6 +1983,10 @@ INTERN inline const char* get_status( bool (*function)() )
 INTERN void show_help( void )
 {	
 	fprintf( msgout, "\n" );
+	fprintf( msgout, "packJPG — lossless JPEG compression. Typical reduction: ~20%%.\n" );
+	fprintf( msgout, "Compresses JPEG files to PJG format and decompresses them back,\n" );
+	fprintf( msgout, "with bit-for-bit identical reconstruction.\n" );
+	fprintf( msgout, "\n" );
 	fprintf( msgout, "Website: %s\n", website );
 	fprintf( msgout, "Email  : %s\n", email );
 	fprintf( msgout, "\n" );
@@ -1898,6 +2001,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
+	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
@@ -2245,6 +2349,13 @@ INTERN bool check_file( void )
 			segm_cnt[ 3 ] = orig_set[ 7 ];
 			auto_set = false;
 		}
+		// skip if -x (decompress only) was requested
+		if ( decompress_only ) {
+			filetype = F_UNK;
+			snprintf( errormessage, MSG_SIZE, "skipped (compress-only mode)" );
+			errorlevel = 1; // warning, not fatal
+			return false;
+		}
 	}
 	else if ( ( fileid[0] == pjg_magic[0] ) && ( fileid[1] == pjg_magic[1] ) ) {
 		// file is PJG
@@ -2271,6 +2382,13 @@ INTERN bool check_file( void )
         } else {
             str_out = std::make_unique<FileWriter>(std::string(jpgfilename));
         }
+		// skip if -c (compress only) was requested
+		if ( compress_only ) {
+			filetype = F_UNK;
+			snprintf( errormessage, MSG_SIZE, "skipped (decompress-only mode)" );
+			errorlevel = 1; // warning, not fatal
+			return false;
+		}
 		// PJG specific settings - auto unless specified otherwise
 		auto_set = true;
 	}
