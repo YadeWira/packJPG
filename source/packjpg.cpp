@@ -771,6 +771,7 @@ INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
 INTERN bool mix_mode        = false;	// -mix: auto-detect with warning
+INTERN bool subcmd_given    = false;	// a subcommand was explicitly provided
 INTERN bool module_mode = false;	// machine-friendly output: OK/ERROR + time only
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
@@ -861,7 +862,8 @@ int main( int argc, char** argv )
 	
 	// check if user input is wrong, show help screen if it is
 	if ( ( file_cnt == 0 ) ||
-		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST) || (!auto_set) || (verify_lv > 1) ) ) ) {
+		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST) || (!auto_set) || (verify_lv > 1) ) ) ||
+		( ( !developer ) && ( !subcmd_given ) && ( !pipe_on ) ) ) {
 		show_help();
 		return -1;
 	}
@@ -1470,20 +1472,29 @@ INTERN void initialize_options( int argc, char** argv )
 	
 	
 	// read in arguments
+	// Check for pipe mode early (before subcommand check)
+	for ( int pi = 1; pi < argc; pi++ ) {
+		if ( strcmp(argv[pi], "-") == 0 ) { subcmd_given = true; break; }
+	}
+
 	// First argument can be a subcommand: c, x, mix, list
 	if ( argc > 1 ) {
 		const char* subcmd = argv[1];
 		if ( strcmp(subcmd, "a") == 0 ) {
 			compress_only = true;
+			subcmd_given = true;
 			argv++; argc--;
 		} else if ( strcmp(subcmd, "x") == 0 ) {
 			decompress_only = true;
+			subcmd_given = true;
 			argv++; argc--;
 		} else if ( strcmp(subcmd, "mix") == 0 ) {
 			mix_mode = true;
+			subcmd_given = true;
 			argv++; argc--;
 		} else if ( strcmp(subcmd, "list") == 0 ) {
 			action = A_LIST;
+			subcmd_given = true;
 			argv++; argc--;
 		}
 	}
@@ -1670,9 +1681,19 @@ INTERN void initialize_options( int argc, char** argv )
 				}
 				// If no match found, skip silently (same behavior as Linux shell)
 			} else {
+				// If a directory is passed without wildcard, auto-enable recursive
+				{ std::error_code _ec;
+				  if ( std::filesystem::is_directory( safe_path(*argv), _ec ) )
+					recursive = true;
+				}
 				*(tmp_flp++) = *argv;
 			}
 			#else
+			// Linux: also auto-enable recursive for directory args
+			{ std::error_code _ec;
+			  if ( std::filesystem::is_directory( safe_path(*argv), _ec ) )
+				recursive = true;
+			}
 			*(tmp_flp++) = *argv;
 			#endif
 		}		
@@ -2014,7 +2035,7 @@ INTERN inline const char* get_status( bool (*function)() )
 INTERN void show_help( void )
 {	
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "packJPG — lossless JPEG compression. Typical reduction: ~20%%.\n" );
+	fprintf( msgout, "packJPG -- lossless JPEG compression. Typical reduction: ~20%%.\n" );
 	fprintf( msgout, "Compresses JPEG files to PJG format and decompresses them back,\n" );
 	fprintf( msgout, "with bit-for-bit identical reconstruction.\n" );
 	fprintf( msgout, "\n" );
@@ -2088,6 +2109,9 @@ INTERN void process_file( void )
 				execute( pack_pjg );
 				#if !defined(BUILD_LIB)	
 				if ( verify_lv > 0 ) { // verifcation
+					// save jpgfilesize/pjgfilesize before verify — unpack overwrites them
+					int saved_jpgsize = jpgfilesize;
+					int saved_pjgsize = pjgfilesize;
 					execute( reset_buffers );
 					execute( swap_streams );
 					execute( unpack_pjg );
@@ -2096,6 +2120,9 @@ INTERN void process_file( void )
 					execute( recode_jpeg );
 					execute( merge_jpeg );
 					execute( compare_output );
+					// restore original sizes for correct ratio reporting
+					jpgfilesize = saved_jpgsize;
+					pjgfilesize = saved_pjgsize;
 				}
 				#endif
 				break;
@@ -2937,8 +2964,8 @@ INTERN bool merge_jpeg( void )
 		return false;
 	}
 	
-	// get filesize
-	jpgfilesize = str_out->num_bytes_written();
+	// get filesize -- pjgfilesize = PJG output, jpgfilesize already set by read_jpeg
+	pjgfilesize = str_out->num_bytes_written();
 	
 	
 	return true;

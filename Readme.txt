@@ -1,9 +1,13 @@
-packJPG v2.8 (03/21/2026)
+packJPG v2.9 (03/23/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-packJPG is a compression program specially designed for further
-compression of JPEG images without causing any further loss. Typically
-it reduces the file size of a JPEG file by 20%.
+packJPG is a lossless JPEG compression program. It compresses JPEG files
+to the PJG format and decompresses them back with bit-for-bit identical
+reconstruction. Typical file size reduction: ~20%.
+
+Supported platforms: Linux x64, Windows 7 and later (x86/x64).
+Note: Windows XP may work in some cases but is not supported and will
+not receive bug fixes.
 
 
 LGPL v3 license and special permissions
@@ -34,34 +38,87 @@ Copyright 2006...2026 by Yade Bravo & Matthias Stirner.
 Usage of packJPG
 ~~~~~~~~~~~~~~~~
 
-JPEG files are compressed and PJG files are decompressed using this
-command:
+A subcommand is required to tell packJPG what to do:
 
- "packJPG [file(s)]"
+ "packJPG <subcommand> [switches] [filename(s)]"
 
-packJPG recognizes file types on its own and decides whether to compress
-(JPG) or decompress (PJG). For unrecognized file types no action is
-taken. Files are recognized by content, not by extension.
+Subcommands:
 
-packJPG supports wildcards like "*.*" and drag and drop of multiple 
-files. Filenames for output files are created automatically. In default
-mode, files are never overwritten. If a filename is already in use,
-packJPG creates a new filename by adding underscores.
+ a       compress JPEG files to PJG (archive)
+ x       decompress PJG files back to JPEG (extract)
+ mix     auto-detect and process both directions (use with caution)
+ list    display info about PJG files without decompressing
 
-On Windows, wildcard expansion (e.g. "*.jpg") is handled internally by
-packJPG since cmd.exe does not expand wildcards automatically.
+packJPG recognizes file types by content, not by extension. Files that
+are neither JPEG nor PJG are silently skipped.
 
-If "-" is used as a filename input from stdin is assumed and output is
-written to stdout. This can be useful for example if jpegtran is to be
-used as a preprocessor.
+packJPG supports wildcards like "*.jpg", "*.*" and drag and drop of
+multiple files. Filenames for output files are created automatically.
+In default mode, files are never overwritten. If a filename is already
+in use, packJPG creates a new filename by adding underscores.
+
+On Windows, wildcard expansion is handled internally by packJPG since
+cmd.exe does not expand wildcards automatically. Filenames with accented
+or special characters are fully supported on Windows 7 and later.
+
+When a directory is passed as an argument, packJPG automatically
+processes it recursively.
+
+If "-" is used as a filename, input is read from stdin and output is
+written to stdout. This can be useful if jpegtran is used as a
+preprocessor.
 
 Usage examples:
 
- "packJPG *.pjg"
- "packJPG lena.jpg"
- "packJPG kodim??.jpg"
+ "packJPG a *.jpg"
+ "packJPG a lena.jpg"
+ "packJPG a kodim??.jpg"
+ "packJPG x *.pjg"
+ "packJPG x archive/"
+ "packJPG mix *.*"
+ "packJPG list *.pjg"
  "packJPG - < sail.pjg > sail.jpg"
- "packJPG -th0 -o -np -od/tmp/out *.jpg"
+ "packJPG a -th0 -o -np -odout/ *.jpg"
+
+
+Subcommands in detail
+~~~~~~~~~~~~~~~~~~~~~
+
+a -- compress (archive)
+  Processes JPEG files and compresses them to PJG. PJG files and
+  unrecognized file types are silently skipped.
+
+  "packJPG a -th0 -o -np *.jpg"
+  "packJPG a -r -np photos/"
+
+x -- decompress (extract)
+  Processes PJG files and decompresses them back to JPEG. JPEG files
+  and unrecognized file types are silently skipped.
+
+  "packJPG x -th0 -o -np *.pjg"
+  "packJPG x -r -np archive/"
+
+mix -- mixed mode
+  Auto-detects each file and compresses or decompresses accordingly.
+  Useful for folders containing both JPG and PJG files.
+
+  WARNING: Running mix on a folder that was already compressed will
+  decompress the PJG files back — potentially undoing previous work.
+  A warning is printed at the end if both directions were used.
+
+  "packJPG mix -o -np *.*"
+
+list -- list PJG info
+  Displays version and packed size for each PJG file without
+  decompressing it.
+
+  "packJPG list *.pjg"
+  "packJPG list -r archive/"
+
+  Output example:
+    photos/lena.pjg
+      version : v2.9
+      packed  : 288.1 KB
 
 
 Command line switches
@@ -74,8 +131,8 @@ Command line switches
  -od<path> write output files to directory <path> (created if needed)
  -th<n>    number of worker threads; 0 = auto-detect (default: 1)
  -r        recurse into subdirectories
- -list     list PJG file info without decompressing
  -dry      dry run: simulate without writing output files
+ -module   machine-friendly output: OK/ERROR + elapsed seconds
  -p        proceed on warnings
  -d        discard meta-info
 
@@ -105,6 +162,7 @@ options will most likely lead to reconstructed JPG files not being
 bitwise identical to the original JPG files. In turn, the verification 
 process may fail on various files although nothing actually went wrong. 
 
+
 Multi-threaded mode (-th)
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -124,61 +182,43 @@ how many files were completed before the interrupt.
 Single-threaded mode (default, no -th flag) behaves exactly as in
 previous versions.
 
+
 Dry run mode (-dry)
 ~~~~~~~~~~~~~~~~~~~
 
-The "-dry" switch simulates compression without writing any output
+The "-dry" switch simulates processing without writing any output
 files. Useful for previewing compression ratios before committing
 to a batch operation.
 
- "packJPG -dry -np *.jpg"       preview ratios, no files written
- "packJPG -dry -th0 -np *.jpg"  same, using all cores
-
-Listing PJG files (-list)
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-The "-list" switch displays information about PJG files without
-decompressing them:
-
- "packJPG -list -np *.pjg"
- "packJPG -list -r -np /path/to/archive/"
-
-Output example:
- photos/lena.pjg
-   version : v2.8
-   packed  : 288.1 KB
-
-Usage examples:
-
- "packJPG -v1 -o baboon.pjg"
- "packJPG -ver lena.jpg"
- "packJPG -d tiffany.jpg"
- "packJPG -p *.jpg"
- "packJPG -od/tmp/output *.jpg"
- "packJPG -th0 -o -np -od/tmp/output *.jpg"
- "packJPG -th4 -o -np *.jpg"
- "packJPG -dry -np *.jpg"
- "packJPG -list -r -np photos/"
+ "packJPG a -dry -np *.jpg"       preview ratios, no files written
+ "packJPG a -dry -th0 -np *.jpg"  same, using all cores
 
 
-Known Limitations 
-~~~~~~~~~~~~~~~~~ 
+Module mode (-module)
+~~~~~~~~~~~~~~~~~~~~~
 
-packJPG is a compression program specially for JPEG files, so it doesn't 
-compress other file types.
+The "-module" switch produces minimal machine-friendly output: a single
+line with OK or ERROR and the elapsed time in seconds. Useful for
+integration with external tools like FreeArc.
+
+ "packJPG a -module -np file.jpg"  ->  OK 0.72
+ "packJPG a -module -np bad.jpg"   ->  ERROR 1 0.00
+
+
+Known Limitations
+~~~~~~~~~~~~~~~~~
+
+packJPG is a compression program for JPEG files only. Other file types
+are silently skipped.
 
 packJPG has low error tolerance. JPEG files might not work with packJPG 
 even if they work perfectly with other image processing software. The 
 command line switch "-p" can be used to increase error tolerance and 
 compatibility.
 
-If you try to drag and drop too many files at once, there might be a 
-windowed error message about missing privileges. In that case you can 
-try it again with less files or consider using the command prompt. 
-packJPG has been tested to work perfectly with thousands of files from 
-the command line. This issue also happens with drag and drop in other 
-applications, so it might not be a limitation of packJPG but a 
-limitation of Windows.
+If you try to drag and drop too many files at once on Windows, there
+might be a windowed error message about missing privileges. In that
+case try again with fewer files or use the command prompt instead.
 
 Compressed PJG files are not compatible between different packJPG 
 versions. You will get an error message if you try to decompress PJG 
@@ -188,23 +228,17 @@ http://www.elektronik.htw-aalen.de/packJPG/binaries/old/
 
 
 Open source release / developer info
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The packJPG source code is found inside the "source" subdirectory. 
-Additional documents aimed at developers, containing detailed 
-instructions on compiling the source code and using special 
-functionality, are included in the "packJPG" subdirectory.
+The packJPG source code is in the "source" subdirectory.
 
 The source code requires a C++17 compliant compiler. Tested with
 clang 18 and g++ 13. Cross-compilation for Windows is supported via
-mingw-w64. Run build_all.sh to build all three targets at once:
+mingw-w64. Run build_all.sh to build all targets at once:
 
- ./build_all.sh            build Linux x64, Windows x64, Windows x86
- make                      build for the current platform
- make linux-x64            bin/packJPG_linux_x64
- make win-x64              bin/packJPG_win_x64.exe
- make win-x86              bin/packJPG_win_x86.exe
- make all-platforms        all three binaries at once
+ ./build_all.sh    build Linux x64, Windows x64, Windows x86
+
+Binaries are stripped automatically during the build to reduce file size.
 
 
 History
@@ -226,13 +260,13 @@ v2.2  (08/05/2007) (public)
  - smaller executable
  - minor bugfixes
  - various minor improvements
- 
+
 v2.3  (09/18/2007) (public)
  - compatibility with JPEG progressive mode
  - compatibility with JPEG extended sequential mode
  - compatibility with the CMYK color space
  - compatibility with older CPUs
- - around 15% faster compression & decompression 
+ - around 15% faster compression & decompression
  - new switch: [-d] (discard meta-info)
  - various bugfixes
 
@@ -243,7 +277,7 @@ v2.3a (11/21/2007) (public)
 v2.3b (12/20/2007) (public)
  - some minor errors in the packJPG library fixed
  - compatibility with packJPG v2.3 maintained
- 
+
 v2.4 (03/24/2010) (public)
  - major improvements (1%...2%) to overall compression
  - around 10% faster compression & decompression
@@ -253,9 +287,9 @@ v2.4 (03/24/2010) (public)
  - new switch: [-np] (no pause after processing)
  - new progress bar output mode
  - arithmetic coding routines rewritten from scratch
- - various smaller improvements to numerous to list here
+ - various smaller improvements too numerous to list here
  - new SFX (self extracting) archive format
- 
+
 v2.5 (11/11/2011) (public)
  - improvements (~0.5%) to overall compression
  - several minor bugfixes
@@ -263,42 +297,42 @@ v2.5 (11/11/2011) (public)
  - removed packJPX from the package
  - added packARC to the package
  - packJPG is now open source!
- 
+
 v2.5a (11/21/11) (public)
  - source code compatibility improvements (Gerhard Seelmann)
  - avoid some compiler warnings (Gerhard Seelmann)
  - source code clean up (Gerhard Seelmann)
- 
+
 v2.5b (01/27/12) (public)
  - further removal of redundant code
  - some fixes for the packJPG static library
  - compiler fix for Mac OS (thanks to Sergio Lopez)
  - improved compression ratio calculation
  - eliminated the need for temp files
- 
+
 v2.5c (04/13/12) (public)
  - various source code optimizations
- 
+
 v2.5d (07/03/12) (public)
  - fixed a rare bug with progressive JPEG
- 
+
 v2.5e (07/03/12) (public)
  - some minor source code optimizations
  - changed packJPG licensing to LGPL
  - moved packARC to a separate package
- 
+
 v2.5f (02/24/13) (public)
  - fixed a minor bug in the JPG parser (thanks to Stephan Busch)
- 
+
 v2.5g (09/14/13) (public)
  - fixed a rare crash bug with manipulated JPEG files
- 
+
 v2.5h (12/07/13) (public)
  - added a warning for inefficient huffman coding (thanks to Moinak Ghosh)
- 
+
 v2.5i (12/26/13) (public)
  - fixed possible crash with malformed JPEG (thanks to Moinak Ghosh)
- 
+
 v2.5j (01/15/14) (public)
  - various source code optimizations (using cppcheck)
 
@@ -342,6 +376,28 @@ v2.8 (03/21/2026) (public)
  - thread info shows detected core count
  - fixed: -list no longer creates empty .jpg output files
  - fixed: MT progress bar no longer shows stray characters after completion
+ - fixed: unique_filename() now respects -od output directory
+ - maintainer: Yade Bravo (https://github.com/YadeWira)
+
+v2.9 (03/23/2026) (public)
+ - new subcommand interface: a (compress), x (decompress), mix, list
+   subcommand is now required; running without one shows the help screen
+ - new subcommand: [a] compress only -- process JPG files, skip PJG
+ - new subcommand: [x] decompress only -- process PJG files, skip JPG
+ - new subcommand: [mix] mixed mode -- auto-detect, warns if both directions used
+ - new subcommand: [list] list PJG info (replaces -list flag)
+ - new switch: [-module] machine-friendly output: OK/ERROR + elapsed seconds
+ - passing a directory as argument now automatically recurses into it
+ - fixed: crash with accented/special characters in path (Windows drag & drop)
+ - fixed: file count wrong with wildcard expansion on Windows
+ - fixed: wildcard expansion now uses FindFirstFileW (Unicode filenames)
+ - fixed: comp. ratio 0.00% in single-thread mode
+ - fixed: comp. ratio 100% in multi-thread mode with verify
+ - fixed: unknown file types (.exe, .png, etc.) now skipped silently
+ - fixed: em dash display issue in Windows console (codepage)
+ - help screen now shows program description
+ - build: binaries stripped automatically (strip --strip-unneeded)
+ - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
 
