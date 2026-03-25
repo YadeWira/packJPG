@@ -379,7 +379,7 @@ v2.8 (03/21/2026) (public)
  - fixed: unique_filename() now respects -od output directory
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
-v2.9 Test 3 (03/23/2026) (public - non build)
+v2.9 (03/23/2026) (public)
  - new subcommand interface: a (compress), x (decompress), mix, list
    subcommand is now required; running without one shows the help screen
  - new subcommand: [a] compress only -- process JPG files, skip PJG
