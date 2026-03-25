@@ -811,7 +811,7 @@ INTERN const unsigned char appversion = 29;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/23/2026";
+INTERN const char*  versiondate  = "03/25/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
