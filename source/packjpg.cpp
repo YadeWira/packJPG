@@ -730,8 +730,8 @@ THREAD_LOCAL int cs_sal       =   0  ; // successive approximation bit pos low
 	
 THREAD_LOCAL char*  jpgfilename = NULL;	// name of JPEG file
 THREAD_LOCAL char*  pjgfilename = NULL;	// name of PJG file
-THREAD_LOCAL int    jpgfilesize;			// size of JPEG file
-THREAD_LOCAL int    pjgfilesize;			// size of PJG file
+THREAD_LOCAL int64_t jpgfilesize;			// size of JPEG file
+THREAD_LOCAL int64_t pjgfilesize;			// size of PJG file
 THREAD_LOCAL int    jpegtype = 0;			// type of JPEG coding: 0->unknown, 1->sequential, 2->progressive
 THREAD_LOCAL int    filetype;				// type of current file
 THREAD_LOCAL std::unique_ptr<Reader> str_in;	// input stream
@@ -742,6 +742,8 @@ THREAD_LOCAL std::unique_ptr<Reader> str_str;	// storage stream
 
 INTERN char** filelist = NULL;		// list of files to process 
 INTERN int    file_cnt = 0;			// count of files in list
+INTERN int    file_proc_cnt = 0;		// count of processable files (JPG/PJG)
+INTERN int    file_proc_no  = 0;		// current processable file number (live)
 THREAD_LOCAL int    file_no  = 0;			// number of current file
 
 INTERN char** err_list = NULL;		// list of error messages 
@@ -985,6 +987,7 @@ int main( int argc, char** argv )
 	begin = WallClock::now();
 	if ( num_threads <= 1 ) {
 		// --- single-threaded (original behavior) ---
+		int st_proc_done = 0; // tracks processable files for progress display
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
 			// process current file
 			process_ui();
@@ -999,14 +1002,17 @@ int main( int argc, char** argv )
 			// unknown filetype (F_UNK) is silently skipped — not counted as error
 			if ( filetype == F_UNK ) {
 				// silent skip: don't count, don't store error message
-			} else if ( errorlevel >= err_tol ) {
-				error_cnt++;
 			} else {
-				if ( errorlevel == 1 ) warn_cnt++;
-				acc_jpgsize += jpgfilesize;
-				acc_pjgsize += pjgfilesize;
-				if ( filetype == F_JPG ) acc_jpg_cnt++;
-				else if ( filetype == F_PJG ) acc_pjg_cnt++;
+				file_proc_no = ++st_proc_done;
+				if ( errorlevel >= err_tol ) {
+					error_cnt++;
+				} else {
+					if ( errorlevel == 1 ) warn_cnt++;
+					acc_jpgsize += jpgfilesize;
+					acc_pjgsize += pjgfilesize;
+					if ( filetype == F_JPG ) acc_jpg_cnt++;
+					else if ( filetype == F_PJG ) acc_pjg_cnt++;
+				}
 			}
 		}
 	} else {
@@ -1073,7 +1079,8 @@ int main( int argc, char** argv )
 							else if ( filetype == F_PJG ) acc_pjg_cnt++;
 						}
 					}
-					int done = ++g_files_done;
+					// only count non-skipped files for the progress display
+					int done = ( filetype != F_UNK ) ? ++g_files_done : g_files_done.load();
 
 					// --- console (all under the same lock) ---
 					// if this file produced output (errors/warnings), print it cleanly
@@ -1083,8 +1090,8 @@ int main( int argc, char** argv )
 						fwrite( tl_ui_buf.data(), 1, tl_ui_buf.size(), msgout );
 					}
 					// draw/update progress bar
-					int barpos = ( done * BARLEN ) / file_cnt;
-					fprintf( msgout, "\rProcessing file %3i of %3i [", done, file_cnt );
+					int barpos = ( done * BARLEN ) / ( file_proc_cnt > 0 ? file_proc_cnt : 1 );
+					fprintf( msgout, "\rProcessing file %3i of %3i [", done, file_proc_cnt );
 					for ( int b = 0; b < barpos; b++ )
 					#if defined(_WIN32)
 						fprintf( msgout, "\xFE" );
@@ -1124,12 +1131,12 @@ int main( int argc, char** argv )
 			}
 			end = WallClock::now();
 			fprintf( msgout, "-> %i of %i file(s) processed before interrupt\n",
-				g_files_done.load(), file_cnt );
+				g_files_done.load(), file_proc_cnt );
 			goto cleanup;
 		}
 
 		// overwrite last progress bar line with final completed state
-		fprintf( msgout, "\rProcessed    %3i of %3i [", file_cnt, file_cnt );
+		fprintf( msgout, "\rProcessed    %3i of %3i [", file_proc_cnt, file_proc_cnt );
 		for ( int b = 0; b < BARLEN; b++ )
 		#if defined(_WIN32)
 			fprintf( msgout, "\xFE" );
@@ -1180,7 +1187,7 @@ int main( int argc, char** argv )
 			fprintf( msgout, "ERROR %i %.2f\n", error_cnt, total );
 	} else {
 	fprintf( msgout,  "\n\n-> %i file(s) processed, %i error(s), %i warning(s)\n",
-		file_cnt, error_cnt, warn_cnt );
+		file_proc_cnt, error_cnt, warn_cnt );
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( acc_jpgsize > 0 || acc_pjgsize > 0 ) ) {
 		// acc_jpgsize in bytes → convert to MB for MB/s
@@ -1634,10 +1641,15 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
 			if ( tmp_val == 0 ) {
-				// auto: use all detected cores on any architecture
+				// auto: use all detected cores (x64/Linux), cap at 4 for x86
+				// x86 has 2-4GB address space limit; too many threads causes OOM
 				int cores = (int) std::thread::hardware_concurrency();
 				if ( cores < 1 ) cores = 1;
+				#if defined(_WIN64) || defined(__x86_64__) || defined(__amd64__) || defined(__LP64__)
 				num_threads = cores;
+				#else
+				num_threads = ( cores > 4 ) ? 4 : cores;
+				#endif
 			} else {
 				num_threads = ( tmp_val < 1 ) ? 1 : tmp_val;
 			}
@@ -1846,7 +1858,27 @@ INTERN void initialize_options( int argc, char** argv )
 	
 	// count number of files (or filenames) in filelist
 	for ( file_cnt = 0; filelist[ file_cnt ] != NULL; file_cnt++ );
-	
+
+	// pre-scan to count processable files (JPG/PJG) for accurate progress display
+	file_proc_cnt = 0;
+	for ( int fi = 0; fi < file_cnt; fi++ ) {
+		if ( filelist[fi] == NULL ) continue;
+		// peek at first 2 bytes to detect type
+		FILE* fp = fopen( filelist[fi], "rb" );
+		if ( fp ) {
+			unsigned char hd[2] = {0,0};
+			if ( fread( hd, 1, 2, fp ) == 2 ) {
+				bool is_jpg = ( hd[0] == 0xFF && hd[1] == 0xD8 );
+				bool is_pjg = ( hd[0] == pjg_magic[0] && hd[1] == pjg_magic[1] );
+				if ( ( is_jpg && !decompress_only ) ||
+				     ( is_pjg && !compress_only ) )
+					file_proc_cnt++;
+			}
+			fclose( fp );
+		}
+	}
+	if ( file_proc_cnt == 0 ) file_proc_cnt = file_cnt; // fallback
+
 	// alloc arrays for error messages and types storage
 	err_list = (char**) calloc( file_cnt, sizeof( char* ) );
 	err_tp   = (int*) calloc( file_cnt, sizeof( int ) );
@@ -1958,7 +1990,7 @@ INTERN void process_ui( void )
 	}
 	else { // progress bar UI
 		// update progress message
-		UIPRINTF( "Processing file %2i of %2i ", file_no + 1, file_cnt );
+		UIPRINTF( "Processing file %2i of %2i ", file_proc_no + 1, file_proc_cnt );
 		progress_bar( file_no, file_cnt );
 		UIPRINTF( "\r" );
 		execute( check_file );
@@ -2057,7 +2089,7 @@ INTERN void process_ui( void )
 		// if this is the last file, update progress bar one last time
 		if ( file_no + 1 == file_cnt ) {
 			// update progress message
-			UIPRINTF( "Processed %2i of %2i files ", file_no + 1, file_cnt );
+			UIPRINTF( "Processed %2i of %2i files ", file_proc_no, file_proc_cnt );
 			progress_bar( 1, 1 );
 			UIPRINTF( "\r" );
 		}	
