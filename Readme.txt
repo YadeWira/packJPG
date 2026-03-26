@@ -414,7 +414,7 @@ v3.0 test 4 (03/25/2026) (public - non build)
    instead of being silently treated as filenames
  - fixed: jpgfilesize/pjgfilesize changed from int to int64_t — prevents
    0.00% ratio reporting on large files (>2GB) and on 32-bit builds
- - fixed: -th0 on x86 now caps at 4 threads to prevent OOM; x64/Linux
+ - fixed: -th0 on x86 now caps at 2 threads to prevent OOM; x64/Linux
    still uses all available cores (reverted the previous uncapped change)
  - fixed: progress counter now shows only processable files (e.g. "2 of 2"
    instead of "5 of 5" when 3 of the 5 files are skipped)
