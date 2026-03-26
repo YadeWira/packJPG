@@ -259,7 +259,7 @@ v2.6 (03/19/25) (public)
 v2.7 (03/20/2026) (public)
  - Windows: wildcard expansion in initialize_options (*.jpg, *.pjg now work from cmd.exe)
  - Build: fixed icon embedding for Windows x64/x86 (windres -O coff)
- - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores; x86 capped at 2)
+ - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores)
  - Thread-safe output buffering in process_ui (per-file atomic console writes)
 
 v3.0 test 1 (03/25/2026) (public - non build)
@@ -1634,14 +1634,10 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
 			if ( tmp_val == 0 ) {
-				// auto: detect cores, cap at 2 for x86, uncapped for x64
+				// auto: use all detected cores on any architecture
 				int cores = (int) std::thread::hardware_concurrency();
 				if ( cores < 1 ) cores = 1;
-				#if defined(_WIN64) || defined(__x86_64__) || defined(__amd64__)
 				num_threads = cores;
-				#else
-				num_threads = ( cores > 2 ) ? 2 : cores;
-				#endif
 			} else {
 				num_threads = ( tmp_val < 1 ) ? 1 : tmp_val;
 			}
