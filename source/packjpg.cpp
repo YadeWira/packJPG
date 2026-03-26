@@ -1,5 +1,5 @@
 /*
-packJPG v2.8 (03/21/2026)
+packJPG v3.0 (03/25/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -262,6 +262,20 @@ v2.7 (03/20/2026) (public)
  - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores; x86 capped at 2)
  - Thread-safe output buffering in process_ui (per-file atomic console writes)
 
+v3.0 test 1 (03/25/2026) (public - non build)
+ - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
+   ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
+   generates new .pjg format (0x01 marker); requires v3.0+ to decompress
+   both encode and decode are parallelized
+ - warning shown when -sfth is used with fewer than 3 detected threads
+ - optimal batch+single-file usage: -th<N/3> -sfth on an N-thread machine
+ - fixed: [a] mode no longer creates empty .pjg files for skipped JPEGs
+ - fixed: [x] mode no longer creates empty .jpg files for skipped PJGs
+ - fixed: skipped files in a/x mode are now silent (no warning printed)
+ - fixed: unrecognized flags (e.g. -th=) now print a clear error message
+   instead of being silently treated as filenames
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
 v2.9 (03/23/2026) (public)
  - new flag: [-c] compress only — skip PJG files silently
  - new flag: [-x] decompress only — skip JPG files silently
@@ -350,6 +364,7 @@ packJPG by Matthias Stirner, 01/2016
 #include <thread>
 #include <atomic>
 #include <mutex>
+#include <future>
 #include <filesystem>
 #include <csignal>
 
@@ -767,6 +782,7 @@ THREAD_LOCAL int  errorlevel;
 INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
+INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
@@ -798,6 +814,89 @@ INTERN int  action = A_COMPRESS;// what to do with JPEG/PJG files
 
 THREAD_LOCAL unsigned char nois_trs[ 4 ] = {6,6,6,6}; // bit pattern noise threshold
 THREAD_LOCAL unsigned char segm_cnt[ 4 ] = {10,10,10,10}; // number of segments
+
+// ─── -sfth intra-file pre-pack parallelism ───────────────────────────────────
+// Snapshots all THREAD_LOCAL image pointers from the calling thread and returns
+// a lambda that installs them into whichever thread calls it.
+static std::function<void()> make_tls_init()
+{
+	struct Snap {
+		unsigned char* zdstdata[4], *eobxhigh[4], *eobyhigh[4];
+		unsigned char* zdstxlow[4], *zdstylow[4];
+		signed short*  colldata[4][64];
+		unsigned char* freqscan[4];
+		unsigned char  zsrtscan[4][64];
+		componentInfo  cmpnfo_arr[4];
+		int  cmpc_v, imgwidth_v, imgheight_v, sfhm_v, sfvm_v, mcuc_v, mcuh_v, mcuv_v;
+		bool auto_set_v;
+		unsigned char nois_trs_v[4], segm_cnt_v[4];
+		// large idct tables on heap to avoid stack overflow (64 KB)
+		std::shared_ptr<std::vector<int>> idct_8x8, idct_1x8, idct_8x1;
+	};
+	auto s = std::make_shared<Snap>();
+	for ( int i = 0; i < 4; i++ ) {
+		s->zdstdata[i] = zdstdata[i]; s->eobxhigh[i] = eobxhigh[i];
+		s->eobyhigh[i] = eobyhigh[i]; s->zdstxlow[i] = zdstxlow[i];
+		s->zdstylow[i] = zdstylow[i];
+		for ( int j = 0; j < 64; j++ ) s->colldata[i][j] = colldata[i][j];
+		s->freqscan[i] = freqscan[i];
+		memcpy( s->zsrtscan[i], zsrtscan[i], 64 );
+		s->nois_trs_v[i] = nois_trs[i]; s->segm_cnt_v[i] = segm_cnt[i];
+	}
+	memcpy( s->cmpnfo_arr, cmpnfo, sizeof(cmpnfo) );
+	s->cmpc_v = cmpc; s->imgwidth_v = imgwidth; s->imgheight_v = imgheight;
+	s->sfhm_v = sfhm; s->sfvm_v = sfvm;
+	s->mcuc_v = mcuc; s->mcuh_v = mcuh; s->mcuv_v = mcuv;
+	s->auto_set_v = auto_set;
+	s->idct_8x8 = std::make_shared<std::vector<int>>(
+		&adpt_idct_8x8[0][0], &adpt_idct_8x8[0][0] + 4*64*64);
+	s->idct_1x8 = std::make_shared<std::vector<int>>(
+		&adpt_idct_1x8[0][0], &adpt_idct_1x8[0][0] + 4*64);
+	s->idct_8x1 = std::make_shared<std::vector<int>>(
+		&adpt_idct_8x1[0][0], &adpt_idct_8x1[0][0] + 4*64);
+	return [s]() {
+		for ( int i = 0; i < 4; i++ ) {
+			zdstdata[i] = s->zdstdata[i]; eobxhigh[i] = s->eobxhigh[i];
+			eobyhigh[i] = s->eobyhigh[i]; zdstxlow[i] = s->zdstxlow[i];
+			zdstylow[i] = s->zdstylow[i];
+			for ( int j = 0; j < 64; j++ ) colldata[i][j] = s->colldata[i][j];
+			freqscan[i] = s->freqscan[i];
+			memcpy( zsrtscan[i], s->zsrtscan[i], 64 );
+			nois_trs[i] = s->nois_trs_v[i]; segm_cnt[i] = s->segm_cnt_v[i];
+		}
+		memcpy( cmpnfo, s->cmpnfo_arr, sizeof(cmpnfo) );
+		cmpc = s->cmpc_v; imgwidth = s->imgwidth_v; imgheight = s->imgheight_v;
+		sfhm = s->sfhm_v; sfvm = s->sfvm_v;
+		mcuc = s->mcuc_v; mcuh = s->mcuh_v; mcuv = s->mcuv_v;
+		auto_set = s->auto_set_v;
+		memcpy( &adpt_idct_8x8[0][0], s->idct_8x8->data(), s->idct_8x8->size()*sizeof(int) );
+		memcpy( &adpt_idct_1x8[0][0], s->idct_1x8->data(), s->idct_1x8->size()*sizeof(int) );
+		memcpy( &adpt_idct_8x1[0][0], s->idct_8x1->data(), s->idct_8x1->size()*sizeof(int) );
+	};
+}
+
+// Run fn(cmp) for each component in parallel when sfth_mode is active.
+// Each worker calls init_tls() first to restore THREAD_LOCAL image state.
+// Falls back to sequential when sfth_mode is off or cmpc==1.
+static bool par_pre_pack( int n, std::function<bool(int)> fn )
+{
+	if ( !sfth_mode || n <= 1 ) {
+		for ( int c = 0; c < n; c++ ) if ( !fn(c) ) return false;
+		return true;
+	}
+	auto init = make_tls_init();
+	std::vector<std::future<bool>> futs;
+	futs.reserve(n);
+	for ( int c = 0; c < n; c++ )
+		futs.push_back( std::async( std::launch::async, [&,c]() -> bool {
+			init();
+			return fn(c);
+		}));
+	bool ok = true;
+	for ( auto& f : futs ) if ( !f.get() ) ok = false;
+	return ok;
+}
+// ─────────────────────────────────────────────────────────────────────────────
 #if !defined( BUILD_LIB )
 THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 #endif
@@ -807,7 +906,7 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 29;
+INTERN const unsigned char appversion = 30;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
@@ -1550,6 +1649,14 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-o" ) == 0 ) {
 			overwrite = true;
 		}
+		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
+			sfth_mode = true;
+			// Warn if fewer than 3 cores are available
+			int cores = (int) std::thread::hardware_concurrency();
+			if ( cores > 0 && cores < 3 ) {
+				fprintf( msgout, "\nWarning: -sfth works best with 3+ cores (detected: %i)\n\n", cores );
+			}
+		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
@@ -1635,6 +1742,13 @@ INTERN void initialize_options( int argc, char** argv )
 			msgout = stderr;
 			// use "-" as placeholder for stdin
 			*(tmp_flp++) = (char*) "-";
+		}
+		else if ( (*argv)[0] == '-' ) {
+			// Starts with '-' but matched no known flag — likely a typo.
+			// Reject early to avoid treating it as a filename.
+			fprintf( stderr, "\nError: unknown option '%s'\n", *argv );
+			fprintf( stderr, "Run without arguments to see usage.\n\n" );
+			return;
 		}
 		else {
 			// if argument is not switch, it's a filename, wildcard, or directory
@@ -2057,6 +2171,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
+	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
@@ -2393,6 +2508,11 @@ INTERN bool check_file( void )
 				str_out = std::make_unique<StreamWriter>();
 			} else if ( dry_run ) {
 				str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
+			} else if ( decompress_only ) {
+				// Skip silently — symmetric with 'a' skipping .pjg files
+				filetype = F_UNK;
+				errorlevel = 0;
+				return false;
 			} else {
 				str_out = std::make_unique<FileWriter>(std::string(pjgfilename));
 			}
@@ -2414,13 +2534,6 @@ INTERN bool check_file( void )
 			segm_cnt[ 2 ] = orig_set[ 6 ];
 			segm_cnt[ 3 ] = orig_set[ 7 ];
 			auto_set = false;
-		}
-		// skip if -x (decompress only) was requested
-		if ( decompress_only ) {
-			filetype = F_UNK;
-			snprintf( errormessage, MSG_SIZE, "skipped (compress-only mode)" );
-			errorlevel = 1; // warning, not fatal
-			return false;
 		}
 	}
 	else if ( ( fileid[0] == pjg_magic[0] ) && ( fileid[1] == pjg_magic[1] ) ) {
@@ -2445,16 +2558,14 @@ INTERN bool check_file( void )
             // no output file for -list
         } else if ( dry_run ) {
             str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
+        } else if ( compress_only ) {
+            // Skip silently — symmetric with 'x' skipping .jpg files
+            filetype = F_UNK;
+            errorlevel = 0;
+            return false;
         } else {
             str_out = std::make_unique<FileWriter>(std::string(jpgfilename));
         }
-		// skip if -c (compress only) was requested
-		if ( compress_only ) {
-			filetype = F_UNK;
-			snprintf( errormessage, MSG_SIZE, "skipped (decompress-only mode)" );
-			errorlevel = 1; // warning, not fatal
-			return false;
-		}
 		// PJG specific settings - auto unless specified otherwise
 		auto_set = true;
 	}
@@ -3655,30 +3766,21 @@ INTERN bool recode_jpeg( void )
 	
 INTERN bool adapt_icos( void )
 {
-	unsigned short quant[ 64 ]; // local copy of quantization
-	int ipos;
-	int cmp;
-	
-	
-	for ( cmp = 0; cmp < cmpc; cmp++ ) {
-		// make a local copy of the quantization values, check
-		for ( ipos = 0; ipos < 64; ipos++ ) {
+	// NOTE: adpt_idct_* are TLS-stored arrays (not heap pointers), so worker
+	// thread writes would be lost. Keep sequential so results stay in main TLS.
+	unsigned short quant[ 64 ];
+	for ( int cmp = 0; cmp < cmpc; cmp++ ) {
+		for ( int ipos = 0; ipos < 64; ipos++ ) {
 			quant[ ipos ] = QUANT( cmp, zigzag[ ipos ] );
-			if ( quant[ ipos ] >= 2048 ) // if this is true, it can be safely assumed (for 8 bit JPEG), that all coefficients are zero
-				quant[ ipos ] = 0;
+			if ( quant[ ipos ] >= 2048 ) quant[ ipos ] = 0;
 		}
-		// adapt idct 8x8 table
-		for ( ipos = 0; ipos < 64 * 64; ipos++ )
+		for ( int ipos = 0; ipos < 64 * 64; ipos++ )
 			adpt_idct_8x8[ cmp ][ ipos ] = icos_idct_8x8[ ipos ] * quant[ ipos % 64 ];
-		// adapt idct 1x8 table
-		for ( ipos = 0; ipos < 8 * 8; ipos++ )
+		for ( int ipos = 0; ipos < 8 * 8; ipos++ )
 			adpt_idct_1x8[ cmp ][ ipos ] = icos_idct_1x8[ ipos ] * quant[ ( ipos % 8 ) * 8 ];
-		// adapt idct 8x1 table
-		for ( ipos = 0; ipos < 8 * 8; ipos++ )
+		for ( int ipos = 0; ipos < 8 * 8; ipos++ )
 			adpt_idct_8x1[ cmp ][ ipos ] = icos_idct_1x8[ ipos ] * quant[ ipos % 8 ];
 	}
-	
-	
 	return true;
 }
 
@@ -3689,34 +3791,25 @@ INTERN bool adapt_icos( void )
 
 INTERN bool predict_dc( void )
 {
-	signed short* coef;
-	int absmaxp;
-	int absmaxn;
-	int corr_f;
-	int cmp, dpos;	
-	
-	
-	// apply prediction, store prediction error instead of DC
-	for ( cmp = 0; cmp < cmpc; cmp++ ) {
-		absmaxp = MAX_V( cmp, 0 );
-		absmaxn = -absmaxp;
-		corr_f = ( ( 2 * absmaxp ) + 1 );
-		
-		for ( dpos = cmpnfo[cmp].bc - 1; dpos > 0; dpos-- )	{
-			coef = &(colldata[cmp][0][dpos]);
+	// -sfth: each cmp writes only to colldata[cmp][0] — no cross deps.
+	// make_tls_init copies adpt_idct tables needed by dc_1ddct_predictor.
+	int n = cmpc;
+	return par_pre_pack( n, []( int cmp ) -> bool {
+		int absmaxp = MAX_V( cmp, 0 );
+		int absmaxn = -absmaxp;
+		int corr_f  = ( 2 * absmaxp ) + 1;
+		for ( int dpos = cmpnfo[cmp].bc - 1; dpos > 0; dpos-- ) {
+			signed short* coef = &(colldata[cmp][0][dpos]);
 			#if defined( USE_PLOCOI )
-			(*coef) -= dc_coll_predictor( cmp, dpos ); // loco-i predictor
+			(*coef) -= dc_coll_predictor( cmp, dpos );
 			#else
-			(*coef) -= dc_1ddct_predictor( cmp, dpos ); // 1d dct
+			(*coef) -= dc_1ddct_predictor( cmp, dpos );
 			#endif
-			
-			// fix range
-			if ( (*coef) > absmaxp ) (*coef) -= corr_f;
+			if      ( (*coef) > absmaxp ) (*coef) -= corr_f;
 			else if ( (*coef) < absmaxn ) (*coef) += corr_f;
 		}
-	}
-	
-	return true;
+		return true;
+	} );
 }
 
 
@@ -3792,37 +3885,26 @@ INTERN bool check_value_range( void )
 	
 INTERN bool calc_zdst_lists( void )
 {
-	int cmp, bpos, dpos;
-	int b_x, b_y;
-	
-	
-	// this functions counts, for each DCT block, the number of non-zero coefficients
-	for ( cmp = 0; cmp < cmpc; cmp++ )
-	{
-		// preset zdstlist
+	// -sfth: each cmp writes only its own zdst arrays — no cross deps.
+	int n = cmpc;
+	return par_pre_pack( n, []( int cmp ) -> bool {
 		memset( zdstdata[cmp], 0, cmpnfo[cmp].bc * sizeof( char ) );
-		
-		// calculate # on non-zeroes per block (separately for lower 7x7 block & first row/collumn)
-		for ( bpos = 1; bpos < 64; bpos++ ) {
-			b_x = unzigzag[ bpos ] % 8;
-			b_y = unzigzag[ bpos ] / 8;
+		for ( int bpos = 1; bpos < 64; bpos++ ) {
+			int b_x = unzigzag[ bpos ] % 8;
+			int b_y = unzigzag[ bpos ] / 8;
 			if ( b_x == 0 ) {
-				for ( dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
+				for ( int dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
 					if ( colldata[cmp][bpos][dpos] != 0 ) zdstylow[cmp][dpos]++;
-			}
-			else if ( b_y == 0 ) {
-				for ( dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
+			} else if ( b_y == 0 ) {
+				for ( int dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
 					if ( colldata[cmp][bpos][dpos] != 0 ) zdstxlow[cmp][dpos]++;
-			}
-			else {
-				for ( dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
+			} else {
+				for ( int dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
 					if ( colldata[cmp][bpos][dpos] != 0 ) zdstdata[cmp][dpos]++;
 			}
 		}
-	}
-	
-	
-	return true;
+		return true;
+	} );
 }
 
 
@@ -3850,6 +3932,92 @@ INTERN bool pack_pjg( void )
 		str_out->write( segm_cnt, 4 );
 	}
 	
+	// -sfth: parallel component encoding path (new format, faster, incompatible with stable)
+	if ( sfth_mode && cmpc > 1 ) {
+		// Write 0x01 marker BEFORE version so decoder loop processes it first
+		str_out->write_byte( 0x01 );
+		hcode = appversion; str_out->write_byte( hcode );
+
+		// Encode shared header into a bounded MemoryWriter, prefix its size.
+		// The decoder reads exactly this many bytes keeping stream aligned.
+		{
+			MemoryWriter hdr_mw;
+			{
+				ArithmeticEncoder enc( hdr_mw );
+				if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
+				if ( !pjg_optimize_header() ) return false;
+				if ( padbit == -1 ) padbit = 1;
+				if ( !pjg_encode_generic( &enc, hdrdata, hdrs ) ) return false;
+				if ( !pjg_encode_bit( &enc, padbit ) ) return false;
+				if ( !pjg_encode_bit( &enc, (rst_err == NULL) ? 0 : 1 ) ) return false;
+				if ( rst_err != NULL )
+					if ( !pjg_encode_generic( &enc, rst_err, scnc ) ) return false;
+			} // enc finalizes here
+			uint32_t hsz = (uint32_t) hdr_mw.num_bytes_written();
+			uint8_t hle[4] = { (uint8_t)hsz, (uint8_t)(hsz>>8), (uint8_t)(hsz>>16), (uint8_t)(hsz>>24) };
+			str_out->write( hle, 4 );
+			str_out->write( hdr_mw.get_data() );
+		}
+
+		// Encode each component into its own MemoryWriter in parallel.
+		// make_tls_init() snapshots TLS so each worker sees the current file's data.
+		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
+		std::vector<std::string> cmp_errs( cmpc );
+		std::atomic<bool> any_err{ false };
+		auto tls = make_tls_init();
+		std::vector<std::future<void>> futs;
+		futs.reserve( cmpc );
+		for ( int c = 0; c < cmpc; c++ ) {
+			futs.push_back( std::async( std::launch::async, [&, c]() {
+				tls();
+				MemoryWriter mw;
+				{
+					ArithmeticEncoder enc( mw );
+					bool ok =
+						pjg_encode_zstscan  ( &enc, c ) &&
+						pjg_encode_zdst_high( &enc, c ) &&
+						pjg_encode_ac_high  ( &enc, c ) &&
+						pjg_encode_zdst_low ( &enc, c ) &&
+						pjg_encode_ac_low   ( &enc, c ) &&
+						pjg_encode_dc       ( &enc, c );
+					if ( !ok ) { cmp_errs[c] = errormessage; any_err.store(true); return; }
+				} // enc finalizes here
+				cmp_bufs[c] = mw.get_data();
+			} ) );
+		}
+		for ( auto& f : futs ) f.get();
+		if ( any_err.load() ) {
+			for ( int c = 0; c < cmpc; c++ )
+				if ( !cmp_errs[c].empty() ) {
+					strncpy( errormessage, cmp_errs[c].c_str(), MSG_SIZE-1 );
+					errormessage[MSG_SIZE-1] = '\0'; break;
+				}
+			errorlevel = 2; return false;
+		}
+		// Write component count + per-component sizes + streams
+		str_out->write_byte( (uint8_t) cmpc );
+		for ( int c = 0; c < cmpc; c++ ) {
+			uint32_t sz = (uint32_t) cmp_bufs[c].size();
+			uint8_t le[4] = { (uint8_t)sz, (uint8_t)(sz>>8), (uint8_t)(sz>>16), (uint8_t)(sz>>24) };
+			str_out->write( le, 4 );
+		}
+		for ( int c = 0; c < cmpc; c++ ) str_out->write( cmp_bufs[c] );
+		// Garbage (sequential, after component streams)
+		{
+			ArithmeticEncoder enc( *str_out );
+			bool ok = pjg_encode_bit( &enc, (grbs > 0) ? 1 : 0 ) &&
+			          ( grbs == 0 || pjg_encode_generic( &enc, grbgdata, grbs ) );
+			if ( !ok ) return false;
+		}
+		if ( str_out->error() ) {
+			snprintf( errormessage, MSG_SIZE, "write error, possibly drive is full" );
+			errorlevel = 2; return false;
+		}
+		pjgfilesize = str_out->num_bytes_written();
+		return true;
+	}
+
+	// ── Sequential path (default, compatible with stable) ───────────────────────
 	// store version number
 	hcode = appversion;
 	str_out->write_byte(hcode);
@@ -3962,6 +4130,7 @@ INTERN bool unpack_pjg( void )
 	unsigned char hcode;
 	unsigned char cb;
 	int cmp;
+	bool parallel_fmt = false; // set when 0x01 sfth marker seen
 	
 	
 	// check header codes ( maybe position in other function ? )
@@ -3972,6 +4141,10 @@ INTERN bool unpack_pjg( void )
 			str_in->read( nois_trs, 4 );
 			str_in->read( segm_cnt, 4 );
 			auto_set = false;
+		}
+		else if ( hcode == 0x01 ) {
+			// -sfth parallel format: component streams stored independently
+			parallel_fmt = true;
 		}
 		else if ( hcode >= 0x14 ) {
 			// compare version number
@@ -3991,55 +4164,91 @@ INTERN bool unpack_pjg( void )
 	}
 	
 	
-	// init arithmetic compression
-	auto decoder = new ArithmeticDecoder(*str_in);
-	
-	// decode JPG header
-	if ( !pjg_decode_generic( decoder, &hdrdata, &hdrs ) ) return false;
-	// retrieve padbit from stream
-	if (!pjg_decode_bit(decoder, &cb)) {
-		return false;
+	if ( parallel_fmt ) {
+		// -sfth format: bounded header blob + parallel component streams
+		uint8_t hle[4] = {}; str_in->read( hle, 4 );
+		uint32_t hsz = (uint32_t)hle[0] | ((uint32_t)hle[1]<<8) |
+		               ((uint32_t)hle[2]<<16) | ((uint32_t)hle[3]<<24);
+		std::vector<uint8_t> hblob( hsz ); str_in->read( hblob.data(), hsz );
+		{
+			MemoryReader hmr( hblob ); ArithmeticDecoder hdec( hmr );
+			if ( !pjg_decode_generic( &hdec, &hdrdata, &hdrs ) ) return false;
+			if ( !pjg_decode_bit( &hdec, &cb ) ) return false;
+		padbit = cb;
+			if ( !pjg_decode_bit( &hdec, &cb ) ) return false;
+			if ( cb == 1 ) if ( !pjg_decode_generic( &hdec, &rst_err, NULL ) ) return false;
+			if ( !pjg_unoptimize_header() ) return false;
+			if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
+			if ( !jpg_setup_imginfo() ) return false;
+		} // hdec destroyed — stream aligned after hblob
+		uint8_t ncmps = 0; str_in->read_byte( &ncmps );
+		if ( (int)ncmps != cmpc ) {
+			snprintf( errormessage, MSG_SIZE, "sfth cmp count mismatch (%i vs %i)", (int)ncmps, cmpc );
+			errorlevel = 2; return false;
+		}
+		std::vector<uint32_t> csizes( cmpc );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			uint8_t le[4] = {}; str_in->read( le, 4 );
+			csizes[cmp] = (uint32_t)le[0]|((uint32_t)le[1]<<8)|((uint32_t)le[2]<<16)|((uint32_t)le[3]<<24);
+		}
+		std::vector<std::vector<uint8_t>> cbufs( cmpc );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
+		}
+		// Decode components in parallel
+		std::vector<std::string> cmp_errs( cmpc );
+		std::atomic<bool> any_err{ false };
+		auto tls = make_tls_init();
+		std::vector<std::future<void>> futs; futs.reserve( cmpc );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			futs.push_back( std::async( std::launch::async, [&, cmp]() {
+				tls();
+				MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
+				bool ok =
+					pjg_decode_zstscan  ( &dec, cmp ) && pjg_decode_zdst_high( &dec, cmp ) &&
+					pjg_decode_ac_high  ( &dec, cmp ) && pjg_decode_zdst_low ( &dec, cmp ) &&
+					pjg_decode_ac_low   ( &dec, cmp ) && pjg_decode_dc       ( &dec, cmp );
+				if ( !ok ) { cmp_errs[cmp] = errormessage; any_err.store(true); }
+			} ) );
+		}
+		for ( auto& f : futs ) f.get();
+		if ( any_err.load() ) {
+			for ( int c = 0; c < cmpc; c++ )
+				if ( !cmp_errs[c].empty() ) {
+					strncpy( errormessage, cmp_errs[c].c_str(), MSG_SIZE-1 );
+					errormessage[MSG_SIZE-1] = '\0'; break;
+				}
+			errorlevel = 2; return false;
+		}
+		// Garbage
+		ArithmeticDecoder gdec( *str_in );
+		if ( !pjg_decode_bit( &gdec, &cb ) ) return false;
+		if ( cb == 0 ) grbs = 0;
+		else if ( !pjg_decode_generic( &gdec, &grbgdata, &grbs ) ) return false;
+	} else {
+		// ── Sequential path (default) ──────────────────────────────────────────
+		auto decoder = new ArithmeticDecoder(*str_in);
+		if ( !pjg_decode_generic( decoder, &hdrdata, &hdrs ) ) { delete decoder; return false; }
+		if ( !pjg_decode_bit(decoder, &cb) ) { delete decoder; return false; }
+		padbit = cb;
+		if ( !pjg_decode_bit( decoder, &cb ) ) { delete decoder; return false; }
+		if ( cb == 1 ) if ( !pjg_decode_generic( decoder, &rst_err, NULL ) ) { delete decoder; return false; }
+		if ( !pjg_unoptimize_header() ) { delete decoder; return false; }
+		if ( disc_meta ) if ( !jpg_rebuild_header() ) { delete decoder; return false; }
+		if ( !jpg_setup_imginfo() ) { delete decoder; return false; }
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			if ( !pjg_decode_zstscan  ( decoder, cmp ) ) { delete decoder; return false; }
+			if ( !pjg_decode_zdst_high( decoder, cmp ) ) { delete decoder; return false; }
+			if ( !pjg_decode_ac_high  ( decoder, cmp ) ) { delete decoder; return false; }
+			if ( !pjg_decode_zdst_low ( decoder, cmp ) ) { delete decoder; return false; }
+			if ( !pjg_decode_ac_low   ( decoder, cmp ) ) { delete decoder; return false; }
+			if ( !pjg_decode_dc       ( decoder, cmp ) ) { delete decoder; return false; }
+		}
+		if ( !pjg_decode_bit( decoder, &cb ) ) { delete decoder; return false; }
+		if ( cb == 0 ) grbs = 0;
+		else if ( !pjg_decode_generic( decoder, &grbgdata, &grbs ) ) { delete decoder; return false; }
+		delete decoder;
 	}
-	padbit = cb;
-	// decode one bit that signals false /correct use of RST markers
-	if ( !pjg_decode_bit( decoder, &cb ) ) return false;
-	// decode # of false set RST markers per scan only if available
-	if ( cb == 1 )
-		if ( !pjg_decode_generic( decoder, &rst_err, NULL ) ) return false;
-	
-	// undo header optimizations
-	if ( !pjg_unoptimize_header() )	return false;	
-	// discard meta information from header if option set
-	if ( disc_meta )
-		if ( !jpg_rebuild_header() ) return false;
-	// parse header for image-info
-	if ( !jpg_setup_imginfo() ) return false;
-	
-	// decode actual components data
-	for ( cmp = 0; cmp < cmpc; cmp++ ) {		
-		// decode frequency scan ('zero-sort-scan')
-		if ( !pjg_decode_zstscan( decoder, cmp ) ) return false;		
-		// decode zero-distribution-lists for higher (7x7) ACs
-		if ( !pjg_decode_zdst_high( decoder, cmp ) ) return false;
-		// decode coefficients for higher (7x7) ACs
-		if ( !pjg_decode_ac_high( decoder, cmp ) ) return false;
-		// decode zero-distribution-lists for lower ACs
-		if ( !pjg_decode_zdst_low( decoder, cmp ) ) return false;
-		// decode coefficients for first row / collumn ACs
-		if ( !pjg_decode_ac_low( decoder, cmp ) ) return false;	
-		// decode coefficients for DC
-		if ( !pjg_decode_dc( decoder, cmp ) ) return false;	
-	}
-	
-	// retrieve checkbit for garbage (0 if no garbage, 1 if garbage has to be coded)
-	if ( !pjg_decode_bit( decoder, &cb ) ) return false;
-	
-	// decode garbage data only if available
-	if ( cb == 0 ) grbs = 0;
-	else if ( !pjg_decode_generic( decoder, &grbgdata, &grbs ) ) return false;
-	
-	// finalize arithmetic compression
-	delete( decoder );
 	
 	
 	// get filesize

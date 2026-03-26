@@ -400,6 +400,20 @@ v2.9 (03/25/2026) (public)
  - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
+v3.0 (03/25/2026) (public - non build)
+ - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
+   ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
+   generates new .pjg format (0x01 marker); requires v3.0+ to decompress
+   both encode and decode are parallelized
+ - warning shown when -sfth is used with fewer than 3 detected threads
+ - optimal batch+single-file usage: -th<N/3> -sfth on an N-thread machine
+ - fixed: [a] mode no longer creates empty .pjg files for skipped JPEGs
+ - fixed: [x] mode no longer creates empty .jpg files for skipped PJGs
+ - fixed: skipped files in a/x mode are now silent (no warning printed)
+ - fixed: unrecognized flags (e.g. -th=) now print a clear error message
+   instead of being silently treated as filenames
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
 
 Acknowledgements
 ~~~~~~~~~~~~~~~~
