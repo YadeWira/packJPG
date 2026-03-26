@@ -400,7 +400,7 @@ v2.9 (03/25/2026) (public)
  - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
-v3.0 test 1 (03/25/2026) (public - non build)
+v3.0 test 4 (03/25/2026) (public - non build)
  - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
    ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
    generates new .pjg format (0x01 marker); requires v3.0+ to decompress
@@ -412,10 +412,14 @@ v3.0 test 1 (03/25/2026) (public - non build)
  - fixed: skipped files in a/x mode are now silent (no warning printed)
  - fixed: unrecognized flags (e.g. -th=) now print a clear error message
    instead of being silently treated as filenames
- - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
-
-v3.0 test 2 (03/25/2026) (public - non build)
- - the thread limit in the 32-bit binary has been removed
+ - fixed: jpgfilesize/pjgfilesize changed from int to int64_t — prevents
+   0.00% ratio reporting on large files (>2GB) and on 32-bit builds
+ - fixed: -th0 on x86 now caps at 4 threads to prevent OOM; x64/Linux
+   still uses all available cores (reverted the previous uncapped change)
+ - fixed: progress counter now shows only processable files (e.g. "2 of 2"
+   instead of "5 of 5" when 3 of the 5 files are skipped)
+ - fixed: verbose mode (-v1/-v2) no longer prints header lines for skipped
+   files — only processed files appear in the output
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 
