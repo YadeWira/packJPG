@@ -1860,6 +1860,11 @@ INTERN void initialize_options( int argc, char** argv )
 	for ( file_cnt = 0; filelist[ file_cnt ] != NULL; file_cnt++ );
 
 	// pre-scan to count processable files (JPG/PJG) for accurate progress display
+	// skipped for single-file invocations — no overhead worth optimizing away
+	if ( file_cnt == 1 ) {
+		file_proc_cnt = 1;
+		file_proc_no  = 0; // will become 1 after first non-UNK file processed
+	} else {
 	file_proc_cnt = 0;
 	for ( int fi = 0; fi < file_cnt; fi++ ) {
 		if ( filelist[fi] == NULL ) continue;
@@ -1878,6 +1883,7 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 	}
 	if ( file_proc_cnt == 0 ) file_proc_cnt = file_cnt; // fallback
+	} // end else (file_cnt > 1)
 
 	// alloc arrays for error messages and types storage
 	err_list = (char**) calloc( file_cnt, sizeof( char* ) );
@@ -1961,11 +1967,24 @@ INTERN void process_ui( void )
 			// -list: print filename as header, details follow from list_pjg
 			fprintf( msgout, "\n%s\n", filelist[ file_no ] );
 		} else if ( !use_buf ) {
-			// single-thread: print header before processing
-			fprintf( msgout, "\nProcessing file %i of %i \"%s\" -> ",
-					file_no + 1, file_cnt, filelist[ file_no ] );
+			// single-thread verbose: check file first, then print header only if processable
+			execute( check_file );
+			if ( filetype == F_UNK ) return; // skip silently, no output
 			if ( local_verbosity > 1 )
 				fprintf( msgout, "\n----------------------------------------" );
+			// get action message now that filetype is known
+			switch ( action ) {
+				case A_COMPRESS: actionmsg = ( filetype == F_JPG ) ? "Compressing" : "Decompressing"; break;
+				case A_LIST:     actionmsg = "Listing"; break;
+				default:         actionmsg = "Processing"; break;
+			}
+			fprintf( msgout, "\nProcessing file %i of %i \"%s\" -> %s -> ",
+					file_proc_no + 1, file_proc_cnt,
+					filelist[ file_no ], actionmsg );
+			if ( local_verbosity > 1 )
+				fprintf( msgout, "\n" );
+			// actionmsg already set, skip the second fprintf below
+			goto after_check;
 		}
 
 		// check input file and determine filetype
@@ -1987,6 +2006,7 @@ INTERN void process_ui( void )
 		
 		if ( !use_buf && local_verbosity < 2 && action != A_LIST )
 			fprintf( msgout, "%s -> ", actionmsg );
+		after_check:;
 	}
 	else { // progress bar UI
 		// update progress message
@@ -2089,7 +2109,7 @@ INTERN void process_ui( void )
 		// if this is the last file, update progress bar one last time
 		if ( file_no + 1 == file_cnt ) {
 			// update progress message
-			UIPRINTF( "Processed %2i of %2i files ", file_proc_no, file_proc_cnt );
+			UIPRINTF( "Processed %2i of %2i files ", file_proc_no > 0 ? file_proc_no : file_proc_cnt, file_proc_cnt );
 			progress_bar( 1, 1 );
 			UIPRINTF( "\r" );
 		}	
