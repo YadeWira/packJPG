@@ -1,5 +1,5 @@
-packJPG v2.9 (03/23/2026)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+packJPG v3.0 test 5 (03/27/2026)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical
@@ -32,6 +32,7 @@ permissions will only be given where necessary on a case by case basis.
 This offer is aimed mainly at closed source freeware developers seeking 
 to add PJG support to their software projects. 
 
+Copyright 2006...2014 by HTW Aalen University and Matthias Stirner.
 Copyright 2006...2026 by Yade Bravo & Matthias Stirner.
 
 
@@ -61,8 +62,8 @@ On Windows, wildcard expansion is handled internally by packJPG since
 cmd.exe does not expand wildcards automatically. Filenames with accented
 or special characters are fully supported on Windows 7 and later.
 
-When a directory is passed as an argument, packJPG automatically
-processes it recursively.
+Directories in the file list are silently ignored unless -r is given.
+To recurse into subdirectories, pass the -r flag explicitly.
 
 If "-" is used as a filename, input is read from stdin and output is
 written to stdout. This can be useful if jpegtran is used as a
@@ -74,7 +75,7 @@ Usage examples:
  "packJPG a lena.jpg"
  "packJPG a kodim??.jpg"
  "packJPG x *.pjg"
- "packJPG x archive/"
+ "packJPG x -r archive/"
  "packJPG mix *.*"
  "packJPG list *.pjg"
  "packJPG - < sail.pjg > sail.jpg"
@@ -117,7 +118,7 @@ list -- list PJG info
 
   Output example:
     photos/lena.pjg
-      version : v2.9
+      version : v3.0
       packed  : 288.1 KB
 
 
@@ -130,6 +131,7 @@ Command line switches
  -o        overwrite existing files
  -od<path> write output files to directory <path> (created if needed)
  -th<n>    number of worker threads; 0 = auto-detect (default: 1)
+ -sfth     parallel single-file compression using 3 threads (Y/Cb/Cr)
  -r        recurse into subdirectories
  -dry      dry run: simulate without writing output files
  -module   machine-friendly output: OK/ERROR + elapsed seconds
@@ -168,7 +170,8 @@ Multi-threaded mode (-th)
 
 The "-th<n>" switch enables parallel batch processing using n worker
 threads. Use "-th0" to auto-detect the number of CPU cores (on x86
-builds the auto limit is 2; on x64 there is no cap).
+builds the auto limit is 2 to prevent out-of-memory errors with large
+images; on x64 there is no cap).
 
 In multi-threaded mode, verification is always enabled automatically:
 each file is compressed and immediately decompressed and compared
@@ -181,6 +184,77 @@ how many files were completed before the interrupt.
 
 Single-threaded mode (default, no -th flag) behaves exactly as in
 previous versions.
+
+
+Single-file parallel mode (-sfth)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Standard packJPG processes the components of a JPEG (Y, Cb, Cr)
+sequentially — one after another in a single thread. The -sfth switch
+changes this by encoding all three components simultaneously, each in
+its own thread. This is fundamentally different from -th, which
+parallelizes across files, not within a single file.
+
+To make the distinction clear:
+
+ -th<n>   : runs N files at the same time, each file uses 1 thread
+ -sfth    : runs 1 file at a time, but splits it into 3 parallel threads
+ -th<n> -sfth : runs N files at the same time, each using 3 threads
+
+This means -sfth is useful even when processing a single file, while
+-th only helps when processing multiple files in a batch.
+
+Benchmark on a single file (Intel Xeon E5-2697 v4):
+
+ without -sfth :  0.23 sec  1.81 MB/s  ratio 67.29%
+ with    -sfth :  0.16 sec  2.54 MB/s  ratio 67.30%
+
+The ratio difference (0.01%) comes from the fact that each component
+uses its own independent arithmetic coder context. This is the expected
+and documented behavior — files are still valid and fully lossless.
+
+Important notes:
+ - Files compressed with -sfth use a new PJG format (0x01 marker).
+   They require packJPG v3.0 or later to decompress. Attempting to
+   decompress them with v2.x will produce a clean error message.
+ - Files compressed without -sfth remain fully compatible with v2.x.
+ - A warning is shown if -sfth is used with fewer than 3 detected cores.
+
+Optimal usage for machines with N threads:
+
+ "packJPG a -th<N/3> -sfth -o -np *.jpg"
+
+This fills all N cores: N/3 files in parallel, each using 3 threads.
+Example on an 18-core machine: -th6 -sfth = 6 x 3 = 18 threads.
+
+For single-file compression: -sfth alone is sufficient.
+For batch-only parallelism without intra-file: use -th<n> without -sfth.
+
+
+FreeArc integration
+~~~~~~~~~~~~~~~~~~~
+
+packJPG can be used as an external compressor in FreeArc, acting as a
+JPEG preprocessor before FreeArc applies its own compression on top.
+Since FreeArc processes one file at a time in this mode, -sfth is the
+right flag to use here — -th would have no effect.
+
+Add the following to your arc.ini:
+
+  [External compressor:jpg]
+  packcmd   = packjpg a -sfth -module -np -o $$arcdatafile$$.jpg
+  unpackcmd = packjpg x -sfth -module -np -o $$arcdatafile$$.pjg
+  datafile   = $$arcdatafile$$.jpg
+  packedfile = $$arcdatafile$$.pjg
+  solid = 0
+
+Then use it when creating an archive:
+
+  arc a -m"jpg" archive.arc *.jpg
+
+FreeArc will convert each JPEG to PJG before storing it, and
+automatically convert back when extracting. The -module flag ensures
+FreeArc can parse the result (OK/ERROR + elapsed seconds per file).
 
 
 Dry run mode (-dry)
@@ -211,10 +285,29 @@ Known Limitations
 packJPG is a compression program for JPEG files only. Other file types
 are silently skipped.
 
-packJPG has low error tolerance. JPEG files might not work with packJPG 
-even if they work perfectly with other image processing software. The 
-command line switch "-p" can be used to increase error tolerance and 
-compatibility.
+packJPG has low error tolerance. JPEG files might not work with packJPG
+even if they work perfectly with other image processing software. This
+happens because packJPG needs to understand the internal structure of a
+JPEG deeply enough to re-compress the DCT coefficients — it is more
+strict than a regular image viewer that just renders the pixels.
+
+Common causes of warnings or errors that -p can work around:
+
+ - Inefficient Huffman coding: some encoders generate Huffman tables
+   where the last AC coefficient in a block is zero. Technically valid,
+   but packJPG cannot reconstruct it bit-for-bit without -p.
+ - Incorrect RST markers: restart markers inserted at wrong positions
+   or with wrong counters. Other decoders ignore them; packJPG counts
+   and validates them.
+ - Inconsistent padding bits: bits used to fill the last byte of a
+   Huffman scan. The spec requires 1-bits; some encoders write 0-bits.
+ - Garbage data after EOI: some files have extra bytes after the end-
+   of-image marker. packJPG preserves them but may warn on edge cases.
+
+With -p, packJPG accepts all these cases and compresses them anyway.
+The reconstructed image will be visually identical but may not be
+bit-for-bit equal to the original. For this reason, -p should never
+be combined with -ver.
 
 If you try to drag and drop too many files at once on Windows, there
 might be a windowed error message about missing privileges. In that
@@ -224,7 +317,14 @@ Compressed PJG files are not compatible between different packJPG
 versions. You will get an error message if you try to decompress PJG 
 files with a different version than the one used for compression. You 
 may download older versions of packJPG from:
-http://www.elektronik.htw-aalen.de/packJPG/binaries/old/
+https://github.com/packjpg/packJPG
+
+On 32-bit Windows builds (x86), the ratio and speed summary may display
+as 0.00% and 0.00 MB/s. This is a display-only cosmetic issue — the
+compressed files are valid and can be decompressed normally. It affects
+the statistics output only and is caused by integer size limitations in
+32-bit builds. Use -th2 maximum on 32-bit to avoid out-of-memory errors
+with large images.
 
 
 Open source release / developer info
@@ -400,7 +500,7 @@ v2.9 (03/25/2026) (public)
  - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
-v3.0 test 4 (03/25/2026) (public - non build)
+v3.0 test 5 (03/27/2026) (public - non build)
  - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
    ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
    generates new .pjg format (0x01 marker); requires v3.0+ to decompress
@@ -415,11 +515,15 @@ v3.0 test 4 (03/25/2026) (public - non build)
  - fixed: jpgfilesize/pjgfilesize changed from int to int64_t — prevents
    0.00% ratio reporting on large files (>2GB) and on 32-bit builds
  - fixed: -th0 on x86 now caps at 2 threads to prevent OOM; x64/Linux
-   still uses all available cores (reverted the previous uncapped change)
+   still uses all available cores
  - fixed: progress counter now shows only processable files (e.g. "2 of 2"
    instead of "5 of 5" when 3 of the 5 files are skipped)
  - fixed: verbose mode (-v1/-v2) no longer prints header lines for skipped
    files — only processed files appear in the output
+ - fixed: skipped files (wrong type) no longer print warnings in MT mode
+   (-th2 or higher)
+ - fixed: directories from wildcard expansion are now silently ignored;
+   use -r explicitly to recurse into subdirectories
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 

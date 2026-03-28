@@ -282,6 +282,9 @@ v3.0 test 4 (03/25/2026) (public - non build)
    instead of "5 of 5" when 3 of the 5 files are skipped)
  - fixed: verbose mode (-v1/-v2) no longer prints header lines for skipped
    files — only processed files appear in the output
+ - fixed: skipped files (wrong type) no longer print warnings in MT mode
+ - fixed: directories from wildcard expansion (e.g. * expanding PANA/) are
+   now silently ignored; use -r explicitly to recurse into subdirectories
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 v2.9 (03/23/2026) (public)
@@ -1811,20 +1814,16 @@ INTERN void initialize_options( int argc, char** argv )
 				}
 				// If no match found, skip silently (same behavior as Linux shell)
 			} else {
-				// If a directory is passed without wildcard, auto-enable recursive
-				{ std::error_code _ec;
-				  if ( std::filesystem::is_directory( safe_path(*argv), _ec ) )
-					recursive = true;
-				}
 				*(tmp_flp++) = *argv;
 			}
 			#else
-			// Linux: also auto-enable recursive for directory args
+			// Linux: add directories only when -r is active (for recursion);
+			// without -r, silently skip directories from wildcard expansion
 			{ std::error_code _ec;
-			  if ( std::filesystem::is_directory( safe_path(*argv), _ec ) )
-				recursive = true;
+			  bool is_dir = std::filesystem::is_directory( safe_path(*argv), _ec );
+			  if ( !is_dir || recursive )
+				*(tmp_flp++) = *argv;
 			}
-			*(tmp_flp++) = *argv;
 			#endif
 		}		
 	}
@@ -2089,8 +2088,8 @@ INTERN void process_ui( void )
 			case 2: errtypemsg = "fatal error"; break;
 		}
 		
-		// error/warning message — always shown, even in MT mode
-		if ( errorlevel > 0 ) {
+		// error/warning message — shown for real errors/warnings, not for silently skipped files
+		if ( errorlevel > 0 && filetype != F_UNK ) {
 			UIPRINTF( "\nProcessing file %i of %i \"%s\" -> %s -> %s:\n",
 				file_no + 1, file_cnt, filelist[ file_no ], actionmsg, errtypemsg );
 			UIPRINTF( " %s\n", errormessage );
