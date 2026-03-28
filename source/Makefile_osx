@@ -3,7 +3,7 @@
 # Working with Clang 5.1
 
 CC      = cc
-CPP     = c++
+CXX     = c++
 RC      = windres
 CFLAGS  = -I. -DUNIX -DDEV_BUILD -O3 -Wall -pedantic -funroll-loops -ffast-math -fomit-frame-pointer -std=c++14
 LDFLAGS = -lstdc++fs
@@ -13,10 +13,10 @@ RES     = icon.res
 BIN     = packjpg
 
 %.o: %.cpp $(DEPS)
-	$(CPP) -c -o $@ $< $(CFLAGS)
+	$(CXx) -c -o $@ $< $(CFLAGS)
 
 $(BIN): $(OBJ)
-	$(CPP) -o $@ $^ $(LDFLAGS)
+	$(CXX) -o $@ $^ $(LDFLAGS)
 
 clean:
 	$(RM) $(OBJ) $(BIN)
