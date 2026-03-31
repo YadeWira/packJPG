@@ -848,13 +848,119 @@ INTERN int  action = A_COMPRESS;// what to do with JPEG/PJG files
 THREAD_LOCAL unsigned char nois_trs[ 4 ] = {6,6,6,6}; // bit pattern noise threshold
 THREAD_LOCAL unsigned char segm_cnt[ 4 ] = {10,10,10,10}; // number of segments
 
-// ─── XP build: sfth not supported — sequential fallback ─────────────────────
-// par_pre_pack: always sequential in XP build (no std::async/std::future).
+// ─── XP build: sfth via Win32 CreateThread ──────────────────────────────────
+// par_pre_pack: runs fn(c) for each component in parallel when sfth_mode is on.
+
+struct XpParPackArgs {
+    int  cmp;
+    std::function<bool(int)>* fn;
+    int  failed;
+    char errmsg[MSG_SIZE];
+};
+
+static DWORD WINAPI xp_par_pack_worker( LPVOID arg )
+{
+    XpParPackArgs* a = (XpParPackArgs*) arg;
+    if ( !(*a->fn)( a->cmp ) ) {
+        a->failed = 1;
+        strncpy( a->errmsg, errormessage, MSG_SIZE - 1 );
+        a->errmsg[MSG_SIZE - 1] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
 static bool par_pre_pack( int n, std::function<bool(int)> fn )
 {
-    // XP build: always sequential — sfth not supported
-    for ( int c = 0; c < n; c++ ) if ( !fn(c) ) return false;
+    if ( !sfth_mode || n <= 1 ) {
+        for ( int c = 0; c < n; c++ ) if ( !fn(c) ) return false;
+        return true;
+    }
+    std::vector<XpParPackArgs> args( n );
+    std::vector<HANDLE>        threads( n, NULL );
+    for ( int c = 0; c < n; c++ ) {
+        args[c].cmp    = c;
+        args[c].fn     = &fn;
+        args[c].failed = 0;
+        args[c].errmsg[0] = '\0';
+        threads[c] = CreateThread( NULL, 0, xp_par_pack_worker, &args[c], 0, NULL );
+        if ( threads[c] == NULL ) {
+            // CreateThread failed — run in this thread
+            if ( !fn(c) ) {
+                args[c].failed = 1;
+                strncpy( args[c].errmsg, errormessage, MSG_SIZE - 1 );
+                args[c].errmsg[MSG_SIZE - 1] = '\0';
+            }
+        }
+    }
+    for ( int c = 0; c < n; c++ )
+        if ( threads[c] ) { WaitForSingleObject( threads[c], INFINITE ); CloseHandle( threads[c] ); }
+    for ( int c = 0; c < n; c++ ) {
+        if ( args[c].failed ) {
+            strncpy( errormessage, args[c].errmsg, MSG_SIZE - 1 );
+            errormessage[MSG_SIZE - 1] = '\0';
+            errorlevel = 2;
+            return false;
+        }
+    }
     return true;
+}
+
+// ─── Worker argument structs for sfth pack_pjg / unpack_pjg ─────────────────
+
+struct XpSfthEncArgs {
+    int  cmp;
+    std::vector<uint8_t>* buf;
+    std::string*          err;
+    int*                  failed;
+};
+
+static DWORD WINAPI xp_sfth_enc_worker( LPVOID arg )
+{
+    XpSfthEncArgs* a = (XpSfthEncArgs*) arg;
+    MemoryWriter mw;
+    {
+        ArithmeticEncoder enc( mw );
+        bool ok = pjg_encode_zstscan  ( &enc, a->cmp ) &&
+                  pjg_encode_zdst_high( &enc, a->cmp ) &&
+                  pjg_encode_ac_high  ( &enc, a->cmp ) &&
+                  pjg_encode_zdst_low ( &enc, a->cmp ) &&
+                  pjg_encode_ac_low   ( &enc, a->cmp ) &&
+                  pjg_encode_dc       ( &enc, a->cmp );
+        if ( !ok ) {
+            *(a->err)    = errormessage;
+            *(a->failed) = 1;
+            return 1;
+        }
+    }
+    *(a->buf) = mw.get_data();
+    return 0;
+}
+
+struct XpSfthDecArgs {
+    int  cmp;
+    const std::vector<uint8_t>* buf;
+    std::string*                err;
+    int*                        failed;
+};
+
+static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
+{
+    XpSfthDecArgs* a = (XpSfthDecArgs*) arg;
+    MemoryReader mr( *(a->buf) );
+    ArithmeticDecoder dec( mr );
+    bool ok = pjg_decode_zstscan  ( &dec, a->cmp ) &&
+              pjg_decode_zdst_high( &dec, a->cmp ) &&
+              pjg_decode_ac_high  ( &dec, a->cmp ) &&
+              pjg_decode_zdst_low ( &dec, a->cmp ) &&
+              pjg_decode_ac_low   ( &dec, a->cmp ) &&
+              pjg_decode_dc       ( &dec, a->cmp );
+    if ( !ok ) {
+        *(a->err)    = errormessage;
+        *(a->failed) = 1;
+        return 1;
+    }
+    return 0;
 }
 // ─────────────────────────────────────────────────────────────────────────────
 #if !defined( BUILD_LIB )
@@ -1490,7 +1596,7 @@ INTERN void initialize_options( int argc, char** argv )
 			overwrite = true;
 		}
 		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
-			fprintf( msgout, "\nNote: -sfth is not supported in XP build, ignored.\n" );
+			sfth_mode = true;
 		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
@@ -2040,7 +2146,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
-	fprintf( msgout, " [-sfth]  (not supported in XP build)\n" );
+	fprintf( msgout, " [-sfth]  parallel single-file compression via Win32 threads\n" );
 	fprintf( msgout, " [-th?]   (not supported in XP build)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
@@ -3805,7 +3911,80 @@ INTERN bool pack_pjg( void )
 		str_out->write( segm_cnt, 4 );
 	}
 	
-	// XP build: sfth_mode parallel path removed — always sequential.
+	// -sfth: parallel component encoding via Win32 CreateThread
+	if ( sfth_mode && cmpc > 1 ) {
+		str_out->write_byte( 0x01 );
+		hcode = appversion; str_out->write_byte( hcode );
+
+		// Encode shared header into a bounded MemoryWriter, prefix its size.
+		{
+			MemoryWriter hdr_mw;
+			{
+				ArithmeticEncoder enc( hdr_mw );
+				if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
+				if ( !pjg_optimize_header() ) return false;
+				if ( padbit == -1 ) padbit = 1;
+				if ( !pjg_encode_generic( &enc, hdrdata, hdrs ) ) return false;
+				if ( !pjg_encode_bit( &enc, padbit ) ) return false;
+				if ( !pjg_encode_bit( &enc, (rst_err == NULL) ? 0 : 1 ) ) return false;
+				if ( rst_err != NULL )
+					if ( !pjg_encode_generic( &enc, rst_err, scnc ) ) return false;
+			}
+			uint32_t hsz = (uint32_t) hdr_mw.num_bytes_written();
+			uint8_t hle[4] = { (uint8_t)hsz, (uint8_t)(hsz>>8), (uint8_t)(hsz>>16), (uint8_t)(hsz>>24) };
+			str_out->write( hle, 4 );
+			str_out->write( hdr_mw.get_data() );
+		}
+
+		// Encode each component into its own buffer in parallel.
+		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
+		std::vector<std::string>          cmp_errs( cmpc );
+		std::vector<int>                  cmp_failed( cmpc, 0 );
+		std::vector<XpSfthEncArgs>        args( cmpc );
+		std::vector<HANDLE>               threads( cmpc, NULL );
+		for ( int c = 0; c < cmpc; c++ ) {
+			args[c].cmp    = c;
+			args[c].buf    = &cmp_bufs[c];
+			args[c].err    = &cmp_errs[c];
+			args[c].failed = &cmp_failed[c];
+			threads[c] = CreateThread( NULL, 0, xp_sfth_enc_worker, &args[c], 0, NULL );
+			if ( threads[c] == NULL )
+				xp_sfth_enc_worker( &args[c] ); // fallback: run in this thread
+		}
+		for ( int c = 0; c < cmpc; c++ )
+			if ( threads[c] ) { WaitForSingleObject( threads[c], INFINITE ); CloseHandle( threads[c] ); }
+		for ( int c = 0; c < cmpc; c++ ) {
+			if ( cmp_failed[c] ) {
+				if ( !cmp_errs[c].empty() ) {
+					strncpy( errormessage, cmp_errs[c].c_str(), MSG_SIZE - 1 );
+					errormessage[MSG_SIZE - 1] = '\0';
+				}
+				errorlevel = 2; return false;
+			}
+		}
+		// Write component count + per-component sizes + streams
+		str_out->write_byte( (uint8_t) cmpc );
+		for ( int c = 0; c < cmpc; c++ ) {
+			uint32_t sz = (uint32_t) cmp_bufs[c].size();
+			uint8_t le[4] = { (uint8_t)sz, (uint8_t)(sz>>8), (uint8_t)(sz>>16), (uint8_t)(sz>>24) };
+			str_out->write( le, 4 );
+		}
+		for ( int c = 0; c < cmpc; c++ ) str_out->write( cmp_bufs[c] );
+		// Garbage (sequential, after component streams)
+		{
+			ArithmeticEncoder enc( *str_out );
+			bool ok = pjg_encode_bit( &enc, (grbs > 0) ? 1 : 0 ) &&
+			          ( grbs == 0 || pjg_encode_generic( &enc, grbgdata, grbs ) );
+			if ( !ok ) return false;
+		}
+		if ( str_out->error() ) {
+			snprintf( errormessage, MSG_SIZE, "write error, possibly drive is full" );
+			errorlevel = 2; return false;
+		}
+		pjgfilesize = str_out->num_bytes_written();
+		return true;
+	}
+
 	// ── Sequential path (compatible with all versions) ─────────────────────────
 	// store version number
 	hcode = appversion;
@@ -3956,9 +4135,66 @@ INTERN bool unpack_pjg( void )
 	
 	
 	if ( parallel_fmt ) {
-		// XP build: cannot decompress sfth-encoded PJG files (no threading support).
-		snprintf( errormessage, MSG_SIZE, "sfth-encoded PJG not supported in XP build (use v3.0+ non-XP)" );
-		errorlevel = 2; return false;
+		// -sfth format: bounded header blob + parallel component streams
+		uint8_t hle[4] = {}; str_in->read( hle, 4 );
+		uint32_t hsz = (uint32_t)hle[0] | ((uint32_t)hle[1]<<8) |
+		               ((uint32_t)hle[2]<<16) | ((uint32_t)hle[3]<<24);
+		std::vector<uint8_t> hblob( hsz ); str_in->read( hblob.data(), hsz );
+		{
+			MemoryReader hmr( hblob ); ArithmeticDecoder hdec( hmr );
+			if ( !pjg_decode_generic( &hdec, &hdrdata, &hdrs ) ) return false;
+			if ( !pjg_decode_bit( &hdec, &cb ) ) return false;
+			padbit = cb;
+			if ( !pjg_decode_bit( &hdec, &cb ) ) return false;
+			if ( cb == 1 ) if ( !pjg_decode_generic( &hdec, &rst_err, NULL ) ) return false;
+			if ( !pjg_unoptimize_header() ) return false;
+			if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
+			if ( !jpg_setup_imginfo() ) return false;
+		}
+		uint8_t ncmps = 0; str_in->read_byte( &ncmps );
+		if ( (int)ncmps != cmpc ) {
+			snprintf( errormessage, MSG_SIZE, "sfth cmp count mismatch (%i vs %i)", (int)ncmps, cmpc );
+			errorlevel = 2; return false;
+		}
+		std::vector<uint32_t> csizes( cmpc );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			uint8_t le[4] = {}; str_in->read( le, 4 );
+			csizes[cmp] = (uint32_t)le[0]|((uint32_t)le[1]<<8)|((uint32_t)le[2]<<16)|((uint32_t)le[3]<<24);
+		}
+		std::vector<std::vector<uint8_t>> cbufs( cmpc );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
+		}
+		// Decode components in parallel via Win32 threads
+		std::vector<std::string>   cmp_errs( cmpc );
+		std::vector<int>           cmp_failed( cmpc, 0 );
+		std::vector<XpSfthDecArgs> args( cmpc );
+		std::vector<HANDLE>        threads( cmpc, NULL );
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			args[cmp].cmp    = cmp;
+			args[cmp].buf    = &cbufs[cmp];
+			args[cmp].err    = &cmp_errs[cmp];
+			args[cmp].failed = &cmp_failed[cmp];
+			threads[cmp] = CreateThread( NULL, 0, xp_sfth_dec_worker, &args[cmp], 0, NULL );
+			if ( threads[cmp] == NULL )
+				xp_sfth_dec_worker( &args[cmp] ); // fallback: run in this thread
+		}
+		for ( cmp = 0; cmp < cmpc; cmp++ )
+			if ( threads[cmp] ) { WaitForSingleObject( threads[cmp], INFINITE ); CloseHandle( threads[cmp] ); }
+		for ( cmp = 0; cmp < cmpc; cmp++ ) {
+			if ( cmp_failed[cmp] ) {
+				if ( !cmp_errs[cmp].empty() ) {
+					strncpy( errormessage, cmp_errs[cmp].c_str(), MSG_SIZE - 1 );
+					errormessage[MSG_SIZE - 1] = '\0';
+				}
+				errorlevel = 2; return false;
+			}
+		}
+		// Garbage
+		ArithmeticDecoder gdec( *str_in );
+		if ( !pjg_decode_bit( &gdec, &cb ) ) return false;
+		if ( cb == 0 ) grbs = 0;
+		else if ( !pjg_decode_generic( &gdec, &grbgdata, &grbs ) ) return false;
 	} else {
 		// ── Sequential path (default) ──────────────────────────────────────────
 		auto decoder = new ArithmeticDecoder(*str_in);
