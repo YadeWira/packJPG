@@ -9,6 +9,23 @@ Supported platforms: Linux x64, Windows 7 and later (x86/x64).
 Note: Windows XP may work in some cases but is not supported and will
 not receive bug fixes.
 
+Windows XP build (EXPERIMENTAL)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The source4xp/ directory contains an experimental port targeting
+Windows XP SP2 and later. It is a single-threaded build (no -sfth,
+no -th) compiled with C++14 and Win32 API in place of std::filesystem.
+
+  WARNING: This build is experimental and unsupported. It may produce
+  incorrect results or fail on certain files. Use it at your own risk.
+
+To build it, from source4xp/:
+
+  make        -> bin/packJPG_win_xp.exe   (release)
+  make dev    -> bin/packJPG_win_xp_dev.exe (with developer functions)
+
+Requires i686-w64-mingw32-g++ (mingw-w64 package).
+
 
 LGPL v3 license and special permissions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
