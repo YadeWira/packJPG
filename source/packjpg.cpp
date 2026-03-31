@@ -1057,17 +1057,21 @@ int main( int argc, char** argv )
 			// count errors / warnings / file sizes
 			// unknown filetype (F_UNK) is silently skipped — not counted as error
 			if ( filetype == F_UNK ) {
-				// silent skip: don't count, don't store error message
+				if ( errorlevel > 0 ) error_cnt++; // inaccessible/unreadable file — count error
+				// else: silently skip wrong file type
 			} else {
 				file_proc_no = ++st_proc_done;
 				if ( errorlevel >= err_tol ) {
 					error_cnt++;
 				} else {
 					if ( errorlevel == 1 ) warn_cnt++;
-					acc_jpgsize += jpgfilesize;
-					acc_pjgsize += pjgfilesize;
-					if ( filetype == F_JPG ) acc_jpg_cnt++;
-					else if ( filetype == F_PJG ) acc_pjg_cnt++;
+					if ( filetype == F_JPG ) {
+						acc_jpgsize += jpgfilesize;
+						acc_pjgsize += pjgfilesize;
+						acc_jpg_cnt++;
+					} else if ( filetype == F_PJG ) {
+						acc_pjg_cnt++;
+					}
 				}
 			}
 		}
@@ -1118,7 +1122,8 @@ int main( int argc, char** argv )
 					std::lock_guard<std::mutex> lk( stats_mtx );
 
 					// --- stats ---
-					// unknown filetype is silently skipped
+					// unknown filetype is silently skipped; but errors on unknown files still count
+					if ( filetype == F_UNK && errorlevel > 0 ) error_cnt++;
 					if ( filetype != F_UNK ) {
 						if ( errorlevel > 0 ) {
 							err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
@@ -1129,10 +1134,13 @@ int main( int argc, char** argv )
 						if ( errorlevel >= err_tol ) error_cnt++;
 						else {
 							if ( errorlevel == 1 ) warn_cnt++;
-							acc_jpgsize += jpgfilesize;
-							acc_pjgsize += pjgfilesize;
-							if ( filetype == F_JPG ) acc_jpg_cnt++;
-							else if ( filetype == F_PJG ) acc_pjg_cnt++;
+							if ( filetype == F_JPG ) {
+								acc_jpgsize += jpgfilesize;
+								acc_pjgsize += pjgfilesize;
+								acc_jpg_cnt++;
+							} else if ( filetype == F_PJG ) {
+								acc_pjg_cnt++;
+							}
 						}
 					}
 					// only count non-skipped files for the progress display
@@ -1296,7 +1304,7 @@ int main( int argc, char** argv )
 	}
 	
 	
-	return 0;
+	return ( error_cnt > 0 ) ? 1 : 0;
 }
 #endif
 
@@ -1934,6 +1942,8 @@ INTERN void initialize_options( int argc, char** argv )
 					file_proc_cnt++;
 			}
 			fclose( fp );
+		} else {
+			file_proc_cnt++; // can't open — will be an error, count for correct progress display
 		}
 	}
 	if ( file_proc_cnt == 0 ) file_proc_cnt = file_cnt; // fallback
@@ -2076,8 +2086,14 @@ INTERN void process_ui( void )
 	begin = clock();
 	
 	// streams are initiated, start processing file
-	process_file();
-	
+	try {
+		process_file();
+	} catch ( const std::exception& e ) {
+		strncpy( errormessage, e.what(), MSG_SIZE - 1 );
+		errormessage[MSG_SIZE - 1] = '\0';
+		errorlevel = 2;
+	}
+
 	// close iostreams
     str_in.reset(nullptr);
     str_out.reset(nullptr);
@@ -2163,11 +2179,12 @@ INTERN void process_ui( void )
 	else { // progress bar UI
 		// if this is the last file, update progress bar one last time
 		if ( file_no + 1 == file_cnt ) {
-			// update progress message
-			UIPRINTF( "Processed %2i of %2i files ", file_proc_no > 0 ? file_proc_no : file_proc_cnt, file_proc_cnt );
+			// update progress message — add 1 for the current file if it was processed
+			int shown = ( filetype != F_UNK ) ? file_proc_no + 1 : ( file_proc_no > 0 ? file_proc_no : file_proc_cnt );
+			UIPRINTF( "Processed %2i of %2i files ", shown, file_proc_cnt );
 			progress_bar( 1, 1 );
 			UIPRINTF( "\r" );
-		}	
+		}
 	}
 
 	// In MT mode, output is flushed by the worker lambda after updating stats.
@@ -2277,7 +2294,6 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
-	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
@@ -2557,10 +2573,11 @@ INTERN void execute( bool (*function)() )
 
 #if !defined(BUILD_LIB)
 INTERN bool check_file( void )
-{	
+{
 	unsigned char fileid[ 2 ] = { 0, 0 };
 	const char* filename = filelist[ file_no ];
-	
+	filetype = F_UNK; // reset before open attempt so inaccessible files don't inherit previous filetype
+
 	try {
 		if (pipe_on) {
 			str_in = std::make_unique<StreamReader>();
@@ -4241,7 +4258,11 @@ INTERN bool unpack_pjg( void )
 	
 	// check header codes ( maybe position in other function ? )
 	while( true ) {
-		str_in->read_byte(&hcode);
+		if ( !str_in->read_byte(&hcode) ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file in PJG header" );
+			errorlevel = 2;
+			return false;
+		}
 		if ( hcode == 0x00 ) {
 			// retrieve compression settings from file
 			str_in->read( nois_trs, 4 );
@@ -6848,10 +6869,21 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	bwrt = new MemoryWriter();
 	
 	// decode header, ending with 256 symbol
+	// limit to 64 MB to guard against corrupt streams that never produce the end symbol
+	// 1 MB limit: legitimate PJG generic data (header, rst_err, garbage) is never this large.
+	// Guards against corrupt streams where the end symbol (256) never appears.
+	const int decode_limit = 1 * 1024 * 1024;
 	model = INIT_MODEL_S( 256 + 1, 256, 1 );
 	while ( true ) {
 		c = decode_ari( dec, model );
 		if ( c == 256 ) break;
+		if ( bwrt->num_bytes_written() >= (size_t) decode_limit ) {
+			delete( model );
+			delete bwrt;
+			snprintf( errormessage, MSG_SIZE, "corrupt data: decoder exceeded size limit" );
+			errorlevel = 2;
+			return false;
+		}
 		bwrt->write_byte( (unsigned char) c );
 		model->shift_context( c );
 	}
