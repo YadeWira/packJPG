@@ -1,63 +1,78 @@
-How to compile packJPG (01/30/2012)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+How to compile packJPG (03/30/2026)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This document gives detailed instructions on compiling packJPG either as 
-an executable or a static/shared libary. 
+This document explains how to compile packJPG as an executable or as a
+static/shared library. Requires a C++17 compliant compiler.
 
-
-Compiling packJPG as an executable
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
-
-Makefiles or provided for Microsoft Windows NT ('Makefile') and Unix 
-('Makefile.unix'). Both have been tested and verified to work in GCC 
-v3.4.5, but they should work with other compilers and newer/older 
-versions of the GCC as well. If you want to compile packJPG in Microsoft 
-Visual Studio for Microsoft Windows, just create a new project and add 
-all source files to it. 
+Tested with: clang 18, g++ 13.
+Supported targets: Linux x64, Windows x64 (cross), Windows x86 (cross).
 
 
-Compiling packJPG as a static or shared library 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+Quick build (all platforms at once)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-If you want to compile packJPG as a static or shared library, add all 
-the source files to a new static/shared library project. 'BUILD_LIB' 
-(without the ') has to be defined either at the beginning of 
-'packJPG.cpp' or from the compilers options. 'BUILD_DLL' has to be 
-defined in addition only if a shared library is to be compiled (don't 
-define this for a static library!).
+From the source/ directory, run:
 
-The source file 'packJPGdll.h' contains all public function declarations 
-of the library and can be included in external projects which use the 
-packJPG shared library. 
+  ./build_all.sh
 
+This builds Linux x64, Windows x64, and Windows x86 binaries into bin/.
+Requires clang++ (or g++) for Linux and mingw-w64 for Windows targets.
 
-Compiling developer functions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ 
-
-If you want to include developer functions in the packJPG executable, 
-'DEV_BUILD' has to be defined. Developer functions are not available in 
-the packJPG library. They are not needed in any way for basic packJPG 
-functionality (i.e. compression and decompression) and can be left out 
-to compile a smaller executable. Read 'developer.txt' for more 
-information. 
+  Ubuntu/Debian : sudo apt install clang mingw-w64
+  Arch          : sudo pacman -S clang mingw-w64-gcc
+  macOS         : brew install llvm mingw-w64
 
 
-Defines overview / summary
-~~~~~~~~~~~~~~~~~~~~~~~~~~ 
+Compiling with make
+~~~~~~~~~~~~~~~~~~~~
 
-This paragraph gives a short overview over preprocessor defines 
-mentioned in the above paragraphs. 
+Individual targets are available via the Makefile:
 
-BUILD_LIB
-Has to be defined when compiling a static or shared library. 
+  make linux-x64      Linux x64 executable (default)
+  make win-x64        Windows x64 executable (requires mingw-w64)
+  make win-x86        Windows x86 executable (requires mingw-w64)
+  make all-platforms  all three targets above
+  make dev            Linux x64 with developer functions (DEV_BUILD)
+  make lib            static library (BUILD_LIB)
+  make dll            shared library / DLL (BUILD_LIB + BUILD_DLL)
 
-BUILD_DLL
-Has to defined when compiling a shared library only. 
+The default compiler is clang++, with automatic fallback to g++.
+Compiler flags: -O3 -Wall -funroll-loops -ffast-math -std=c++17
 
-BUILD_DEV
-If this is defined, developer functions are included in the executable. 
-In library builds developer functions are not available.
+
+Compiling as a static or shared library
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Define BUILD_LIB when compiling to produce a library instead of an
+executable. Define BUILD_DLL in addition for a shared library (DLL).
+Do not define BUILD_DLL for a static library.
+
+  make lib    -> static library (.a)
+  make dll    -> shared library (.dll / .so)
+
+The file 'packjpglib.h' declares the public API for static library use.
+The file 'packjpgdll.h' declares the public API for shared library use.
+
+
+Compiling with developer functions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Define DEV_BUILD to include developer/debug functions in the executable.
+Developer functions are not available in library builds.
+
+  make dev
+
+See developer.txt for a description of the available developer switches.
+
+
+Preprocessor defines summary
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  BUILD_LIB    required for static or shared library builds
+  BUILD_DLL    required additionally for shared library (DLL) builds
+  DEV_BUILD    includes developer/debug functions in the executable
+  UNIX         defined automatically by the Makefile for Linux builds
 
 
 ____________________________________
-packJPG by Matthias Stirner, 01/2012 
+packJPG by Yade Bravo, 03/30/2026
