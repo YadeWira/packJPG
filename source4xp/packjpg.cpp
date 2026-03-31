@@ -2147,7 +2147,6 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  parallel single-file compression via Win32 threads\n" );
-	fprintf( msgout, " [-th?]   (not supported in XP build)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-list]  list PJG file info without decompressing\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
@@ -2175,8 +2174,6 @@ INTERN void show_help( void )
 	}
 	#endif
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "Examples: \"%s -v1 -o baboon.%s\"\n", appname, pjg_ext );
-	fprintf( msgout, "          \"%s -p *.%s\"\n", appname, jpg_ext );	
 }
 #endif
 
