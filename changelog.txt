@@ -157,6 +157,26 @@ v2.9 (03/25/2026) (public)
  - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
+v3.1 (03/31/2026) (public)
+ - color output: program header and status lines now use ANSI colors
+   (suppressed when output is not a terminal)
+ - Windows XP build (source4xp/): added -sfth support via Win32 CreateThread
+   (-th remains unsupported on XP; single-file parallel is now available)
+ - help text: removed example lines from both builds; removed -th from XP help
+ - docs: moved full version history from Readme.txt to changelog.txt
+ - fixed: progress bar displayed "Processed N-1 of N files" at end of batch
+ - fixed: corrupt PJG caused infinite loop in header parser (EOF not checked)
+ - fixed: corrupt PJG caused infinite loop in pjg_decode_generic; added 1MB
+   decode limit — generates clean error instead of hanging
+ - fixed: main() always returned exit 0 even when files failed
+ - fixed: filetype not reset at start of check_file() — inaccessible files
+   inherited the previous file's type, corrupting progress counter
+ - fixed: inaccessible files not counted in file_proc_cnt pre-scan
+ - fixed: compression ratio showed >100% in mix mode due to jpgfilesize=0
+   during decompression; ratio accumulation now only runs for F_JPG files
+ - fixed: stale -list flag shown in help (replaced by 'list' subcommand)
+ - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
 v3.0 (03/30/2026) (public)
  - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
    ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)

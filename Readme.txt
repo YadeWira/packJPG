@@ -1,4 +1,4 @@
-packJPG v3.0 (03/30/2026)
+packJPG v3.1 (03/31/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a lossless JPEG compression program. It compresses JPEG files
@@ -396,4 +396,4 @@ For questions and bug reports:
 
 
 ____________________________________
-packJPG by Yade Bravo, 03/30/2026
+packJPG by Yade Bravo, 03/31/2026
