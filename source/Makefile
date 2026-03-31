@@ -37,7 +37,7 @@ endif
 # --- default rules -----------------------------------------------------------
 
 %.o: %.cpp $(DEPS)
-	$(CXX) -c -o $@ $< $(CPPFLAGS)
+	$(CXX) -c -o $@ $< $(CXXFLAGS)
 
 %.res: %.rc
 	@-$(RC) $< $@
@@ -95,7 +95,7 @@ bin:
 	mkdir -p bin
 
 linux-x64: bin
-	$(CXX) $(CPPFLAGS) -DUNIX -o bin/$(TARGET)_linux_x64 $(CPPSRC) -s $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -DUNIX -o bin/$(TARGET)_linux_x64 $(CXXSRC) -s $(LDFLAGS)
 	@echo "[OK] bin/$(TARGET)_linux_x64"
 
 win-x64: bin

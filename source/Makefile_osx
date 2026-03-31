@@ -13,7 +13,7 @@ RES     = icon.res
 BIN     = packjpg
 
 %.o: %.cpp $(DEPS)
-	$(CXx) -c -o $@ $< $(CFLAGS)
+	$(CXX) -c -o $@ $< $(CFLAGS)
 
 $(BIN): $(OBJ)
 	$(CXX) -o $@ $^ $(LDFLAGS)
