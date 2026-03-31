@@ -388,7 +388,43 @@ packJPG by Matthias Stirner, 01/2016
 
 #if defined(_WIN32) || defined(WIN32)
 	#include <windows.h>
+#else
+	#include <unistd.h>
 #endif
+
+// ─── Color support ────────────────────────────────────────────────────────────
+// ANSI escape codes — empty strings when colors are disabled.
+// Call init_colors() once at startup (no-op in library builds).
+#if !defined(BUILD_LIB)
+static bool use_color = false;
+
+#define COL_RESET   (use_color ? "\033[0m"   : "")
+#define COL_CYAN    (use_color ? "\033[36m"  : "")
+#define COL_GRAY    (use_color ? "\033[90m"  : "")
+#define COL_BRED    (use_color ? "\033[1;31m": "")
+#define COL_BGREEN  (use_color ? "\033[1;32m": "")
+#define COL_BYELLOW (use_color ? "\033[1;33m": "")
+#define COL_BCYAN   (use_color ? "\033[1;36m": "")
+
+static void init_colors( void )
+{
+#if defined(_WIN32) || defined(WIN32)
+	HANDLE h = GetStdHandle( STD_OUTPUT_HANDLE );
+	if ( h == INVALID_HANDLE_VALUE ) return;
+	DWORD mode = 0;
+	if ( !GetConsoleMode( h, &mode ) ) return;
+	// ENABLE_VIRTUAL_TERMINAL_PROCESSING (0x0004) — available on Windows 10+
+	// Silently falls back to no color on Windows 7/8 if the call fails.
+	if ( SetConsoleMode( h, mode | 0x0004 ) )
+		use_color = true;
+#else
+	// Enable colors if stdout is a real terminal and NO_COLOR is not set.
+	if ( isatty( fileno( stdout ) ) && getenv( "NO_COLOR" ) == NULL )
+		use_color = true;
+#endif
+}
+#endif
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Helper: convert a char* path (CP_ACP on Windows, UTF-8 on Linux) to
 // std::filesystem::path safely — avoids filesystem_error on accented chars.
@@ -972,11 +1008,12 @@ int main( int argc, char** argv )
 	
 	// read options from command line
 	initialize_options( argc, argv );
-	
+	init_colors();
+
 	// write program info to screen (suppressed in module mode)
 	if ( !module_mode ) {
-		fprintf( msgout,  "\n--> %s v%i.%i%s (%s) by %s <--\n",
-				apptitle, appversion / 10, appversion % 10, subversion, versiondate, author );
+		fprintf( msgout,  "\n%s--> %s v%i.%i%s (%s) by %s <--%s\n",
+				COL_BCYAN, apptitle, appversion / 10, appversion % 10, subversion, versiondate, author, COL_RESET );
 		fprintf( msgout, "Copyright %s\nAll rights reserved\n\n", copyright );
 	}
 	
@@ -1111,12 +1148,14 @@ int main( int argc, char** argv )
 					// draw/update progress bar
 					int barpos = ( done * BARLEN ) / ( file_proc_cnt > 0 ? file_proc_cnt : 1 );
 					fprintf( msgout, "\rProcessing file %3i of %3i [", done, file_proc_cnt );
+					fprintf( msgout, "%s", COL_CYAN );
 					for ( int b = 0; b < barpos; b++ )
 					#if defined(_WIN32)
 						fprintf( msgout, "\xFE" );
 					#else
 						fprintf( msgout, "X" );
 					#endif
+					fprintf( msgout, "%s", COL_RESET );
 					for ( int b = barpos; b < BARLEN; b++ )
 						fprintf( msgout, " " );
 					fprintf( msgout, "]" );
@@ -1136,7 +1175,7 @@ int main( int argc, char** argv )
 		std::signal( SIGINT, SIG_DFL );
 
 		if ( g_interrupted.load() ) {
-			fprintf( msgout, "\n\n[interrupted] cleaning up...\n" );
+			fprintf( msgout, "\n\n%s[interrupted]%s cleaning up...\n", COL_BYELLOW, COL_RESET );
 			// remove any incomplete output files from files not yet processed
 			for ( int fi = g_files_done.load(); fi < file_cnt; fi++ ) {
 				if ( filelist[fi] == NULL ) continue;
@@ -1155,14 +1194,14 @@ int main( int argc, char** argv )
 		}
 
 		// overwrite last progress bar line with final completed state
-		fprintf( msgout, "\rProcessed    %3i of %3i [", file_proc_cnt, file_proc_cnt );
+		fprintf( msgout, "\rProcessed    %3i of %3i [%s", file_proc_cnt, file_proc_cnt, COL_CYAN );
 		for ( int b = 0; b < BARLEN; b++ )
 		#if defined(_WIN32)
 			fprintf( msgout, "\xFE" );
 		#else
 			fprintf( msgout, "X" );
 		#endif
-		fprintf( msgout, "]   \n" ); // trailing spaces erase any leftover chars
+		fprintf( msgout, "%s]   \n", COL_RESET ); // trailing spaces erase any leftover chars
 	}
 	end = WallClock::now();
 
@@ -1171,21 +1210,21 @@ int main( int argc, char** argv )
 	if ( ( verbosity == -1 ) || ( verbosity == 2 ) ) {
 		// print summary of errors to screen
 		if ( error_cnt > 0 ) {
-			fprintf( stderr, "\n\nfiles with errors:\n" );
+			fprintf( stderr, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
 			fprintf( stderr, "------------------\n" );
 			for ( file_no = 0; file_no < file_cnt; file_no++ ) {
 				if ( err_tp[ file_no ] >= err_tol ) {
-					fprintf( stderr, "%s (%s)\n", filelist[ file_no ], err_list[ file_no ] );
+					fprintf( stderr, "%s%s%s (%s)\n", COL_BRED, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 				}
 			}
 		}
 		// print summary of warnings to screen
 		if ( warn_cnt > 0 ) {
-			fprintf( stderr, "\n\nfiles with warnings:\n" );
+			fprintf( stderr, "\n\n%sfiles with warnings:%s\n", COL_BYELLOW, COL_RESET );
 			fprintf( stderr, "------------------\n" );
 			for ( file_no = 0; file_no < file_cnt; file_no++ ) {
 				if ( err_tp[ file_no ] == 1 ) {
-					fprintf( stderr, "%s (%s)\n", filelist[ file_no ], err_list[ file_no ] );
+					fprintf( stderr, "%s%s%s (%s)\n", COL_BYELLOW, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 				}
 			}
 		}
@@ -1193,7 +1232,7 @@ int main( int argc, char** argv )
 	
 	// show statistics
 	if ( mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
-		fprintf( msgout, "\n[WARNING] Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", acc_jpg_cnt, acc_pjg_cnt );
+		fprintf( msgout, "\n%s[WARNING]%s Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", COL_BYELLOW, COL_RESET, acc_jpg_cnt, acc_pjg_cnt );
 		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
 		fprintf( msgout, "  Use 'a' (compress only) or 'x' (decompress only) for safer operation.\n" );
 	}
@@ -1216,7 +1255,7 @@ int main( int argc, char** argv )
 		mbps  = ( total > 0 ) ? ( acc_jpg_mb / total ) : acc_jpg_mb;
 		cr    = ( acc_jpgsize > 0 ) ? ( 100.0 * acc_pjgsize / acc_jpgsize ) : 0;
 		
-		fprintf( msgout,  " --------------------------------- \n" );
+		fprintf( msgout,  "%s --------------------------------- %s\n", COL_GRAY, COL_RESET );
 		if ( total >= 0 ) {
 			fprintf( msgout,  " total time        : %8.2f sec\n", total );
 			fprintf( msgout,  " avrg. speed       : %8.2f MB/s\n", mbps );
@@ -1225,8 +1264,8 @@ int main( int argc, char** argv )
 			fprintf( msgout,  " total time        : %8s sec\n", "N/A" );
 			fprintf( msgout,  " avrg. speed       : %8s MB/s\n", "N/A" );
 		}
-		fprintf( msgout,  " avrg. comp. ratio : %8.2f %%\n", cr );		
-		fprintf( msgout,  " --------------------------------- \n" );
+		fprintf( msgout,  " avrg. comp. ratio : %8.2f %%\n", cr );
+		fprintf( msgout,  "%s --------------------------------- %s\n", COL_GRAY, COL_RESET );
 		#if defined(DEV_INFOS)
 		if ( acc_jpgsize > 0 ) { 
 			fprintf( msgout,  " header %%          : %8.2f %%\n", 100.0 * dev_size_hdr / acc_jpgsize );
@@ -2020,7 +2059,7 @@ INTERN void process_ui( void )
 		}
 		
 		if ( !use_buf && local_verbosity < 2 && action != A_LIST )
-			fprintf( msgout, "%s -> ", actionmsg );
+			fprintf( msgout, "%s%s%s -> ", COL_CYAN, actionmsg, COL_RESET );
 		after_check:;
 	}
 	else { // progress bar UI
@@ -2068,23 +2107,24 @@ INTERN void process_ui( void )
 		// display success/failure message (single-thread only for non-errors in MT)
 		if ( !use_buf ) {
 			switch ( local_verbosity ) {
-				case 0:			
+				case 0:
 					if ( errorlevel < err_tol ) {
-						if ( action == A_COMPRESS ) fprintf( msgout, "%.2f%%", cr );
-						else if ( action != A_LIST ) fprintf( msgout, "DONE" );
+						if ( action == A_COMPRESS ) fprintf( msgout, "%s%.2f%%%s", COL_BGREEN, cr, COL_RESET );
+						else if ( action != A_LIST ) fprintf( msgout, "%sDONE%s", COL_BGREEN, COL_RESET );
 						// A_LIST: output already printed inside list_pjg
 					}
-					else fprintf( msgout, "ERROR" );
+					else fprintf( msgout, "%sERROR%s", COL_BRED, COL_RESET );
 					if ( errorlevel > 0 ) fprintf( msgout, "\n" );
 					break;
-				
+
 				case 1:
-					fprintf( msgout, "%s\n",  ( errorlevel < err_tol ) ? "DONE" : "ERROR" );
+					if ( errorlevel < err_tol ) fprintf( msgout, "%sDONE%s\n", COL_BGREEN, COL_RESET );
+					else                        fprintf( msgout, "%sERROR%s\n", COL_BRED,   COL_RESET );
 					break;
-				
+
 				case 2:
-					if ( errorlevel < err_tol ) fprintf( msgout, "\n-> %s OK\n", actionmsg );
-					else  fprintf( msgout, "\n-> %s ERROR\n", actionmsg );
+					if ( errorlevel < err_tol ) fprintf( msgout, "\n-> %s %sOK%s\n",    actionmsg, COL_BGREEN, COL_RESET );
+					else                        fprintf( msgout, "\n-> %s %sERROR%s\n", actionmsg, COL_BRED,   COL_RESET );
 					break;
 			}
 		}
