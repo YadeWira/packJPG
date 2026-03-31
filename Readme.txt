@@ -1,5 +1,5 @@
-packJPG v3.0 test 5 (03/27/2026)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+packJPG v3.0 (03/30/2026)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical
@@ -116,10 +116,14 @@ list -- list PJG info
   "packJPG list *.pjg"
   "packJPG list -r archive/"
 
-  Output example:
+  Output examples:
     photos/lena.pjg
       version : v3.0
       packed  : 288.1 KB
+
+    photos/lena_fast.pjg         (compressed with -sfth)
+      version : v3.0 (parallel)
+      packed  : 288.2 KB
 
 
 Command line switches
@@ -500,7 +504,7 @@ v2.9 (03/25/2026) (public)
  - minimum supported platform: Linux x64, Windows 7+
  - maintainer: Yade Bravo (https://github.com/YadeWira)
 
-v3.0 test 5 (03/27/2026) (public - non build)
+v3.0 (03/30/2026) (public)
  - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
    ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
    generates new .pjg format (0x01 marker); requires v3.0+ to decompress
@@ -524,6 +528,13 @@ v3.0 test 5 (03/27/2026) (public - non build)
    (-th2 or higher)
  - fixed: directories from wildcard expansion are now silently ignored;
    use -r explicitly to recurse into subdirectories
+ - fixed: decompressing -sfth files with -ver incorrectly reported "file sizes
+   do not match" even when the output was bit-for-bit correct; verify now
+   re-encodes using the same format (sfth or standard) as the original PJG
+ - fixed: 'mix' mode warning incorrectly referenced '-c' (non-existent flag);
+   message now correctly reads 'a' (compress only)
+ - fixed: 'list' subcommand displayed 'v0.1' for -sfth files instead of the
+   correct version; sfth files now show 'v3.0 (parallel)'
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 
@@ -555,4 +566,4 @@ For questions and bug reports:
 
 
 ____________________________________
-packJPG by Yade Bravo, 03/2026
+packJPG by Yade Bravo, 03/30/2026

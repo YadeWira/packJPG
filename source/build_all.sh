@@ -34,6 +34,7 @@ fi
 $CXX $CFLAGS -DUNIX \
     -o "$OUT/packJPG_linux_x64" \
     $SRC \
+    && strip --strip-unneeded "$OUT/packJPG_linux_x64" \
     && ok "bin/packJPG_linux_x64"
 
 # native build (optimized for this machine only, not for distribution)
@@ -56,7 +57,8 @@ else
     if command -v $WINDRES64 &>/dev/null; then
         $WINDRES64 -O coff icons.rc -o icons_x64.o \
             && ICONS64="icons_x64.o" \
-            && echo "    [OK] icons compiled for x64"
+            && echo "    [OK] icons compiled for x64" \
+            || echo "    [!!] icon compilation failed — binary will have no icon"
     else
         echo "    [!!] $WINDRES64 not found — binary will have no icon"
     fi
@@ -85,7 +87,8 @@ else
     if command -v $WINDRES32 &>/dev/null; then
         $WINDRES32 -O coff icons.rc -o icons_x86.o \
             && ICONS32="icons_x86.o" \
-            && echo "    [OK] icons compiled for x86"
+            && echo "    [OK] icons compiled for x86" \
+            || echo "    [!!] icon compilation failed — binary will have no icon"
     else
         echo "    [!!] $WINDRES32 not found — binary will have no icon"
     fi

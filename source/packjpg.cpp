@@ -1,5 +1,5 @@
 /*
-packJPG v3.0 (03/25/2026)
+packJPG v3.0 (03/30/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -262,7 +262,7 @@ v2.7 (03/20/2026) (public)
  - Multi-threaded batch processing via -th<N> flag (0=auto, detects cores)
  - Thread-safe output buffering in process_ui (per-file atomic console writes)
 
-v3.0 test 4 (03/25/2026) (public - non build)
+v3.0 (03/30/2026) (public)
  - new flag: [-sfth] parallel single-file compression using 3 threads (Y/Cb/Cr)
    ~25-30% faster on 3+ thread machines; ratio preserved (~0.01% delta)
    generates new .pjg format (0x01 marker); requires v3.0+ to decompress
@@ -285,6 +285,13 @@ v3.0 test 4 (03/25/2026) (public - non build)
  - fixed: skipped files (wrong type) no longer print warnings in MT mode
  - fixed: directories from wildcard expansion (e.g. * expanding PANA/) are
    now silently ignored; use -r explicitly to recurse into subdirectories
+ - fixed: decompressing -sfth files with -ver incorrectly reported "file sizes
+   do not match" even when the output was bit-for-bit correct; verify now
+   re-encodes using the same format (sfth or standard) as the original PJG
+ - fixed: 'mix' mode warning incorrectly referenced '-c' (non-existent flag);
+   message now correctly reads 'a' (compress only)
+ - fixed: 'list' subcommand displayed 'v0.1' for -sfth files instead of the
+   correct version; sfth files now show 'v3.0 (parallel)'
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 v2.9 (03/23/2026) (public)
@@ -796,6 +803,7 @@ INTERN int  verbosity  = -1;	// level of verbosity
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
 INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
+THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
@@ -923,7 +931,7 @@ INTERN const unsigned char appversion = 30;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/25/2026";
+INTERN const char*  versiondate  = "03/30/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -1187,7 +1195,7 @@ int main( int argc, char** argv )
 	if ( mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
 		fprintf( msgout, "\n[WARNING] Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", acc_jpg_cnt, acc_pjg_cnt );
 		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
-		fprintf( msgout, "  Use -c (compress only) or -x (decompress only) for safer operation.\n" );
+		fprintf( msgout, "  Use 'a' (compress only) or 'x' (decompress only) for safer operation.\n" );
 	}
 	if ( module_mode ) {
 		// machine-friendly output for external tools (e.g. FreeArc)
@@ -2379,7 +2387,11 @@ INTERN void process_file( void )
 					execute( adapt_icos );
 					execute( predict_dc );
 					execute( calc_zdst_lists );
+					// re-encode with the same format as the original PJG
+					bool saved_sfth = sfth_mode;
+					sfth_mode = decoded_from_sfth;
 					execute( pack_pjg );
+					sfth_mode = saved_sfth;
 					execute( compare_output );
 				}
 				#endif
@@ -4186,6 +4198,7 @@ INTERN bool unpack_pjg( void )
 	unsigned char cb;
 	int cmp;
 	bool parallel_fmt = false; // set when 0x01 sfth marker seen
+	decoded_from_sfth = false; // reset before reading header
 	
 	
 	// check header codes ( maybe position in other function ? )
@@ -4200,6 +4213,7 @@ INTERN bool unpack_pjg( void )
 		else if ( hcode == 0x01 ) {
 			// -sfth parallel format: component streams stored independently
 			parallel_fmt = true;
+			decoded_from_sfth = true;
 		}
 		else if ( hcode >= 0x14 ) {
 			// compare version number
@@ -8074,8 +8088,13 @@ INTERN bool list_pjg( void )
 	unsigned char hcode = 0;
 	str_in->read_byte( &hcode );
 	// if hcode == 0x00 it's a custom-settings block — skip 8 bytes then read actual version
+	// if hcode == 0x01 it's an sfth parallel-format marker — skip it and read the version byte
+	bool is_sfth = false;
 	if ( hcode == 0x00 ) {
 		str_in->skip( 8 );
+		str_in->read_byte( &hcode );
+	} else if ( hcode == 0x01 ) {
+		is_sfth = true;
 		str_in->read_byte( &hcode );
 	}
 	int ver_major = hcode / 10;
@@ -8092,7 +8111,10 @@ INTERN bool list_pjg( void )
 		return buf;
 	};
 
-	fprintf( msgout, "  version : v%i.%i\n", ver_major, ver_minor );
+	if ( is_sfth )
+		fprintf( msgout, "  version : v%i.%i (parallel)\n", ver_major, ver_minor );
+	else
+		fprintf( msgout, "  version : v%i.%i\n", ver_major, ver_minor );
 	fprintf( msgout, "  packed  : %s\n", fmt_size( pjg_size ).c_str() );
 
 	pjgfilesize = (int) pjg_size;
