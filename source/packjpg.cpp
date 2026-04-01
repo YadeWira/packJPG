@@ -5739,62 +5739,74 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 	unsigned short* c_absc[ 6 ]; // quick access array for contexts
 	int c_weight[ 6 ]; // weighting for contexts
 
+	unsigned char* sgn_store; // sign storage for context
+	unsigned char* sgn_nbh; // left signs neighbor
+	unsigned char* sgn_nbv; // upper signs neighbor
+
 	int ctx_avr; // 'average' context
 	int ctx_len; // context for bit length
-	
+	int ctx_sgn; // context for sign
+
 	int max_val; // max value
 	int max_len; // max bitlength
-	
+
 	int dpos;
 	int clen, absv, sgn;
 	int snum;
 	int bt, bp;
-	
+
 	int p_x, p_y;
 	int r_x; //, r_y;
 	int w, bc;
-	
-	
+
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
-	
+
 	// get max absolute value/bit length
 	max_val = MAX_V( cmp, 0 );
 	max_len = BITLEN1024P( max_val );
-	
-	// init models for bitlenghts and -patterns	
+
+	// init models for bitlenghts and -patterns
 	mod_len = INIT_MODEL_S( max_len + 1, ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1, 2 );
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
-	mod_sgn = INIT_MODEL_B( 1, 0 );
-	
+	mod_sgn = INIT_MODEL_B( 9, 1 );
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
-	// allocate memory for absolute values storage
+
+	// allocate memory for absolute values and sign storage
 	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );
-	if ( absv_store == NULL ) {
+	sgn_store = (unsigned char*) calloc ( bc, sizeof( char ) );
+	if ( ( absv_store == NULL ) || ( sgn_store == NULL ) ) {
+		if ( absv_store != NULL ) free( absv_store );
+		if ( sgn_store != NULL ) free( sgn_store );
 		snprintf( errormessage, MSG_SIZE, MEM_ERRMSG );
 		errorlevel = 2;
 		return false;
 	}
-	
+
+	// set up quick access arrays for sign context
+	sgn_nbh = sgn_store - 1;
+	sgn_nbv = sgn_store - w;
+
 	// set up context quick access array
 	pjg_aavrg_prepare( c_absc, c_weight, absv_store, cmp );
-	
+
 	// locally store pointer to coefficients and zero distribution list
 	coeffs = colldata[ cmp ][ 0 ];
-	zdstls = zdstdata[ cmp ];	
-	
+	zdstls = zdstdata[ cmp ];
+
 	// arithmetic compression loop
 	for ( dpos = 0; dpos < bc; dpos++ )
-	{		
+	{
 		//calculate x/y positions in band
 		p_y = dpos / w;
 		// r_y = h - ( p_y + 1 );
 		p_x = dpos % w;
 		r_x = w - ( p_x + 1 );
-		
+
 		// get segment-number from zero distribution list and segmentation set
 		snum = segm_tab[ zdstls[dpos] ];
 		// calculate contexts (for bit length)
@@ -5802,10 +5814,10 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_len, snum );
-		
+
 		// simple treatment if coefficient is zero
 		if ( coeffs[ dpos ] == 0 ) {
-			// encode bit length (0) of current coefficient			
+			// encode bit length (0) of current coefficient
 			encode_ari( enc, mod_len, 0 );
 		}
 		else {
@@ -5823,15 +5835,21 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 				bt = BITN( absv, bp );
 				encode_ari( enc, mod_res, bt );
 			}
-			// encode sign
+			// encode sign (left + top neighbor context)
+			ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0;
+			if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ];
+			if ( ctx_sgn > 8 ) ctx_sgn = 8;
+			mod_sgn->shift_context( ctx_sgn );
 			encode_ari( enc, mod_sgn, sgn );
-			// store absolute value
+			// store absolute value and sign
 			absv_store[ dpos ] = absv;
+			sgn_store[ dpos ] = sgn + 1;
 		}
 	}
-	
+
 	// free memory / clear models
 	free( absv_store );
+	free( sgn_store );
 	delete ( mod_len );
 	delete ( mod_res );
 	delete ( mod_sgn );
@@ -6405,72 +6423,84 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 	unsigned short* c_absc[ 6 ]; // quick access array for contexts
 	int c_weight[ 6 ]; // weighting for contexts
 
+	unsigned char* sgn_store; // sign storage for context
+	unsigned char* sgn_nbh; // left signs neighbor
+	unsigned char* sgn_nbv; // upper signs neighbor
+
 	int ctx_avr; // 'average' context
 	int ctx_len; // context for bit length
-	
+	int ctx_sgn; // context for sign
+
 	int max_val; // max value
 	int max_len; // max bitlength
-	
+
 	int dpos;
 	int clen, absv, sgn;
 	int snum;
 	int bt, bp;
-	
+
 	int p_x, p_y;
 	int r_x; //, r_y;
 	int w, bc;
-	
-	
+
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
-	
+
 	// get max absolute value/bit length
 	max_val = MAX_V( cmp, 0 );
 	max_len = BITLEN1024P( max_val );
-	
+
 	// init models for bitlenghts and -patterns
 	mod_len = INIT_MODEL_S( max_len + 1, ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1, 2 );
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
-	mod_sgn = INIT_MODEL_B( 1, 0 );
-	
+	mod_sgn = INIT_MODEL_B( 9, 1 );
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
-	// allocate memory for absolute values storage
+
+	// allocate memory for absolute values and sign storage
 	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );
-	if ( absv_store == NULL ) {
+	sgn_store = (unsigned char*) calloc ( bc, sizeof( char ) );
+	if ( ( absv_store == NULL ) || ( sgn_store == NULL ) ) {
+		if ( absv_store != NULL ) free( absv_store );
+		if ( sgn_store != NULL ) free( sgn_store );
 		snprintf( errormessage, MSG_SIZE, MEM_ERRMSG );
 		errorlevel = 2;
 		return false;
 	}
-	
+
+	// set up quick access arrays for sign context
+	sgn_nbh = sgn_store - 1;
+	sgn_nbv = sgn_store - w;
+
 	// set up context quick access array
 	pjg_aavrg_prepare( c_absc, c_weight, absv_store, cmp );
-	
+
 	// locally store pointer to coefficients and zero distribution list
 	coeffs = colldata[ cmp ][ 0 ];
-	zdstls = zdstdata[ cmp ];	
-	
+	zdstls = zdstdata[ cmp ];
+
 	// arithmetic compression loop
 	for ( dpos = 0; dpos < bc; dpos++ )
-	{		
+	{
 		//calculate x/y positions in band
 		p_y = dpos / w;
 		// r_y = h - ( p_y + 1 );
 		p_x = dpos % w;
 		r_x = w - ( p_x + 1 );
-		
+
 		// get segment-number from zero distribution list and segmentation set
 		snum = segm_tab[ zdstls[dpos] ];
 		// calculate contexts (for bit length)
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
-		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context				
+		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_len, snum );
 		// decode bit length of current coefficient
 		clen = decode_ari( dec, mod_len );
-		
+
 		// simple treatment if coefficient is zero
 		if ( clen == 0 ) {
 			// coeffs[ dpos ] = 0;
@@ -6485,19 +6515,25 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 				bt = decode_ari( dec, mod_res );
 				// update absv
 				absv = absv << 1;
-				if ( bt ) absv |= 1; 
+				if ( bt ) absv |= 1;
 			}
-			// decode sign
+			// decode sign (left + top neighbor context)
+			ctx_sgn = ( p_x > 0 ) ? sgn_nbh[ dpos ] : 0;
+			if ( p_y > 0 ) ctx_sgn += 3 * sgn_nbv[ dpos ];
+			if ( ctx_sgn > 8 ) ctx_sgn = 8;
+			mod_sgn->shift_context( ctx_sgn );
 			sgn = decode_ari( dec, mod_sgn );
 			// copy to colldata
 			coeffs[ dpos ] = ( sgn == 0 ) ? absv : -absv;
-			// store absolute value/sign
+			// store absolute value and sign
 			absv_store[ dpos ] = absv;
+			sgn_store[ dpos ] = sgn + 1;
 		}
 	}
-	
+
 	// free memory / clear models
 	free( absv_store );
+	free( sgn_store );
 	delete ( mod_len );
 	delete ( mod_res );
 	delete ( mod_sgn );
