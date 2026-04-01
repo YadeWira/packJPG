@@ -21,6 +21,9 @@
 - fixed: compression ratio showed >100% in mix mode due to `jpgfilesize=0`
   during decompression; ratio accumulation now only runs for F_JPG files
 - fixed: stale `-list` flag shown in help (replaced by `list` subcommand)
+- security: added bounds checks in JPEG segment parser to prevent out-of-bounds
+  reads from maliciously crafted JPEG files (DHT, DQT, DRI, SOS, SOF segments
+  and all header parser loops); no impact on valid JPEG files
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 ---
