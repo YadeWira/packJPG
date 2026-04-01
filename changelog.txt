@@ -208,4 +208,6 @@ v3.1 (03/31/2026) (public - non build)
  - fixed: compression ratio showed >100% in mix mode due to jpgfilesize=0
    during decompression; ratio accumulation now only runs for F_JPG files
  - fixed: stale -list flag shown in help (replaced by 'list' subcommand)
+ - improved: DC sign now uses 9-state neighbor context (left × top signs)
+   instead of no context; ~0.25% better compression on average
  - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
