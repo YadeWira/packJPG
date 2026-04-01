@@ -363,7 +363,7 @@ The official developer blog for packJPG:
  http://packjpg.encode.ru/
  
 For questions and bug reports:
- packjpg (at) matthiasstirner.com
+ https://github.com/YadeWira/packJPG/issues
 
 
 ____________________________________
@@ -981,7 +981,6 @@ INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
 INTERN const char*	copyright    = "2006-2026 Yade Bravo & Matthias Stirner";
-INTERN const char*  email        = "packjpg (at) matthiasstirner.com";
 INTERN const char*  pjg_ext      = "pjg";
 INTERN const char*  jpg_ext      = "jpg";
 #endif
@@ -2146,7 +2145,6 @@ INTERN void show_help( void )
 	fprintf( msgout, "with bit-for-bit identical reconstruction.\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Website: %s\n", website );
-	fprintf( msgout, "Email  : %s\n", email );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Usage: %s <subcommand> [switches] [filename(s)]\n", appname );
 	fprintf( msgout, "\n" );
