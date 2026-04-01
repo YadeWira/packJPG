@@ -6,9 +6,6 @@ reconstruction. Typical file size reduction: ~20%.
 
 **Supported platforms:** Linux x64, Windows 7 and later (x86/x64).
 
-> **Note:** Windows XP may work in some cases but is not supported and will
-> not receive bug fixes.
-
 
 ## Windows XP build (EXPERIMENTAL)
 
