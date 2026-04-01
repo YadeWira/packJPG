@@ -1,0 +1,59 @@
+# packJPG v3.1 — Package Contents
+
+## Source files (`source/`)
+
+Core files required to compile packJPG as an executable or library:
+
+| File | Description |
+|---|---|
+| `packjpg.cpp` | main source file: compression, decompression, CLI |
+| `aricoder.cpp` | arithmetic coder implementation |
+| `aricoder.h` | arithmetic coder header |
+| `bitops.cpp` | bitwise I/O routines |
+| `bitops.h` | bitwise I/O routines header |
+| `dct8x8.h` | DCT lookup tables for IDCT operations |
+| `pjpgtbl.h` | compression helper tables |
+| `packjpglib.h` | header for static library builds (define `BUILD_LIB`) |
+| `packjpgdll.h` | header for shared library / DLL builds (define `BUILD_DLL`) |
+
+**Build system:**
+
+| File | Description |
+|---|---|
+| `Makefile` | primary build file; targets: `linux-x64`, `win-x64`, `win-x86`, `lib`, `dll`, `dev`, `all-platforms` |
+| `build_all.sh` | shell script to build all distribution targets at once |
+
+**Windows resources:**
+
+| File | Description |
+|---|---|
+| `icons.rc` | resource script for Windows icon embedding |
+| `app_icon.ico` | application icon (.ico format) |
+| `file_icon.ico` | suggested icon for .pjg files (.ico format) |
+
+**Legacy / optional** (unmaintained, provided as reference):
+
+| File | Description |
+|---|---|
+| `Makefile_osx` | old OS X Makefile (provided by Ryan Flynn) |
+| `packjpg.spec` | RPM spec file (provided by Bryan Stillwell) |
+
+
+## Documentation (`docs/`)
+
+| File | Description |
+|---|---|
+| `contents.md` | this file |
+| `developer.md` | developer build and debug switches |
+| `howtocompile.md` | build and compilation instructions |
+| `versionnumbering.md` | version numbering guideline |
+| `lgpl-3.0.txt` | full text of the LGPL v3 license |
+
+
+## Not included
+
+There is no separate algorithm documentation. All implementation details
+are documented within the source code (`packjpg.cpp`).
+
+---
+packJPG by Yade Bravo, 03/31/2026

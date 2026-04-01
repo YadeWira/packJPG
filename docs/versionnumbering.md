@@ -1,13 +1,11 @@
-Version numbering guideline
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Version Numbering Guideline
 
 The packJPG version consists of two parts: the main version number and
-the subversion string. Example: 'packJPG v2.4a' has main version '2.4'
-and subversion string 'a'.
+the subversion string. Example: `packJPG v2.4a` has main version `2.4`
+and subversion string `a`.
 
 
-Compatibility rules
-~~~~~~~~~~~~~~~~~~~~
+## Compatibility rules
 
 Subversions are compatible with each other: files compressed by v2.4
 can be decompressed by v2.4a, v2.4b, etc., and vice versa.
@@ -19,40 +17,40 @@ The PJG format version is embedded in every compressed file. Attempting
 to decompress a file with the wrong version produces a clear error.
 
 
-Subversion string
-~~~~~~~~~~~~~~~~~~
+## Subversion string
 
 The subversion string indicates smaller changes that do not break
 compatibility: bug fixes, speed improvements, minor additions. It can
 be empty (first release of a new main version) and is enumerated as
-'a', 'b', 'c', ..., 'z', 'aa', 'ab', ..., 'zz'. It may also be used
-descriptively for targeted releases, e.g. 'packJPG v2.5fast'.
+`a`, `b`, `c`, ..., `z`, `aa`, `ab`, ..., `zz`. It may also be used
+descriptively for targeted releases, e.g. `packJPG v2.5fast`.
 
 
-Where to change the version
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+## Where to change the version
 
-The version is defined in packjpg.cpp via two constants:
+The version is defined in `packjpg.cpp` via two constants:
 
-  appversion   unsigned char, encodes major*10 + minor (e.g. 30 = v3.0)
-  subversion   const char*, subversion string (e.g. "" or "a")
+```cpp
+appversion   // unsigned char, encodes major*10 + minor (e.g. 31 = v3.1)
+subversion   // const char*, subversion string (e.g. "" or "a")
+```
 
 These are also written into every PJG file header and checked on
 decompression to enforce compatibility.
 
 
-Special format markers
-~~~~~~~~~~~~~~~~~~~~~~~
+## Special format markers
 
 In addition to the version byte, PJG files may contain format markers
 before the version byte:
 
-  0x00   custom compression settings block follows (8 bytes)
-  0x01   parallel format: file was compressed with -sfth (v3.0+)
+| Marker | Description |
+|---|---|
+| `0x00` | custom compression settings block follows (8 bytes) |
+| `0x01` | parallel format: file was compressed with `-sfth` (v3.0+) |
 
-Files with the 0x01 marker require packJPG v3.0 or later to decompress.
+Files with the `0x01` marker require packJPG v3.0 or later to decompress.
 Files without it are decompressible by any build of the same main version.
 
-
-____________________________________
-packJPG by Yade Bravo, 03/30/2026
+---
+packJPG by Yade Bravo, 03/31/2026
