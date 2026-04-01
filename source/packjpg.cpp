@@ -3134,12 +3134,12 @@ INTERN bool merge_jpeg( void )
 		
 		// seek till start-of-scan
 		for ( type = 0x00; type != 0xDA; ) {
-			if ( ( int ) hpos >= hdrs ) break;
+			if ( (int)hpos + 4 > hdrs ) break;
 			type = hdrdata[ hpos + 1 ];
 			len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 			hpos += len;
 		}
-		
+
 		// write header data to file
 		str_out->write( hdrdata + tmp, ( hpos - tmp ) );
 		
@@ -3237,7 +3237,7 @@ INTERN bool decode_jpeg( void )
 	{
 		// seek till start-of-scan, parse only DHT, DRI and SOS
 		for ( type = 0x00; type != 0xDA; ) {
-			if ( ( int ) hpos >= hdrs ) break;
+			if ( (int)hpos + 4 > hdrs ) break;
 			type = hdrdata[ hpos + 1 ];
 			len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 			if ( ( type == 0xC4 ) || ( type == 0xDA ) || ( type == 0xDD ) ) {
@@ -3599,7 +3599,7 @@ INTERN bool recode_jpeg( void )
 	{
 		// seek till start-of-scan, parse only DHT, DRI and SOS
 		for ( type = 0x00; type != 0xDA; ) {
-			if ( ( int ) hpos >= hdrs ) break;
+			if ( (int)hpos + 4 > hdrs ) break;
 			type = hdrdata[ hpos + 1 ];
 			len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 			if ( ( type == 0xC4 ) || ( type == 0xDA ) || ( type == 0xDD ) ) {
@@ -4402,7 +4402,7 @@ INTERN bool jpg_setup_imginfo( void )
 	int i;
 	
 	// header parser loop
-	while ( ( int ) hpos < hdrs ) {
+	while ( (int)hpos + 4 <= hdrs ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 		// do not parse DHT & DRI
@@ -4524,16 +4524,19 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				rval = RBITS( segment[ hpos ], 4 );
 				if ( ((lval < 0) || (lval >= 2)) || ((rval < 0) || (rval >= 4)) )
 					break;
-					
+
 				hpos++;
+				// need at least 16 bytes for the count table
+				if ( hpos + 16 > len ) break;
+				skip = 16;
+				for ( i = 0; i < 16; i++ )
+					skip += ( int ) segment[ hpos + i ];
+				// need count-table + all code bytes to be within segment
+				if ( hpos + (unsigned)skip > len ) break;
 				// build huffman codes & trees
 				jpg_build_huffcodes( &(segment[ hpos + 0 ]), &(segment[ hpos + 16 ]),
 					&(hcodes[ lval ][ rval ]), &(htrees[ lval ][ rval ]) );
 				htset[ lval ][ rval ] = 1;
-				
-				skip = 16;
-				for ( i = 0; i < 16; i++ )		
-					skip += ( int ) segment[ hpos + i ];				
 				hpos += skip;
 			}
 			
@@ -4552,8 +4555,9 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				rval = RBITS( segment[ hpos ], 4 );
 				if ( (lval < 0) || (lval >= 2) ) break;
 				if ( (rval < 0) || (rval >= 4) ) break;
-				hpos++;				
+				hpos++;
 				if ( lval == 0 ) { // 8 bit precision
+					if ( hpos + 64 > len ) break;
 					for ( i = 0; i < 64; i++ ) {
 						qtables[ rval ][ i ] = ( unsigned short ) segment[ hpos + i ];
 						if ( qtables[ rval ][ i ] == 0 ) break;
@@ -4561,6 +4565,7 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 					hpos += 64;
 				}
 				else { // 16 bit precision
+					if ( hpos + 128 > len ) break;
 					for ( i = 0; i < 64; i++ ) {
 						qtables[ rval ][ i ] =
 							B_SHORT( segment[ hpos + (2*i) ], segment[ hpos + (2*i) + 1 ] );
@@ -4580,10 +4585,17 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 			
 		case 0xDD: // DRI segment
 			// define restart interval
-			rsti = B_SHORT( segment[ hpos ], segment[ hpos + 1 ] );			
+			if ( hpos + 2 > len ) return true; // malformed but non-fatal
+			rsti = B_SHORT( segment[ hpos ], segment[ hpos + 1 ] );
 			return true;
 			
 		case 0xDA: // SOS segment
+			// need component count byte + 2 bytes per component + 3 spectral bytes
+			if ( hpos + 1 > len ) {
+				snprintf( errormessage, MSG_SIZE, "truncated sos segment" );
+				errorlevel = 2;
+				return false;
+			}
 			// prepare next scan
 			cs_cmpc = segment[ hpos ];
 			if ( cs_cmpc > cmpc ) {
@@ -4593,6 +4605,11 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				return false;
 			}
 			hpos++;
+			if ( hpos + (unsigned)(cs_cmpc * 2) + 3 > len ) {
+				snprintf( errormessage, MSG_SIZE, "truncated sos segment" );
+				errorlevel = 2;
+				return false;
+			}
 			for ( i = 0; i < cs_cmpc; i++ ) {
 				for ( cmp = 0; ( segment[ hpos ] != cmpnfo[ cmp ].jid ) && ( cmp < cmpc ); cmp++ );
 				if ( cmp == cmpc ) {
@@ -4610,6 +4627,11 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 					return false;
 				}
 				hpos += 2;
+			}
+			if ( hpos + 3 > len ) {
+				snprintf( errormessage, MSG_SIZE, "truncated sos segment" );
+				errorlevel = 2;
+				return false;
 			}
 			cs_from = segment[ hpos + 0 ];
 			cs_to   = segment[ hpos + 1 ];
@@ -4643,6 +4665,12 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 			else
 				jpegtype = 1;
 				
+			// need precision(1) + height(2) + width(2) + cmpc(1) = 6 bytes
+			if ( hpos + 6 > len ) {
+				snprintf( errormessage, MSG_SIZE, "truncated sof segment" );
+				errorlevel = 2;
+				return false;
+			}
 			// check data precision, only 8 bit is allowed
 			lval = segment[ hpos ];
 			if ( lval != 8 ) {
@@ -4650,7 +4678,7 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				errorlevel = 2;
 				return false;
 			}
-			
+
 			// image size, height & component count
 			imgheight = B_SHORT( segment[ hpos + 1 ], segment[ hpos + 2 ] );
 			imgwidth  = B_SHORT( segment[ hpos + 3 ], segment[ hpos + 4 ] );
@@ -4667,6 +4695,12 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 			}
 			
 			hpos += 6;
+			// need 3 bytes per component
+			if ( hpos + (unsigned)(cmpc * 3) > len ) {
+				snprintf( errormessage, MSG_SIZE, "truncated sof component data" );
+				errorlevel = 2;
+				return false;
+			}
 			// components contained in image
 			for ( cmp = 0; cmp < cmpc; cmp++ ) {
 				cmpnfo[ cmp ].jid = segment[ hpos ];
@@ -4817,7 +4851,7 @@ INTERN bool jpg_rebuild_header( void )
 	hdrw = new MemoryWriter();
 	
 	// header parser loop
-	while ( ( int ) hpos < hdrs ) {
+	while ( (int)hpos + 4 <= hdrs ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 		// discard any unneeded meta info
@@ -7017,16 +7051,16 @@ INTERN bool pjg_optimize_header( void )
 	int i;
 	
 	
-	// search for DHT (0xFFC4) & DQT (0xFFDB) marker segments	
+	// search for DHT (0xFFC4) & DQT (0xFFDB) marker segments
 	// header parser loop
-	while ( ( int ) hpos < hdrs ) {
+	while ( (int)hpos + 4 <= hdrs ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 		if ( type == 0xC4 ) { // for DHT
 			fpos = hpos + len; // reassign length to end position
 			hpos += 4; // skip marker & length
-			while ( hpos < fpos ) {			
-				hpos++;				
+			while ( hpos < fpos ) {
+				hpos++;
 				// table found - compare with each of the four standard tables		
 				for ( i = 0; i < 4; i++ ) {
 					for ( spos = 0; spos < std_huff_lengths[ i ]; spos++ ) {
@@ -7096,12 +7130,12 @@ INTERN bool pjg_unoptimize_header( void )
 	int i;
 	
 	
-	// search for DHT (0xFFC4) & DQT (0xFFDB) marker segments	
+	// search for DHT (0xFFC4) & DQT (0xFFDB) marker segments
 	// header parser loop
-	while ( ( int ) hpos < hdrs ) {
+	while ( (int)hpos + 4 <= hdrs ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
-		
+
 		if ( type == 0xC4 ) { // for DHT
 			fpos = hpos + len; // reassign length to end position
 			hpos += 4; // skip marker & length
@@ -7991,7 +8025,7 @@ INTERN bool dump_info( void )
 	fprintf( fp, "\nfile header structure:\n" );
 	fprintf( fp, " type  length   hpos\n" );
 	// header parser loop
-	for ( hpos = 0; (int) hpos < hdrs; hpos += len ) {
+	for ( hpos = 0; (int)hpos + 4 <= hdrs; hpos += len ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 		fprintf( fp, " FF%2X  %6i %6i\n", (int) type, (int) len, (int) hpos );
