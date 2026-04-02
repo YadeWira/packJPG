@@ -1152,12 +1152,14 @@ int main( int argc, char** argv )
 					int done = ( filetype != F_UNK ) ? ++g_files_done : g_files_done.load();
 
 					// --- console (all under the same lock) ---
-					// if this file produced output (errors/warnings), print it cleanly
-					if ( !tl_ui_buf.empty() ) {
-						// erase current bar line, print error, then redraw bar below
+					// In verbose mode (v1/v2) show per-file output interleaved with bar.
+					// At verbosity 0 or -1 suppress it — errors are collected in err_list[]
+					// and shown cleanly after the bar completes.
+					if ( !tl_ui_buf.empty() && verbosity >= 1 ) {
 						fprintf( msgout, "\r%*s\r", BARLEN + 34, "" );
 						fwrite( tl_ui_buf.data(), 1, tl_ui_buf.size(), msgout );
 					}
+					tl_ui_buf.clear();
 					// draw/update progress bar
 					int barpos = ( done * BARLEN ) / ( file_proc_cnt > 0 ? file_proc_cnt : 1 );
 					#if defined(_WIN32)
@@ -1234,8 +1236,8 @@ int main( int argc, char** argv )
 	end = WallClock::now();
 
 	cleanup:
-	// errors summary: only needed for -v2 or progress bar
-	if ( ( verbosity == -1 ) || ( verbosity == 2 ) ) {
+	// errors summary: shown after MT run (verbosity 0/-1) or in verbose mode (v2)
+	if ( ( verbosity <= 0 && num_threads > 1 ) || ( verbosity == 2 ) ) {
 		// print summary of errors to screen
 		if ( error_cnt > 0 ) {
 			fprintf( stderr, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );

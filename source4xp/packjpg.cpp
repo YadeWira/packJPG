@@ -1119,8 +1119,8 @@ int main( int argc, char** argv )
 	}
 	end = WallClock::now();
 
-	// errors summary: only needed for -v2 or progress bar
-	if ( ( verbosity == -1 ) || ( verbosity == 2 ) ) {
+	// errors summary: shown after MT run (verbosity 0/-1) or in verbose mode (v2)
+	if ( ( verbosity <= 0 && num_threads > 1 ) || ( verbosity == 2 ) ) {
 		// print summary of errors to screen
 		if ( error_cnt > 0 ) {
 			fprintf( stderr, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
