@@ -976,7 +976,7 @@ INTERN const unsigned char appversion = 31;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "03/31/2026";
+INTERN const char*  versiondate  = "04/02/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -1020,9 +1020,8 @@ int main( int argc, char** argv )
 
 	// write program info to screen (suppressed in module mode)
 	if ( !module_mode ) {
-		fprintf( msgout,  "\n%s--> %s v%i.%i%s (%s) by %s <--%s\n",
-				COL_BCYAN, apptitle, appversion / 10, appversion % 10, subversion, versiondate, author, COL_RESET );
-		fprintf( msgout, "Copyright %s\nAll rights reserved\n\n", copyright );
+		fprintf( msgout, "\n%s%s v%i.%i%s%s  \xe2\x80\xa2  by %s\n%s\n",
+				COL_BCYAN, apptitle, appversion / 10, appversion % 10, subversion, COL_RESET, author, COL_RESET );
 	}
 	
 	// check if user input is wrong, show help screen if it is
@@ -1155,28 +1154,35 @@ int main( int argc, char** argv )
 		else
 			fprintf( msgout, "ERROR %i %.2f\n", error_cnt, total );
 	} else {
-	fprintf( msgout,  "\n\n-> %i file(s) processed, %i error(s), %i warning(s)\n",
-		file_proc_cnt, error_cnt, warn_cnt );
+	fprintf( msgout,  "\n%i file(s)  %i ok  %i error(s)  %i warning(s)\n",
+		file_proc_cnt, file_proc_cnt - error_cnt, error_cnt, warn_cnt );
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( acc_jpgsize > 0 || acc_pjgsize > 0 ) ) {
-		// acc_jpgsize in bytes → convert to MB for MB/s
 		double acc_jpg_mb = acc_jpgsize / ( 1024.0 * 1024.0 );
 		acc_jpgsize /= 1024.0; acc_pjgsize /= 1024.0;
-		total = std::chrono::duration<double>( end - begin ).count(); 
+		total = std::chrono::duration<double>( end - begin ).count();
 		mbps  = ( total > 0 ) ? ( acc_jpg_mb / total ) : acc_jpg_mb;
 		cr    = ( acc_jpgsize > 0 ) ? ( 100.0 * acc_pjgsize / acc_jpgsize ) : 0;
-		
+
+		#if defined(_WIN32)
 		fprintf( msgout,  "%s --------------------------------- %s\n", COL_GRAY, COL_RESET );
+		#else
+		fprintf( msgout,  "%s \xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80 %s\n", COL_GRAY, COL_RESET );
+		#endif
 		if ( total >= 0 ) {
-			fprintf( msgout,  " total time        : %8.2f sec\n", total );
-			fprintf( msgout,  " avrg. speed       : %8.2f MB/s\n", mbps );
+			fprintf( msgout,  " time    %8.2f sec\n", total );
+			fprintf( msgout,  " speed   %8.2f MB/s\n", mbps );
 		}
 		else {
-			fprintf( msgout,  " total time        : %8s sec\n", "N/A" );
-			fprintf( msgout,  " avrg. speed       : %8s MB/s\n", "N/A" );
+			fprintf( msgout,  " time    %8s sec\n", "N/A" );
+			fprintf( msgout,  " speed   %8s MB/s\n", "N/A" );
 		}
-		fprintf( msgout,  " avrg. comp. ratio : %8.2f %%\n", cr );
+		fprintf( msgout,  " ratio   %8.2f %%\n", cr );
+		#if defined(_WIN32)
 		fprintf( msgout,  "%s --------------------------------- %s\n", COL_GRAY, COL_RESET );
+		#else
+		fprintf( msgout,  "%s \xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80 %s\n", COL_GRAY, COL_RESET );
+		#endif
 		#if defined(DEV_INFOS)
 		if ( acc_jpgsize > 0 ) { 
 			fprintf( msgout,  " header %%          : %8.2f %%\n", 100.0 * dev_size_hdr / acc_jpgsize );
@@ -1913,11 +1919,21 @@ INTERN void process_ui( void )
 				case A_LIST:     actionmsg = "Listing"; break;
 				default:         actionmsg = "Processing"; break;
 			}
-			fprintf( msgout, "\nProcessing file %i of %i \"%s\" -> %s -> ",
-					file_proc_no + 1, file_proc_cnt,
-					filelist[ file_no ], actionmsg );
-			if ( local_verbosity > 1 )
-				fprintf( msgout, "\n" );
+			{
+				const char* _sl = strrchr( filelist[ file_no ], '/' );
+				#if defined(_WIN32)
+				const char* _bs = strrchr( filelist[ file_no ], '\\' );
+				if ( _bs && ( !_sl || _bs > _sl ) ) _sl = _bs;
+				#endif
+				const char* _fn = _sl ? _sl + 1 : filelist[ file_no ];
+				if ( local_verbosity > 1 )
+					fprintf( msgout, "\n----------------------------------------\n" );
+				#if defined(_WIN32)
+				fprintf( msgout, "\n  ...  %-46.46s", _fn );
+				#else
+				fprintf( msgout, "\n  \xe2\xa0\xb8  %-46.46s", _fn );
+				#endif
+			}
 			// actionmsg already set, skip the second fprintf below
 			goto after_check;
 		}
@@ -1945,7 +1961,11 @@ INTERN void process_ui( void )
 	}
 	else { // progress bar UI
 		// update progress message
-		UIPRINTF( "Processing file %2i of %2i ", file_proc_no + 1, file_proc_cnt );
+		#if defined(_WIN32)
+		UIPRINTF( "  ...  %2i / %-2i  ", file_proc_no + 1, file_proc_cnt );
+		#else
+		UIPRINTF( "  \xe2\xa0\xb8  %2i / %-2i  ", file_proc_no + 1, file_proc_cnt );
+		#endif
 		progress_bar( file_no, file_cnt );
 		UIPRINTF( "\r" );
 		execute( check_file );
@@ -1995,13 +2015,41 @@ INTERN void process_ui( void )
 		if ( !use_buf ) {
 			switch ( local_verbosity ) {
 				case 0:
-					if ( errorlevel < err_tol ) {
-						if ( action == A_COMPRESS ) fprintf( msgout, "%s%.2f%%%s", COL_BGREEN, cr, COL_RESET );
-						else if ( action != A_LIST ) fprintf( msgout, "%sDONE%s", COL_BGREEN, COL_RESET );
-						// A_LIST: output already printed inside list_pjg
+					{
+						const char* _sl = strrchr( filelist[ file_no ], '/' );
+						#if defined(_WIN32)
+						const char* _bs = strrchr( filelist[ file_no ], '\\' );
+						if ( _bs && ( !_sl || _bs > _sl ) ) _sl = _bs;
+						#endif
+						const char* _fn = _sl ? _sl + 1 : filelist[ file_no ];
+						if ( errorlevel < err_tol ) {
+							if ( action == A_COMPRESS ) {
+								long long orig_kb = ( jpgfilesize + 512 ) / 1024;
+								long long comp_kb = ( pjgfilesize + 512 ) / 1024;
+								double time_s = ( total >= 0 ) ? total / 1000.0 : 0.0;
+								#if defined(_WIN32)
+								fprintf( msgout, "\r  +  %-46.46s %6lld KB -> %6lld KB  %5.1f%%  %5.2fs\n",
+									_fn, orig_kb, comp_kb, cr, time_s );
+								#else
+								fprintf( msgout, "\r  %s\xe2\x9c\x93%s  %-46.46s %6ld KB \xe2\x86\x92 %6ld KB  %5.1f%%  %5.2fs\n",
+									COL_BGREEN, COL_RESET, _fn, (long)orig_kb, (long)comp_kb, cr, time_s );
+								#endif
+							} else if ( action != A_LIST ) {
+								#if defined(_WIN32)
+								fprintf( msgout, "\r  +  %-46.46s DONE\n", _fn );
+								#else
+								fprintf( msgout, "\r  %s\xe2\x9c\x93%s  %-46.46s DONE\n", COL_BGREEN, COL_RESET, _fn );
+								#endif
+							}
+						} else {
+							#if defined(_WIN32)
+							fprintf( msgout, "\r  x  %-46.46s ERROR\n", _fn );
+							#else
+							fprintf( msgout, "\r  %s\xe2\x9c\x97%s  %-46.46s %sERROR%s\n",
+								COL_BRED, COL_RESET, _fn, COL_BRED, COL_RESET );
+							#endif
+						}
 					}
-					else fprintf( msgout, "%sERROR%s", COL_BRED, COL_RESET );
-					if ( errorlevel > 0 ) fprintf( msgout, "\n" );
 					break;
 
 				case 1:
@@ -2050,11 +2098,14 @@ INTERN void process_ui( void )
 	else { // progress bar UI
 		// if this is the last file, update progress bar one last time
 		if ( file_no + 1 == file_cnt ) {
-			// update progress message — add 1 for the current file if it was processed
 			int shown = ( filetype != F_UNK ) ? file_proc_no + 1 : ( file_proc_no > 0 ? file_proc_no : file_proc_cnt );
-			UIPRINTF( "Processed %2i of %2i files ", shown, file_proc_cnt );
+			#if defined(_WIN32)
+			UIPRINTF( "  +  %2i / %-2i  ", shown, file_proc_cnt );
+			#else
+			UIPRINTF( "  \xe2\x9c\x93  %2i / %-2i  ", shown, file_proc_cnt );
+			#endif
 			progress_bar( 1, 1 );
-			UIPRINTF( "\r" );
+			UIPRINTF( "\n" );
 		}
 	}
 
@@ -7441,13 +7492,18 @@ INTERN inline void progress_bar( int current, int last )
 	fprintf( msgout, "[" );
 	#if defined(_WIN32)
 	for ( i = 0; i < barpos; i++ )
-		fprintf( msgout, "\xFE" );
+		fprintf( msgout, "#" );
 	#else
 	for ( i = 0; i < barpos; i++ )
-		fprintf( msgout, "X" );
+		fprintf( msgout, "\xe2\x96\x88" );
 	#endif
+	#if defined(_WIN32)
 	for (  ; i < BARLEN; i++ )
 		fprintf( msgout, " " );
+	#else
+	for (  ; i < BARLEN; i++ )
+		fprintf( msgout, "\xe2\x96\x91" );
+	#endif
 	fprintf( msgout, "]" );
 }
 #endif

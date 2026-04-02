@@ -24,6 +24,10 @@
 - security: added bounds checks in JPEG segment parser to prevent out-of-bounds
   reads from maliciously crafted JPEG files (DHT, DQT, DRI, SOS, SOF segments
   and all header parser loops); no impact on valid JPEG files
+- ui: modernized CLI interface — new header format, Unicode block progress bar
+  (█/░), braille spinner animation (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) in multi-thread mode,
+  check/cross marks (✓/✗) for results, and cleaner summary with Unicode
+  separators (─); Windows fallback uses ASCII equivalents
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 ---
