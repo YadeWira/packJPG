@@ -396,7 +396,8 @@ packJPG by Matthias Stirner, 01/2016
 // ANSI escape codes — empty strings when colors are disabled.
 // Call init_colors() once at startup (no-op in library builds).
 #if !defined(BUILD_LIB)
-static bool use_color = false;
+static bool use_color    = false;
+static bool force_no_color = false;  // set by --no-color flag
 
 #define COL_RESET   (use_color ? "\033[0m"   : "")
 #define COL_CYAN    (use_color ? "\033[36m"  : "")
@@ -408,6 +409,7 @@ static bool use_color = false;
 
 static void init_colors( void )
 {
+	if ( force_no_color ) return;
 #if defined(_WIN32) || defined(WIN32)
 	HANDLE h = GetStdHandle( STD_OUTPUT_HANDLE );
 	if ( h == INVALID_HANDLE_VALUE ) return;
@@ -418,7 +420,8 @@ static void init_colors( void )
 	if ( SetConsoleMode( h, mode | 0x0004 ) )
 		use_color = true;
 #else
-	// Enable colors if stdout is a real terminal and NO_COLOR is not set.
+	// Enable colors if stdout is a real terminal, NO_COLOR env is not set,
+	// and --no-color flag was not passed.
 	if ( isatty( fileno( stdout ) ) && getenv( "NO_COLOR" ) == NULL )
 		use_color = true;
 #endif
@@ -1716,6 +1719,9 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-np" ) == 0 ) {
 			wait_exit = false;
 		}
+		else if ( strcmp((*argv), "--no-color" ) == 0 ) {
+			force_no_color = true;
+		}
 		else if ( strcmp((*argv), "-r" ) == 0 ) {
 			recursive = true;
 		}
@@ -2356,7 +2362,9 @@ INTERN void show_help( void )
 	fprintf( msgout, "\n" );
 	fprintf( msgout, " [-ver]   verify files after processing\n" );
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
+	fprintf( msgout, " [-vp]    progress bar mode (overrides -v?)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
+	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );

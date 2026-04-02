@@ -1591,6 +1591,9 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-np" ) == 0 ) {
 			wait_exit = false;
 		}
+		else if ( strcmp((*argv), "--no-color" ) == 0 ) {
+			// no-op: XP build never uses ANSI colors; accepted for compatibility
+		}
 		else if ( strcmp((*argv), "-r" ) == 0 ) {
 			recursive = true;
 		}
@@ -2210,7 +2213,9 @@ INTERN void show_help( void )
 	fprintf( msgout, "\n" );
 	fprintf( msgout, " [-ver]   verify files after processing\n" );
 	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
+	fprintf( msgout, " [-vp]    progress bar mode (overrides -v?)\n" );
 	fprintf( msgout, " [-np]    no pause after processing files\n" );
+	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  parallel single-file compression via Win32 threads\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
