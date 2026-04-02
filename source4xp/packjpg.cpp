@@ -1156,6 +1156,13 @@ int main( int argc, char** argv )
 	} else {
 	fprintf( msgout,  "\n%i file(s)  %i ok  %i error(s)  %i warning(s)\n",
 		file_proc_cnt, file_proc_cnt - error_cnt, error_cnt, warn_cnt );
+	if ( acc_jpg_cnt > 0 || acc_pjg_cnt > 0 ) {
+		fprintf( msgout, " " );
+		if ( acc_jpg_cnt > 0 ) fprintf( msgout, "compressed: %i JPG", acc_jpg_cnt );
+		if ( acc_jpg_cnt > 0 && acc_pjg_cnt > 0 ) fprintf( msgout, "  " );
+		if ( acc_pjg_cnt > 0 ) fprintf( msgout, "decompressed: %i PJG", acc_pjg_cnt );
+		fprintf( msgout, "\n" );
+	}
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( acc_jpgsize > 0 || acc_pjgsize > 0 ) ) {
 		double acc_jpg_mb = acc_jpgsize / ( 1024.0 * 1024.0 );
