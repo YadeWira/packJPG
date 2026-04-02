@@ -976,11 +976,11 @@ INTERN const unsigned char appversion = 31;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-INTERN const char*  versiondate  = "04/02/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "04/02/2026";
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
-INTERN const char*	copyright    = "2006-2026 Yade Bravo & Matthias Stirner";
+[[maybe_unused]] INTERN const char*	copyright    = "2006-2026 Yade Bravo & Matthias Stirner";
 INTERN const char*  pjg_ext      = "pjg";
 INTERN const char*  jpg_ext      = "jpg";
 #endif
