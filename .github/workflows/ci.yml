@@ -72,3 +72,4 @@ jobs:
         with:
           files: dist/*
           body: ${{ steps.changelog.outputs.notes }}
+          generate_release_notes: true
