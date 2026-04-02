@@ -29,6 +29,7 @@
 
 # Folders to ignore
 /zzz_backup/
+/dist/
 
 # Test / output files
 *.jpg
