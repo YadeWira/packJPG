@@ -813,7 +813,7 @@ THREAD_LOCAL int  errorlevel;
 	----------------------------------------------- */
 
 #if !defined( BUILD_LIB )
-INTERN int  verbosity  = -1;	// level of verbosity
+INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
 INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
