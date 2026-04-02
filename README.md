@@ -415,18 +415,52 @@ with large images.
 
 ## Building from source
 
-The source code is in the `source/` subdirectory.
+### Prerequisites
 
-Requires a C++17 compliant compiler. Tested with clang 18 and g++ 13.
-Cross-compilation for Windows is supported via mingw-w64.
+| Target | Compiler |
+|---|---|
+| Linux x64 | `g++` ≥ 13 or `clang++` ≥ 18 (C++17) |
+| Windows x64 | `x86_64-w64-mingw32-g++` |
+| Windows x86 / Win7 | `i686-w64-mingw32-g++` |
+| Windows XP | `i686-w64-mingw32-g++` (C++14 mode) |
 
+On Debian/Ubuntu, install cross-compilers with:
+```
+sudo apt install build-essential mingw-w64
+```
+
+### Build all targets at once
+
+From the project root:
+```
+bash build_all.sh
+```
+
+This builds every target and collects the final binaries in `dist/`:
+```
+dist/packJPG_linux_x64
+dist/packJPG_linux_x64_native   (optimized for this machine, do not distribute)
+dist/packJPG_win_x64.exe
+dist/packJPG_win_x86.exe
+dist/packJPG_win_xp.exe
+```
+
+### Build individual targets
+
+**Linux (from `source/`):**
 ```
 cd source/
-make              # Linux x64
-./build_all.sh    # Linux x64 + Windows x64 + Windows x86
+make                  # packJPG binary in source/
+bash build_all.sh     # all desktop targets in source/bin/
 ```
 
-Binaries are stripped automatically during the build to reduce file size.
+**Windows XP (from `source4xp/`):**
+```
+cd source4xp/
+make                  # bin/packJPG_win_xp.exe
+```
+
+Binaries are stripped automatically to reduce file size.
 
 
 ## History
