@@ -58,8 +58,17 @@ jobs:
           name: packJPG-binaries
           path: dist/
 
+      - name: Extract release notes from CHANGELOG
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="$(awk "/^## v${VERSION//./\\.}/,/^---/" CHANGELOG.md | sed '$d')"
+          echo "notes<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$NOTES"    >> "$GITHUB_OUTPUT"
+          echo "EOF"       >> "$GITHUB_OUTPUT"
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.notes }}
