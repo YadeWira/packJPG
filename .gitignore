@@ -1,0 +1,14 @@
+# Only apt repo files belong in gh-pages
+dist/
+source/
+source4xp/
+test-files/
+docs/
+.github/
+build_all.sh
+build4xp.sh
+build_pkg.sh
+install.sh
+packjpg.gpg
+CHANGELOG.md
+LICENSE
