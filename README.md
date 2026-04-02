@@ -430,14 +430,19 @@ On Debian/Ubuntu, install cross-compilers with:
 sudo apt install build-essential mingw-w64
 ```
 
-### Build all targets at once
+### Build scripts (project root)
 
-From the project root:
+| Script | What it builds |
+|---|---|
+| `build_all.sh` | All targets: Linux x64, Windows x64, Windows x86, Windows XP |
+| `build4xp.sh` | Windows XP only (`dist/packJPG_win_xp.exe`) |
+
 ```
-bash build_all.sh
+bash build_all.sh    # all targets → dist/
+bash build4xp.sh     # XP only    → dist/packJPG_win_xp.exe
 ```
 
-This builds every target and collects the final binaries in `dist/`:
+Output binaries are collected in `dist/`:
 ```
 dist/packJPG_linux_x64
 dist/packJPG_linux_x64_native   (optimized for this machine, do not distribute)
@@ -446,7 +451,7 @@ dist/packJPG_win_x86.exe
 dist/packJPG_win_xp.exe
 ```
 
-### Build individual targets
+### Build individual targets manually
 
 **Linux (from `source/`):**
 ```

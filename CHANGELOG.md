@@ -1,6 +1,6 @@
 # packJPG Changelog
 
-## v3.1 (03/31/2026) — public (non build)
+## v3.1 (04/02/2026) — public
 
 - color output: program header and status lines now use ANSI colors
   (suppressed when output is not a terminal)
@@ -28,6 +28,14 @@
   (█/░), braille spinner animation (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) in multi-thread mode,
   check/cross marks (✓/✗) for results, and cleaner summary with Unicode
   separators (─); Windows fallback uses ASCII equivalents
+- fixed: Windows console set to UTF-8 at startup (`SetConsoleOutputCP(CP_UTF8)`)
+  so header/UI characters display correctly in cmd.exe and PowerShell
+- fixed: Unicode-safe file I/O on Windows — `FileReader`/`FileWriter` now use
+  `_wfopen` + `MultiByteToWideChar(CP_ACP)` instead of `std::fopen`/`std::ifstream`;
+  fixes accented and special characters in filenames on Windows 7+
+- fixed: in multi-thread mode, error/warning messages no longer interrupt the
+  progress bar; collected and printed cleanly after the bar completes
+- build: added `build4xp.sh` to project root for standalone Windows XP builds
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 ---
