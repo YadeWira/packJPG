@@ -1,0 +1,74 @@
+name: Update apt repository
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  apt-repo:
+    name: Publish to GitHub Pages apt repo
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Download .deb from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          gh release download "${{ github.event.release.tag_name }}" \
+            --repo ${{ github.repository }} \
+            --pattern "*.deb" \
+            --dir /tmp/debs
+
+      - name: Import GPG key
+        run: |
+          echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: Update apt repository
+        run: |
+          sudo apt-get install -y apt-utils
+
+          # Copy new .deb(s) into pool
+          cp /tmp/debs/*.deb pool/main/
+
+          # Generate Packages index
+          dpkg-scanpackages --multiversion pool/ \
+            > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          # Generate Release file
+          cat > dists/stable/Release << EOF
+          Origin: packJPG
+          Label: packJPG
+          Suite: stable
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: packJPG apt repository
+          EOF
+          apt-ftparchive release dists/stable >> dists/stable/Release
+
+          # Sign
+          gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
+              --batch --yes \
+              --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
+              --batch --yes \
+              -abs -o dists/stable/Release.gpg dists/stable/Release
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "apt: publish packjpg ${{ github.event.release.tag_name }}"
+          git push

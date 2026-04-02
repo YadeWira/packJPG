@@ -15,10 +15,21 @@ reconstruction. Typical file size reduction: ~20%.
 curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash
 ```
 
-Detects your package manager and installs the appropriate format:
-- **apt** (Debian/Ubuntu) → `.deb`
-- **dnf/yum** (Fedora/RHEL) → `.rpm`
-- **other** → binary extracted to `/usr/local/bin`
+On **Debian/Ubuntu**, this sets up the apt repository so future updates
+arrive via `apt upgrade`. On other distros it installs from the latest
+GitHub release directly.
+
+#### Debian/Ubuntu — apt repository (manual setup)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YadeWira/packJPG/master/packjpg.gpg \
+  | sudo tee /etc/apt/trusted.gpg.d/packjpg.asc > /dev/null
+
+echo "deb https://yadewira.github.io/packJPG stable main" \
+  | sudo tee /etc/apt/sources.list.d/packjpg.list
+
+sudo apt update && sudo apt install packjpg
+```
 
 ### Windows
 

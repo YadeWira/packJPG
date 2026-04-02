@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
-# install.sh — install packJPG from the latest GitHub release
+# install.sh — install packJPG
 #
 # Usage:
 #   curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash
-#   # or, to install to a custom prefix:
-#   curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash -s -- --prefix ~/.local
+#
+# On Debian/Ubuntu this sets up the apt repository so future updates
+# arrive via 'apt upgrade'. On other distros it installs from the
+# latest GitHub release directly.
+#
+# Options:
+#   --apt-only    set up apt repo and exit without fallback
+#   --prefix=DIR  install prefix for tar fallback (default: /usr/local)
 
 set -euo pipefail
 
 REPO="YadeWira/packJPG"
+APT_REPO="https://yadewira.github.io/packJPG"
+GPG_KEY_URL="https://raw.githubusercontent.com/YadeWira/packJPG/master/packjpg.gpg"
 PREFIX="/usr/local"
+APT_ONLY=false
 
 # ─── Parse args ──────────────────────────────────────────────────────────────
 
 for arg in "$@"; do
     case "$arg" in
-        --prefix=*) PREFIX="${arg#--prefix=}" ;;
-        --prefix)   shift; PREFIX="$1" ;;
+        --apt-only)  APT_ONLY=true ;;
+        --prefix=*)  PREFIX="${arg#--prefix=}" ;;
+        --prefix)    shift; PREFIX="$1" ;;
         *) echo "Unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
@@ -26,11 +36,35 @@ done
 need() { command -v "$1" &>/dev/null || { echo "error: '$1' is required but not found" >&2; exit 1; }; }
 need curl
 
-# Only Linux x64 is supported
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-[[ "$OS" == "Linux" ]]   || { echo "error: unsupported OS '$OS' (only Linux is supported)" >&2; exit 1; }
+[[ "$OS" == "Linux" ]]    || { echo "error: unsupported OS '$OS' (only Linux is supported)" >&2; exit 1; }
 [[ "$ARCH" == "x86_64" ]] || { echo "error: unsupported arch '$ARCH' (only x86_64 is supported)" >&2; exit 1; }
+
+SUDO=""
+[[ "$EUID" -ne 0 ]] && command -v sudo &>/dev/null && SUDO="sudo"
+
+# ─── apt path (Debian/Ubuntu) ────────────────────────────────────────────────
+
+if command -v apt &>/dev/null; then
+    echo "Setting up packJPG apt repository ..."
+
+    # Add GPG key
+    curl -fsSL "$GPG_KEY_URL" | $SUDO tee /etc/apt/trusted.gpg.d/packjpg.asc > /dev/null
+
+    # Add sources entry
+    echo "deb $APT_REPO stable main" \
+        | $SUDO tee /etc/apt/sources.list.d/packjpg.list > /dev/null
+
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y packjpg
+
+    echo ""
+    echo "packJPG installed via apt. Future updates will arrive via 'apt upgrade'."
+    exit 0
+fi
+
+$APT_ONLY && { echo "error: apt not found" >&2; exit 1; }
 
 # ─── Fetch latest release info ───────────────────────────────────────────────
 
@@ -97,9 +131,6 @@ echo "Downloading $FILENAME ..."
 curl -fsSL --progress-bar -o "$DEST" "$DOWNLOAD_URL"
 
 # ─── Install ─────────────────────────────────────────────────────────────────
-
-SUDO=""
-[[ "$EUID" -ne 0 ]] && command -v sudo &>/dev/null && SUDO="sudo"
 
 case "$INSTALL_METHOD" in
     deb)
