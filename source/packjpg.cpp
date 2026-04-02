@@ -6937,10 +6937,9 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	bwrt = new MemoryWriter();
 	
 	// decode header, ending with 256 symbol
-	// limit to 64 MB to guard against corrupt streams that never produce the end symbol
-	// 1 MB limit: legitimate PJG generic data (header, rst_err, garbage) is never this large.
-	// Guards against corrupt streams where the end symbol (256) never appears.
-	const int decode_limit = 1 * 1024 * 1024;
+	// 64 MB limit guards against corrupt streams where the end symbol (256) never appears.
+	// Must be large enough for JPEGs with embedded thumbnails / large APP segments (~2 MB headers seen).
+	const int decode_limit = 64 * 1024 * 1024;
 	model = INIT_MODEL_S( 256 + 1, 256, 1 );
 	while ( true ) {
 		c = decode_ari( dec, model );
