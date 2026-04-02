@@ -167,7 +167,9 @@ photos/lena_fast.pjg         (compressed with -sfth)
 |---|---|
 | `-ver` | verify files after processing |
 | `-v?` | level of verbosity; 0, 1 or 2 (default 0) |
+| `-vp` | progress bar mode (replaces per-file table) |
 | `-np` | no pause after processing files |
+| `--no-color` | disable ANSI color output (also respected via `NO_COLOR` env var) |
 | `-o` | overwrite existing files |
 | `-od<path>` | write output files to directory `<path>` (created if needed) |
 | `-th<n>` | number of worker threads; 0 = auto-detect (default: 1) |
