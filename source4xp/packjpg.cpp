@@ -408,6 +408,9 @@ static void init_colors( void )
 {
     // Colors not supported in XP build — always disabled.
     use_color = false;
+    // Switch console to UTF-8 so header characters render correctly.
+    SetConsoleOutputCP( CP_UTF8 );
+    SetConsoleCP( CP_UTF8 );
 }
 #endif
 // ─────────────────────────────────────────────────────────────────────────────

@@ -411,6 +411,10 @@ static void init_colors( void )
 {
 	if ( force_no_color ) return;
 #if defined(_WIN32) || defined(WIN32)
+	// Switch console to UTF-8 so multi-byte characters (•, ✓, ░, █ …) render
+	// correctly. Works on Windows 7+ and is silently ignored when not a console.
+	SetConsoleOutputCP( CP_UTF8 );
+	SetConsoleCP( CP_UTF8 );
 	HANDLE h = GetStdHandle( STD_OUTPUT_HANDLE );
 	if ( h == INVALID_HANDLE_VALUE ) return;
 	DWORD mode = 0;
