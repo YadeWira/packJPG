@@ -1012,6 +1012,7 @@ int main( int argc, char** argv )
 	double acc_pjgsize = 0;
 	int acc_jpg_cnt = 0;
 	int acc_pjg_cnt = 0;
+	int acc_list_cnt = 0;
 	
 	double mbps;
 	double cr;
@@ -1078,14 +1079,18 @@ int main( int argc, char** argv )
 					error_cnt++;
 				} else {
 					if ( errorlevel == 1 ) warn_cnt++;
-					if ( filetype == F_JPG ) {
-						acc_jpgsize += jpgfilesize;
-						acc_pjgsize += pjgfilesize;
-						acc_jpg_cnt++;
-					} else if ( filetype == F_PJG ) {
-						acc_jpgsize += jpgfilesize;
-						acc_pjgsize += pjgfilesize;
-						acc_pjg_cnt++;
+					if ( action == A_LIST ) {
+						acc_list_cnt++;
+					} else if ( action != A_STATS ) {
+						if ( filetype == F_JPG ) {
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
+							acc_jpg_cnt++;
+						} else if ( filetype == F_PJG ) {
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
+							acc_pjg_cnt++;
+						}
 					}
 				}
 			}
@@ -1111,12 +1116,16 @@ int main( int argc, char** argv )
 					error_cnt++;
 				} else {
 					if ( errorlevel == 1 ) warn_cnt++;
-					if ( action != A_STATS ) {
+					if ( action == A_LIST ) {
+						acc_list_cnt++;
+					} else if ( action != A_STATS ) {
 						if ( filetype == F_JPG ) {
 							acc_jpgsize += jpgfilesize;
 							acc_pjgsize += pjgfilesize;
 							acc_jpg_cnt++;
 						} else if ( filetype == F_PJG ) {
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
 							acc_pjg_cnt++;
 						}
 					}
@@ -1161,11 +1170,12 @@ int main( int argc, char** argv )
 	} else {
 	fprintf( msgout,  "\n%i file(s)  %i ok  %i error(s)  %i warning(s)\n",
 		file_proc_cnt, file_proc_cnt - error_cnt, error_cnt, warn_cnt );
-	if ( acc_jpg_cnt > 0 || acc_pjg_cnt > 0 ) {
+	if ( acc_jpg_cnt > 0 || acc_pjg_cnt > 0 || acc_list_cnt > 0 ) {
 		fprintf( msgout, " " );
-		if ( acc_jpg_cnt > 0 ) fprintf( msgout, "compressed: %i JPG", acc_jpg_cnt );
-		if ( acc_jpg_cnt > 0 && acc_pjg_cnt > 0 ) fprintf( msgout, "  " );
-		if ( acc_pjg_cnt > 0 ) fprintf( msgout, "decompressed: %i PJG", acc_pjg_cnt );
+		bool prev = false;
+		if ( acc_jpg_cnt > 0 )  { fprintf( msgout, "compressed: %i JPG",    acc_jpg_cnt  ); prev = true; }
+		if ( acc_pjg_cnt > 0 )  { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "decompressed: %i PJG", acc_pjg_cnt  ); prev = true; }
+		if ( acc_list_cnt > 0 ) { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "listed: %i PJG",       acc_list_cnt ); }
 		fprintf( msgout, "\n" );
 	}
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
@@ -2287,8 +2297,8 @@ INTERN void process_file( void )
 				#if !defined(BUILD_LIB)	
 				if ( verify_lv > 0 ) { // verifcation
 					// save jpgfilesize/pjgfilesize before verify — unpack overwrites them
-					int saved_jpgsize = jpgfilesize;
-					int saved_pjgsize = pjgfilesize;
+					int64_t saved_jpgsize = jpgfilesize;
+					int64_t saved_pjgsize = pjgfilesize;
 					execute( reset_buffers );
 					execute( swap_streams );
 					execute( unpack_pjg );
@@ -3153,8 +3163,9 @@ INTERN bool merge_jpeg( void )
 		return false;
 	}
 	
-	// get filesize -- pjgfilesize = PJG output, jpgfilesize already set by read_jpeg
-	pjgfilesize = str_out->num_bytes_written();
+	// get filesize: merge_jpeg writes the reconstructed JPG, so set jpgfilesize.
+	// pjgfilesize is already set by read_pjg() (input PJG size) and must not be overwritten.
+	jpgfilesize = str_out->num_bytes_written();
 	
 	
 	return true;

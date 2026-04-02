@@ -463,11 +463,11 @@ std::vector<std::uint8_t> FileWriter::get_data() {
 	FILE* rfp = _wfopen( widen_path( file_path_ ).c_str(), L"rb" );
 	if ( rfp == nullptr )
 		throw std::runtime_error("FileWriter::get_data: unable to open read stream for file.");
-	std::fseek( rfp, 0, SEEK_END );
-	long sz = std::ftell( rfp );
-	std::fseek( rfp, 0, SEEK_SET );
-	std::vector<std::uint8_t> data_copy( sz );
-	bool ok = ( sz == 0 ) || ( std::fread( data_copy.data(), 1, sz, rfp ) == (std::size_t)sz );
+	_fseeki64( rfp, 0, SEEK_END );
+	__int64 sz = _ftelli64( rfp );
+	_fseeki64( rfp, 0, SEEK_SET );
+	std::vector<std::uint8_t> data_copy( (std::size_t)sz );
+	bool ok = ( sz == 0 ) || ( std::fread( data_copy.data(), 1, (std::size_t)sz, rfp ) == (std::size_t)sz );
 	std::fclose( rfp );
 	if ( !ok ) throw std::runtime_error("FileWriter::get_data: unable to read bytes from file.");
 	return data_copy;
@@ -557,11 +557,11 @@ FileReader::FileReader(const std::string& file_path) {
 #if defined(_WIN32) || defined(WIN32)
 	FILE* fp_w = _wfopen( widen_path( file_path ).c_str(), L"rb" );
 	if ( fp_w ) {
-		std::fseek( fp_w, 0, SEEK_END );
-		long sz = std::ftell( fp_w );
-		std::fseek( fp_w, 0, SEEK_SET );
-		std::vector<std::uint8_t> data( sz );
-		bool ok = ( sz == 0 ) || ( std::fread( data.data(), 1, sz, fp_w ) == (std::size_t)sz );
+		_fseeki64( fp_w, 0, SEEK_END );
+		__int64 sz = _ftelli64( fp_w );
+		_fseeki64( fp_w, 0, SEEK_SET );
+		std::vector<std::uint8_t> data( (std::size_t)sz );
+		bool ok = ( sz == 0 ) || ( std::fread( data.data(), 1, (std::size_t)sz, fp_w ) == (std::size_t)sz );
 		std::fclose( fp_w );
 		if ( ok ) {
 			reader_ = std::make_unique<MemoryReader>( data );
