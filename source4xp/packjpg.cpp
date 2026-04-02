@@ -404,13 +404,15 @@ static bool use_color = false;
 #define COL_BYELLOW (use_color ? "\033[1;33m": "")
 #define COL_BCYAN   (use_color ? "\033[1;36m": "")
 
+// Bullet separator in program header.
+// Windows cmd.exe ignores SetConsoleOutputCP(CP_UTF8) for fprintf on Win7,
+// so use the Windows-1252 byte \x95 which renders as • at any codepage.
+#define BULLET "\x95"
+
 static void init_colors( void )
 {
     // Colors not supported in XP build — always disabled.
     use_color = false;
-    // Switch console to UTF-8 so header characters render correctly.
-    SetConsoleOutputCP( CP_UTF8 );
-    SetConsoleCP( CP_UTF8 );
 }
 #endif
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1024,7 +1026,7 @@ int main( int argc, char** argv )
 
 	// write program info to screen (suppressed in module mode)
 	if ( !module_mode ) {
-		fprintf( msgout, "\n%s%s v%i.%i%s%s  \xe2\x80\xa2  by %s\n%s\n",
+		fprintf( msgout, "\n%s%s v%i.%i%s%s  " BULLET "  by %s\n%s\n",
 				COL_BCYAN, apptitle, appversion / 10, appversion % 10, subversion, COL_RESET, author, COL_RESET );
 	}
 	
