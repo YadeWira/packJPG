@@ -103,6 +103,52 @@ packJPG a -th0 -o -np -odout/ *.jpg
 ```
 
 
+## CLI output
+
+### Default (per-file table)
+
+```
+packJPG v3.1  •  by Yade Bravo
+
+  ⠸  kodim01.jpg               ✓  kodim01.jpg                762 KB →   593 KB   77.8%   1.23s
+  ⠸  kodim02.jpg               ✓  kodim02.jpg                768 KB →   619 KB   80.6%   1.31s
+  ⠸  kodim03.jpg               ✓  kodim03.jpg                762 KB →   560 KB   73.5%   1.19s
+
+3 file(s)  3 ok  0 error(s)  0 warning(s)
+ compressed: 3 JPG
+ ─────────────────────────────────────
+ time      3.73 sec
+ speed    601.58 MB/s
+ ratio     77.30 %
+ ─────────────────────────────────────
+```
+
+### Progress bar mode (`-vp`, recommended for large batches)
+
+```
+packJPG v3.1  •  by Yade Bravo
+
+Using 4 of 4 detected thread(s) (verify enabled)
+  ⠹  18 / 24  [████████████░░░░░░░░░░░░░░░░░░]
+
+✓  24 / 24  [██████████████████████████████]
+
+24 file(s)  24 ok  0 error(s)  0 warning(s)
+ compressed: 24 JPG
+ ─────────────────────────────────────
+ time     28.41 sec
+ speed    498.22 MB/s
+ ratio     78.14 %
+ ─────────────────────────────────────
+```
+
+### No-color mode (`--no-color`)
+
+Colors are automatically disabled when stdout is not a terminal.
+The `NO_COLOR` environment variable is also respected.
+Pass `--no-color` explicitly to force plain output.
+
+
 ## Subcommands in detail
 
 ### `a` — compress (archive)
