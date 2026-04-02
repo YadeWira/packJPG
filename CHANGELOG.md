@@ -36,6 +36,15 @@
 - fixed: in multi-thread mode, error/warning messages no longer interrupt the
   progress bar; collected and printed cleanly after the bar completes
 - build: added `build4xp.sh` to project root for standalone Windows XP builds
+- fixed: header bullet `•` now uses Windows-1252 `\x95` on Windows — renders
+  correctly in cmd.exe on Windows 7 regardless of console codepage
+- build: added `build_pkg.sh` — produces `.tar.gz`, `.deb`, `.rpm`, and `.snap`
+  packages from source; individual formats selectable via `--tar`/`--deb`/`--rpm`/`--snap`
+- ci: GitHub Actions release workflow builds and publishes all packages automatically
+  when a `v*` tag is pushed
+- feat: added `install.sh` — one-liner installer that detects `apt`/`dnf`/`yum`
+  and downloads the matching package from the latest GitHub release
+- docs: added installation section to README; updated build scripts table
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 ---

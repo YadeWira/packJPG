@@ -1,10 +1,34 @@
-# packJPG v3.1 (03/31/2026)
+# packJPG v3.1 (04/02/2026)
 
 packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical
 reconstruction. Typical file size reduction: ~20%.
 
 **Supported platforms:** Linux x64, Windows 7 and later (x86/x64).
+
+
+## Installation
+
+### Linux (one-liner)
+
+```bash
+curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash
+```
+
+Detects your package manager and installs the appropriate format:
+- **apt** (Debian/Ubuntu) → `.deb`
+- **dnf/yum** (Fedora/RHEL) → `.rpm`
+- **other** → binary extracted to `/usr/local/bin`
+
+### Windows
+
+Download the latest `.exe` from the [Releases](https://github.com/YadeWira/packJPG/releases) page:
+
+| File | Target |
+|---|---|
+| `packJPG_win_x64.exe` | Windows 7+ 64-bit |
+| `packJPG_win_x86.exe` | Windows 7+ 32-bit |
+| `packJPG_win_xp.exe` | Windows XP SP2+ (experimental) |
 
 
 ## Windows XP build (EXPERIMENTAL)
@@ -436,10 +460,13 @@ sudo apt install build-essential mingw-w64
 |---|---|
 | `build_all.sh` | All targets: Linux x64, Windows x64, Windows x86, Windows XP |
 | `build4xp.sh` | Windows XP only (`dist/packJPG_win_xp.exe`) |
+| `build_pkg.sh` | Linux packages: `.tar.gz`, `.deb`, `.rpm`, `.snap` |
 
-```
-bash build_all.sh    # all targets → dist/
-bash build4xp.sh     # XP only    → dist/packJPG_win_xp.exe
+```bash
+bash build_all.sh              # all binaries → dist/
+bash build4xp.sh               # XP only      → dist/packJPG_win_xp.exe
+bash build_pkg.sh              # all packages → dist/
+bash build_pkg.sh --deb --rpm  # selected formats only
 ```
 
 Output binaries are collected in `dist/`:
@@ -449,15 +476,9 @@ dist/packJPG_linux_x64_native   (optimized for this machine, do not distribute)
 dist/packJPG_win_x64.exe
 dist/packJPG_win_x86.exe
 dist/packJPG_win_xp.exe
-```
-
-### Build individual targets manually
-
-**Linux (from `source/`):**
-```
-cd source/
-make                  # packJPG binary in source/
-bash build_all.sh     # all desktop targets in source/bin/
+dist/packjpg-3.1-linux-x64.tar.gz
+dist/packjpg_3.1_amd64.deb
+dist/packjpg-3.1-1.x86_64.rpm
 ```
 
 **Windows XP (from `source4xp/`):**
@@ -494,4 +515,4 @@ packJPG logo and icon are designed by Michael Kaufmann.
 - **Original developer blog:** http://packjpg.encode.ru/
 
 ---
-packJPG by Yade Bravo, 03/31/2026
+packJPG by Yade Bravo, 04/02/2026
