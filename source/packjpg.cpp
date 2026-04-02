@@ -1241,14 +1241,22 @@ int main( int argc, char** argv )
 
 	cleanup:
 	// In MT mode, per-file output is suppressed during the bar — print a clean
-	// list of any errors/warnings after the summary line.
-	// In single-thread mode (verbosity 2) also show for completeness.
-	if ( ( num_threads > 1 && ( error_cnt > 0 || warn_cnt > 0 ) ) || ( verbosity == 2 && ( error_cnt > 0 || warn_cnt > 0 ) ) ) {
-		fprintf( msgout, "\n" );
+	// list of errors/warnings after the bar, before the summary counts.
+	// Also shown at verbosity 2 in single-thread mode.
+	if ( ( num_threads > 1 || verbosity == 2 ) && error_cnt > 0 ) {
+		fprintf( msgout, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
+		fprintf( msgout, "------------------\n" );
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
-			if ( err_tp[ file_no ] == 0 ) continue;
-			const char* col = ( err_tp[ file_no ] >= err_tol ) ? COL_BRED : COL_BYELLOW;
-			fprintf( msgout, " %s%s%s (%s)\n", col, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
+			if ( err_tp[ file_no ] >= err_tol )
+				fprintf( msgout, "%s%s%s (%s)\n", COL_BRED, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
+		}
+	}
+	if ( ( num_threads > 1 || verbosity == 2 ) && warn_cnt > 0 ) {
+		fprintf( msgout, "\n\n%sfiles with warnings:%s\n", COL_BYELLOW, COL_RESET );
+		fprintf( msgout, "------------------\n" );
+		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
+			if ( err_tp[ file_no ] == 1 )
+				fprintf( msgout, "%s%s%s (%s)\n", COL_BYELLOW, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 		}
 	}
 	
