@@ -1086,6 +1086,8 @@ int main( int argc, char** argv )
 							acc_pjgsize += pjgfilesize;
 							acc_jpg_cnt++;
 						} else if ( filetype == F_PJG ) {
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
 							acc_pjg_cnt++;
 						}
 					}
@@ -1157,6 +1159,8 @@ int main( int argc, char** argv )
 								acc_pjgsize += pjgfilesize;
 								acc_jpg_cnt++;
 							} else if ( filetype == F_PJG ) {
+								acc_jpgsize += jpgfilesize;
+								acc_pjgsize += pjgfilesize;
 								acc_pjg_cnt++;
 							}
 						}
