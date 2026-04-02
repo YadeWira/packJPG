@@ -1097,7 +1097,7 @@ int main( int argc, char** argv )
 		// Force verification in MT mode to catch any silent corruption.
 		// Each file is compressed then immediately decompressed and compared bit-for-bit.
 		if ( verify_lv < 1 ) verify_lv = 1;
-		if ( verbosity >= 0 ) {
+		{
 			int detected = (int) std::thread::hardware_concurrency();
 			if ( detected < 1 ) detected = 1;
 			fprintf( msgout, "Using %i of %i detected thread(s) (verify enabled)\n",
