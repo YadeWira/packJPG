@@ -1,4 +1,4 @@
-# packJPG v3.1 (04/02/2026)
+# packJPG Multi-threaded v3.1a (04/02/2026)
 
 packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical

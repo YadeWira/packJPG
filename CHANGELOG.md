@@ -1,5 +1,27 @@
 # packJPG Changelog
 
+## v3.1a (04/02/2026) — public
+
+- fixed: decompression per-file display showed `0 KB → X KB 0.0%` instead of
+  the correct sizes and ratio; root cause was `merge_jpeg()` assigning the JPEG
+  output size to `pjgfilesize` instead of `jpgfilesize` — also caused speed and
+  ratio to read 0.00% in `-v1`/`-v2` verbose mode and in batch summaries
+- fixed: `-ver` save/restore used `int` instead of `int64_t` for
+  `saved_jpgsize`/`saved_pjgsize`, causing size truncation on files ≥ 2 GB
+- fixed (XP): when `-th>1` was requested on the XP build, the fallback
+  sequential path omitted `acc_jpgsize`/`acc_pjgsize` accumulation for PJG
+  files, leaving batch decompression stats at zero
+- fixed (Windows): `--no-color` skipped `SetConsoleOutputCP(CP_UTF8)`, causing
+  Unicode characters (✓ ✗ → ░ █ braille spinner) to render as garbage in
+  cmd.exe; UTF-8 codepage is now set unconditionally on Windows
+- fixed (Windows): `FileReader`/`FileWriter` used `long`/`ftell` on the Windows
+  path, which is 32-bit even on x64 and overflows for files > ~2.14 GB;
+  replaced with `_fseeki64`/`_ftelli64` in both `source/` and `source4xp/`
+- fixed: `list` subcommand batch summary incorrectly displayed
+  `decompressed: N PJG`; now correctly shows `listed: N PJG`
+
+---
+
 ## v3.1 (04/02/2026) — public
 
 - color output: program header and status lines now use ANSI colors

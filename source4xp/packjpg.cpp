@@ -1,5 +1,5 @@
 /*
-packJPG v3.1 (03/31/2026)
+packJPG v3.1a (04/02/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -979,7 +979,7 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 31;
-INTERN const char*  subversion   = "";
+INTERN const char*  subversion   = "a";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "04/02/2026";
