@@ -15,11 +15,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross-compilers
-        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64
+      - name: Install dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm
 
       - name: Build all targets
         run: bash build_all.sh
+
+      - name: Build packages (.tar.gz, .deb, .rpm)
+        run: bash build_pkg.sh --tar --deb --rpm
 
       - name: Smoke test (Linux binary)
         run: |
