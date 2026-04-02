@@ -12,6 +12,7 @@
 #define A_DIST_INFO			7
 #define A_PGM_DUMP			8
 #define A_LIST				9
+#define A_STATS				10
 
 // file type defines
 #define F_JPG				1

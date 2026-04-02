@@ -700,6 +700,7 @@ INTERN bool dump_pgm( void );
 
 #if !defined(BUILD_LIB)
 INTERN bool list_pjg( void );
+INTERN bool list_jpg( void );
 #endif
 
 
@@ -1020,7 +1021,7 @@ int main( int argc, char** argv )
 	
 	// check if user input is wrong, show help screen if it is
 	if ( ( file_cnt == 0 ) ||
-		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST) || (!auto_set) || (verify_lv > 1) ) ) ||
+		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST && action != A_STATS) || (!auto_set) || (verify_lv > 1) ) ) ||
 		( ( !developer ) && ( !subcmd_given ) && ( !pipe_on ) ) ) {
 		show_help();
 		return -1;
@@ -1066,12 +1067,14 @@ int main( int argc, char** argv )
 					error_cnt++;
 				} else {
 					if ( errorlevel == 1 ) warn_cnt++;
-					if ( filetype == F_JPG ) {
-						acc_jpgsize += jpgfilesize;
-						acc_pjgsize += pjgfilesize;
-						acc_jpg_cnt++;
-					} else if ( filetype == F_PJG ) {
-						acc_pjg_cnt++;
+					if ( action != A_STATS ) {
+						if ( filetype == F_JPG ) {
+							acc_jpgsize += jpgfilesize;
+							acc_pjgsize += pjgfilesize;
+							acc_jpg_cnt++;
+						} else if ( filetype == F_PJG ) {
+							acc_pjg_cnt++;
+						}
 					}
 				}
 			}
@@ -1700,6 +1703,11 @@ INTERN void initialize_options( int argc, char** argv )
 			action = A_LIST;
 			subcmd_given = true;
 			argv++; argc--;
+		} else if ( strcmp(subcmd, "stats") == 0 ) {
+			action = A_STATS;
+			compress_only = true;  // only process JPG files
+			subcmd_given = true;
+			argv++; argc--;
 		}
 	}
 
@@ -2038,8 +2046,8 @@ INTERN void process_ui( void )
 			tl_ui_buf += _tmp; \
 		} else fprintf( msgout, __VA_ARGS__ ); } while(0)
 	// progress bar (-1) doesn't work reliably across threads — treat as local_verbosity 0
-	// A_LIST also forces verbosity 0: its output is printed inside list_pjg
-	int local_verbosity = ( ( use_buf && verbosity < 0 ) || action == A_LIST ) ? 0 : verbosity;
+	// A_LIST/A_STATS also forces verbosity 0: output is printed inside list_pjg/list_jpg
+	int local_verbosity = ( ( use_buf && verbosity < 0 ) || action == A_LIST || action == A_STATS ) ? 0 : verbosity;
 	int total, bpms;
 	float cr;	
 	
@@ -2049,7 +2057,7 @@ INTERN void process_ui( void )
 	jpgfilesize = 0;
 	pjgfilesize = 0;	
 	#if !defined(DEV_BUILD)
-	if ( action != A_LIST ) action = A_COMPRESS;
+	if ( action != A_LIST && action != A_STATS ) action = A_COMPRESS;
 	#endif
 	
 	// compare file name, set pipe if needed
@@ -2062,8 +2070,8 @@ INTERN void process_ui( void )
 	}
 	
 	if ( local_verbosity >= 0 ) { // standard UI
-		if ( action == A_LIST ) {
-			// -list: print filename as header, details follow from list_pjg
+		if ( action == A_LIST || action == A_STATS ) {
+			// -list / stats: print filename as header, details follow from list_pjg/list_jpg
 			fprintf( msgout, "\n%s\n", filelist[ file_no ] );
 		} else if ( !use_buf ) {
 			// single-thread verbose: check file first, then print header only if processable
@@ -2075,6 +2083,7 @@ INTERN void process_ui( void )
 			switch ( action ) {
 				case A_COMPRESS: actionmsg = ( filetype == F_JPG ) ? "Compressing" : "Decompressing"; break;
 				case A_LIST:     actionmsg = "Listing"; break;
+				case A_STATS:    actionmsg = "Analyzing"; break;
 				default:         actionmsg = "Processing"; break;
 			}
 			{
@@ -2111,9 +2120,10 @@ INTERN void process_ui( void )
 			case A_DIST_INFO:	actionmsg = "Extracting distributions";	break;		
 			case A_PGM_DUMP:	actionmsg = "Converting"; break;
 			case A_LIST:		actionmsg = "Listing"; break;
+			case A_STATS:		actionmsg = "Analyzing"; break;
 		}
-		
-		if ( !use_buf && local_verbosity < 2 && action != A_LIST )
+
+		if ( !use_buf && local_verbosity < 2 && action != A_LIST && action != A_STATS )
 			fprintf( msgout, "%s%s%s -> ", COL_CYAN, actionmsg, COL_RESET );
 		after_check:;
 	}
@@ -2192,7 +2202,7 @@ INTERN void process_ui( void )
 								fprintf( msgout, "\r  %s\xe2\x9c\x93%s  %-46.46s %6lld KB \xe2\x86\x92 %6lld KB  %5.1f%%  %5.2fs\n",
 									COL_BGREEN, COL_RESET, _fn, orig_kb, comp_kb, cr, time_s );
 								#endif
-							} else if ( action != A_LIST ) {
+							} else if ( action != A_LIST && action != A_STATS ) {
 								#if defined(_WIN32)
 								fprintf( msgout, "\r  +  %-46.46s DONE\n", _fn );
 								#else
@@ -2363,6 +2373,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " x         decompress only: process PJG files, skip JPG\n" );
 	fprintf( msgout, " mix       mixed mode: auto-detect (warns if both directions used)\n" );
 	fprintf( msgout, " list      list PJG file info without decompressing\n" );
+	fprintf( msgout, " stats     show JPEG file info (size, dimensions, color) without compressing\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Switches:" );
 	fprintf( msgout, "\n" );
@@ -2440,7 +2451,15 @@ INTERN void process_file( void )
 				}
 				#endif
 				break;
-				
+
+			#if !defined(BUILD_LIB)
+			case A_STATS:
+				execute( read_jpeg );
+				execute( decode_jpeg );
+				execute( list_jpg );
+				break;
+			#endif
+
 			#if !defined(BUILD_LIB) && defined(DEV_BUILD)
 			case A_SPLIT_DUMP:
 				execute( read_jpeg );
@@ -2497,6 +2516,9 @@ INTERN void process_file( void )
 				// -list only works on .pjg files
 				snprintf( errormessage, MSG_SIZE, "-list is only supported for PJG files" );
 				errorlevel = 2;
+				break;
+			case A_STATS:
+				// stats only works on JPG files — skip PJG silently (compress_only is set)
 				break;
 			#else
 			default:
@@ -8296,6 +8318,37 @@ INTERN bool dump_pgm( void )
 #endif
 
 /* ----------------------- End of developers functions -------------------------- */
+
+
+/* -----------------------------------------------
+	list stats about a JPEG file without compressing
+	----------------------------------------------- */
+#if !defined(BUILD_LIB)
+INTERN bool list_jpg( void )
+{
+	auto fmt_size = []( int64_t bytes ) -> std::string {
+		char buf[32];
+		if ( bytes >= 1024 * 1024 )
+			snprintf( buf, sizeof(buf), "%.2f MB", bytes / (1024.0*1024.0) );
+		else if ( bytes >= 1024 )
+			snprintf( buf, sizeof(buf), "%.1f KB", bytes / 1024.0 );
+		else
+			snprintf( buf, sizeof(buf), "%lld B", (long long) bytes );
+		return buf;
+	};
+
+	const char* color_mode = ( cmpc == 1 ) ? "grayscale" :
+	                          ( cmpc == 3 ) ? "YCbCr (color)" :
+	                          ( cmpc == 4 ) ? "CMYK" : "unknown";
+
+	fprintf( msgout, "  size    : %s\n", fmt_size( jpgfilesize ).c_str() );
+	fprintf( msgout, "  dimensions : %i x %i\n", imgwidth, imgheight );
+	fprintf( msgout, "  components : %i (%s)\n", cmpc, color_mode );
+
+	pjgfilesize = 0;
+	return true;
+}
+#endif
 
 
 /* -----------------------------------------------

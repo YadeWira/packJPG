@@ -68,6 +68,7 @@ packJPG <subcommand> [switches] [filename(s)]
 | `x` | decompress PJG files back to JPEG (extract) |
 | `mix` | auto-detect and process both directions (use with caution) |
 | `list` | display info about PJG files without decompressing |
+| `stats` | show JPEG file info (size, dimensions, color mode) without compressing |
 
 packJPG recognizes file types by content, not by extension. Files that
 are neither JPEG nor PJG are silently skipped.
