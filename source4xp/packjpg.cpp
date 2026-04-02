@@ -1122,27 +1122,14 @@ int main( int argc, char** argv )
 	}
 	end = WallClock::now();
 
-	// errors summary: shown after MT run (verbosity 0/-1) or in verbose mode (v2)
-	if ( ( verbosity <= 0 && num_threads > 1 ) || ( verbosity == 2 ) ) {
-		// print summary of errors to screen
-		if ( error_cnt > 0 ) {
-			fprintf( stderr, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
-			fprintf( stderr, "------------------\n" );
-			for ( file_no = 0; file_no < file_cnt; file_no++ ) {
-				if ( err_tp[ file_no ] >= err_tol ) {
-					fprintf( stderr, "%s%s%s (%s)\n", COL_BRED, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
-				}
-			}
-		}
-		// print summary of warnings to screen
-		if ( warn_cnt > 0 ) {
-			fprintf( stderr, "\n\n%sfiles with warnings:%s\n", COL_BYELLOW, COL_RESET );
-			fprintf( stderr, "------------------\n" );
-			for ( file_no = 0; file_no < file_cnt; file_no++ ) {
-				if ( err_tp[ file_no ] == 1 ) {
-					fprintf( stderr, "%s%s%s (%s)\n", COL_BYELLOW, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
-				}
-			}
+	// In MT mode, per-file output is suppressed during the bar — print a clean
+	// list of any errors/warnings after the summary line.
+	if ( ( num_threads > 1 && ( error_cnt > 0 || warn_cnt > 0 ) ) || ( verbosity == 2 && ( error_cnt > 0 || warn_cnt > 0 ) ) ) {
+		fprintf( msgout, "\n" );
+		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
+			if ( err_tp[ file_no ] == 0 ) continue;
+			const char* col = ( err_tp[ file_no ] >= err_tol ) ? COL_BRED : COL_BYELLOW;
+			fprintf( msgout, " %s%s%s (%s)\n", col, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 		}
 	}
 	
