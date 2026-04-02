@@ -18,6 +18,19 @@ reading and writing of arrays
 #if defined(_WIN32) || defined(WIN32)
 #include <fcntl.h>
 #include <io.h>
+#include <windows.h>
+
+// Convert a CP_ACP (narrow) path to a wchar_t path for Unicode-safe file I/O.
+static std::wstring widen_path( const std::string& path )
+{
+	if ( path.empty() ) return {};
+	int needed = MultiByteToWideChar( CP_ACP, 0, path.c_str(), -1, nullptr, 0 );
+	if ( needed <= 0 ) return {};
+	std::wstring wide( needed, L'\0' );
+	MultiByteToWideChar( CP_ACP, 0, path.c_str(), -1, &wide[0], needed );
+	wide.resize( needed - 1 ); // drop null terminator
+	return wide;
+}
 #endif
 
 
@@ -407,7 +420,11 @@ bool MemoryWriter::error() {
 }
 
 FileWriter::FileWriter(const std::string& file_path) : file_path_(file_path) {
+#if defined(_WIN32) || defined(WIN32)
+	fptr_ = _wfopen( widen_path( file_path ).c_str(), L"wb" );
+#else
 	fptr_ = std::fopen(file_path.c_str(), "wb");
+#endif
 	if (fptr_ != nullptr) {
 		file_buffer_.reserve(32768);
 		std::setvbuf(fptr_, file_buffer_.data(), _IOFBF, file_buffer_.capacity());
@@ -442,6 +459,19 @@ bool FileWriter::write_byte(std::uint8_t byte) {
 
 std::vector<std::uint8_t> FileWriter::get_data() {
 	std::fflush(fptr_);
+#if defined(_WIN32) || defined(WIN32)
+	FILE* rfp = _wfopen( widen_path( file_path_ ).c_str(), L"rb" );
+	if ( rfp == nullptr )
+		throw std::runtime_error("FileWriter::get_data: unable to open read stream for file.");
+	std::fseek( rfp, 0, SEEK_END );
+	long sz = std::ftell( rfp );
+	std::fseek( rfp, 0, SEEK_SET );
+	std::vector<std::uint8_t> data_copy( sz );
+	bool ok = ( sz == 0 ) || ( std::fread( data_copy.data(), 1, sz, rfp ) == (std::size_t)sz );
+	std::fclose( rfp );
+	if ( !ok ) throw std::runtime_error("FileWriter::get_data: unable to read bytes from file.");
+	return data_copy;
+#else
 	if (std::ifstream is{ file_path_, std::ios::binary | std::ios::ate }) {
 		const auto size = is.tellg();
 		std::vector<std::uint8_t> data_copy(size);
@@ -454,6 +484,7 @@ std::vector<std::uint8_t> FileWriter::get_data() {
 	} else {
 		throw std::runtime_error("FileWriter::get_data: unable to open read stream for file.");
 	}
+#endif
 }
 
 void FileWriter::reset() {
@@ -462,7 +493,11 @@ void FileWriter::reset() {
 
 std::size_t FileWriter::num_bytes_written() {
 	std::fflush(fptr_);
-	return std::filesystem::file_size(file_path_);
+#if defined(_WIN32) || defined(WIN32)
+	return std::filesystem::file_size( std::filesystem::path( widen_path( file_path_ ) ) );
+#else
+	return std::filesystem::file_size( file_path_ );
+#endif
 }
 
 bool FileWriter::error() {
@@ -519,6 +554,24 @@ bool StreamWriter::error() {
 
 
 FileReader::FileReader(const std::string& file_path) {
+#if defined(_WIN32) || defined(WIN32)
+	FILE* fp_w = _wfopen( widen_path( file_path ).c_str(), L"rb" );
+	if ( fp_w ) {
+		std::fseek( fp_w, 0, SEEK_END );
+		long sz = std::ftell( fp_w );
+		std::fseek( fp_w, 0, SEEK_SET );
+		std::vector<std::uint8_t> data( sz );
+		bool ok = ( sz == 0 ) || ( std::fread( data.data(), 1, sz, fp_w ) == (std::size_t)sz );
+		std::fclose( fp_w );
+		if ( ok ) {
+			reader_ = std::make_unique<MemoryReader>( data );
+		} else {
+			throw std::runtime_error("FileReader: unable to read bytes from " + file_path);
+		}
+	} else {
+		throw std::runtime_error("FileReader: unable to open read stream for " + file_path);
+	}
+#else
 	if (std::ifstream is{ file_path, std::ios::binary | std::ios::ate }) {
 		const auto size = is.tellg();
 		std::vector<std::uint8_t> data(size);
@@ -531,6 +584,7 @@ FileReader::FileReader(const std::string& file_path) {
 	} else {
 		throw std::runtime_error("FileReader: unable to open read stream for " + file_path);
 	}
+#endif
 }
 
 FileReader::~FileReader() {}
