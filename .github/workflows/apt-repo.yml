@@ -46,15 +46,15 @@ jobs:
           gzip -k -f dists/stable/main/binary-amd64/Packages
 
           # Generate Release file
-          cat > dists/stable/Release << EOF
-          Origin: packJPG
-          Label: packJPG
-          Suite: stable
-          Codename: stable
-          Architectures: amd64
-          Components: main
-          Description: packJPG apt repository
-          EOF
+          cat > dists/stable/Release << 'EOF'
+Origin: packJPG
+Label: packJPG
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: packJPG apt repository
+EOF
           apt-ftparchive release dists/stable >> dists/stable/Release
 
           # Sign
