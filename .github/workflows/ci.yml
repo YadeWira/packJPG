@@ -109,15 +109,15 @@ jobs:
             > dists/stable/main/binary-amd64/Packages
           gzip -k -f dists/stable/main/binary-amd64/Packages
 
-          cat > dists/stable/Release << 'EOF'
-Origin: packJPG
-Label: packJPG
-Suite: stable
-Codename: stable
-Architectures: amd64
-Components: main
-Description: packJPG apt repository
-EOF
+          printf '%s\n' \
+            'Origin: packJPG' \
+            'Label: packJPG' \
+            'Suite: stable' \
+            'Codename: stable' \
+            'Architectures: amd64' \
+            'Components: main' \
+            'Description: packJPG apt repository' \
+            > dists/stable/Release
           apt-ftparchive release dists/stable >> dists/stable/Release
 
           gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
