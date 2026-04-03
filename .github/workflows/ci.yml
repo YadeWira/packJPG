@@ -74,3 +74,63 @@ jobs:
           files: dist/*
           body: ${{ steps.changelog.outputs.notes }}
           generate_release_notes: true
+
+  apt-repo:
+    name: Update apt repository
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Download .deb from artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: packJPG-binaries
+          path: /tmp/dist
+
+      - name: Import GPG key
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+
+      - name: Update apt repository
+        run: |
+          sudo apt-get install -y apt-utils
+
+          cp /tmp/dist/*.deb pool/main/
+
+          dpkg-scanpackages --multiversion pool/ \
+            > dists/stable/main/binary-amd64/Packages
+          gzip -k -f dists/stable/main/binary-amd64/Packages
+
+          cat > dists/stable/Release << 'EOF'
+Origin: packJPG
+Label: packJPG
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: packJPG apt repository
+EOF
+          apt-ftparchive release dists/stable >> dists/stable/Release
+
+          gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
+              --batch --yes \
+              --clearsign -o dists/stable/InRelease dists/stable/Release
+          gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
+              --batch --yes \
+              -abs -o dists/stable/Release.gpg dists/stable/Release
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "apt: publish packjpg ${{ github.ref_name }}"
+          git push
