@@ -1,5 +1,18 @@
 # packJPG Changelog
 
+## v3.1b (04/02/2026) — public
+
+- fixed: `Using N of N detected thread(s)` message was suppressed in progress
+  bar mode (`-vp` sets `verbosity = -1`); now always shown when MT is active
+- fixed: time/speed/ratio summary was never shown after decompression batches —
+  `acc_jpgsize`/`acc_pjgsize` were only accumulated for `F_JPG` files; added
+  accumulation for `F_PJG` in both single-thread and MT paths, in both builds
+- fixed (ci): Release file heredoc in `apt-repo.yml` had leading spaces causing
+  malformed apt metadata; fixed with unindented `'EOF'` heredoc
+- maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
+---
+
 ## v3.1a (04/02/2026) — public
 
 - fixed: decompression per-file display showed `0 KB → X KB 0.0%` instead of
