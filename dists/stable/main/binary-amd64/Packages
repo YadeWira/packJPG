@@ -1,13 +1,13 @@
 Package: packjpg
-Version: 3.1a
+Version: 3.1b
 Architecture: amd64
 Maintainer: Yade Bravo <https://github.com/YadeWira/packJPG>
 Installed-Size: 284
-Filename: pool/main/packjpg_3.1a_amd64.deb
-Size: 92362
-MD5sum: f041e44b02afaa2ba8db053ee7729384
-SHA1: 300f2f9155a13dd7eaf7e6409ac8cec8a35f8544
-SHA256: b6dd80a711a69bc26a74276563da87d20ef6e57a54c726c383059ddd15e29506
+Filename: pool/main/packjpg_3.1b_amd64.deb
+Size: 92312
+MD5sum: 89d28e940e3dabcdafdb9f0be122910e
+SHA1: 9fb8442f7acee6333c91ef93abbbec657f71f0c0
+SHA256: 3d45c253ceedc6af11481778f1e66209aa94d42fe51ea465ee7a7355a0b7ae73
 Section: utils
 Priority: optional
 Description: Lossless JPEG compressor
