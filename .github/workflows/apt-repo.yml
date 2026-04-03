@@ -59,10 +59,10 @@ jobs:
 
           # Sign
           gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
-              --batch --yes \
+              --batch --yes --no-tty --pinentry-mode loopback \
               --clearsign -o dists/stable/InRelease dists/stable/Release
           gpg --default-key "${{ secrets.GPG_KEY_ID }}" \
-              --batch --yes \
+              --batch --yes --no-tty --pinentry-mode loopback \
               -abs -o dists/stable/Release.gpg dists/stable/Release
 
       - name: Commit and push
