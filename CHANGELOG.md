@@ -1,5 +1,18 @@
 # packJPG Changelog
 
+## v3.1c (04/02/2026) — public
+
+- fixed: `-module` flag with batch MT showed full UI output (progress bar,
+  "Using N of M detected thread(s)", error/warning lists, mix-mode warning)
+  instead of only the final `OK time` / `ERROR n time` line; all UI elements
+  now check `!module_mode` before printing
+- fixed (XP): same `module_mode` guards missing in `source4xp/` for error list,
+  warning list, and mix-mode warning
+- fixed (XP): `%ld` format specifier with `(long)` cast in the non-Windows path
+  of `source4xp/` replaced with `%lld` / `long long` for correctness
+
+---
+
 ## v3.1b (04/02/2026) — public
 
 - fixed: `Using N of N detected thread(s)` message was suppressed in progress

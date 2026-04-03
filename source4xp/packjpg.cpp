@@ -979,7 +979,7 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 31;
-INTERN const char*  subversion   = "b";
+INTERN const char*  subversion   = "c";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "04/02/2026";
@@ -1137,7 +1137,7 @@ int main( int argc, char** argv )
 
 	// In MT mode, per-file output is suppressed during the bar — print a clean
 	// list of errors/warnings after the bar, before the summary counts.
-	if ( ( num_threads > 1 || verbosity == 2 ) && error_cnt > 0 ) {
+	if ( !module_mode && ( num_threads > 1 || verbosity == 2 ) && error_cnt > 0 ) {
 		fprintf( msgout, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
 		fprintf( msgout, "------------------\n" );
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
@@ -1145,7 +1145,7 @@ int main( int argc, char** argv )
 				fprintf( msgout, "%s%s%s (%s)\n", COL_BRED, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 		}
 	}
-	if ( ( num_threads > 1 || verbosity == 2 ) && warn_cnt > 0 ) {
+	if ( !module_mode && ( num_threads > 1 || verbosity == 2 ) && warn_cnt > 0 ) {
 		fprintf( msgout, "\n\n%sfiles with warnings:%s\n", COL_BYELLOW, COL_RESET );
 		fprintf( msgout, "------------------\n" );
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
@@ -1153,9 +1153,9 @@ int main( int argc, char** argv )
 				fprintf( msgout, "%s%s%s (%s)\n", COL_BYELLOW, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 		}
 	}
-	
+
 	// show statistics
-	if ( mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
+	if ( !module_mode && mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
 		fprintf( msgout, "\n%s[WARNING]%s Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", COL_BYELLOW, COL_RESET, acc_jpg_cnt, acc_pjg_cnt );
 		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
 		fprintf( msgout, "  Use 'a' (compress only) or 'x' (decompress only) for safer operation.\n" );
@@ -2063,8 +2063,8 @@ INTERN void process_ui( void )
 								fprintf( msgout, "\r  +  %-46.46s %6lld KB -> %6lld KB  %5.1f%%  %5.2fs\n",
 									_fn, orig_kb, comp_kb, cr, time_s );
 								#else
-								fprintf( msgout, "\r  %s\xe2\x9c\x93%s  %-46.46s %6ld KB \xe2\x86\x92 %6ld KB  %5.1f%%  %5.2fs\n",
-									COL_BGREEN, COL_RESET, _fn, (long)orig_kb, (long)comp_kb, cr, time_s );
+								fprintf( msgout, "\r  %s\xe2\x9c\x93%s  %-46.46s %6lld KB \xe2\x86\x92 %6lld KB  %5.1f%%  %5.2fs\n",
+									COL_BGREEN, COL_RESET, _fn, orig_kb, comp_kb, cr, time_s );
 								#endif
 							} else if ( action != A_LIST && action != A_STATS ) {
 								#if defined(_WIN32)

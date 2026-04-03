@@ -982,7 +982,7 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 31;
-INTERN const char*  subversion   = "b";
+INTERN const char*  subversion   = "c";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "04/02/2026";
@@ -1103,7 +1103,7 @@ int main( int argc, char** argv )
 		// Force verification in MT mode to catch any silent corruption.
 		// Each file is compressed then immediately decompressed and compared bit-for-bit.
 		if ( verify_lv < 1 ) verify_lv = 1;
-		{
+		if ( !module_mode ) {
 			int detected = (int) std::thread::hardware_concurrency();
 			if ( detected < 1 ) detected = 1;
 			fprintf( msgout, "Using %i of %i detected thread(s) (verify enabled)\n",
@@ -1186,6 +1186,7 @@ int main( int argc, char** argv )
 					}
 					tl_ui_buf.clear();
 					// draw/update progress bar
+					if ( !module_mode ) {
 					int barpos = ( done * BARLEN ) / ( file_proc_cnt > 0 ? file_proc_cnt : 1 );
 					#if defined(_WIN32)
 					static const char* spinners[] = { "-", "\\", "|", "/" };
@@ -1211,6 +1212,7 @@ int main( int argc, char** argv )
 					#endif
 					fprintf( msgout, "]" );
 					fflush( msgout );
+					}
 				}
 			}
 		};
@@ -1226,7 +1228,8 @@ int main( int argc, char** argv )
 		std::signal( SIGINT, SIG_DFL );
 
 		if ( g_interrupted.load() ) {
-			fprintf( msgout, "\n\n%s[interrupted]%s cleaning up...\n", COL_BYELLOW, COL_RESET );
+			if ( !module_mode )
+				fprintf( msgout, "\n\n%s[interrupted]%s cleaning up...\n", COL_BYELLOW, COL_RESET );
 			// remove any incomplete output files from files not yet processed
 			for ( int fi = g_files_done.load(); fi < file_cnt; fi++ ) {
 				if ( filelist[fi] == NULL ) continue;
@@ -1239,12 +1242,14 @@ int main( int argc, char** argv )
 				std::filesystem::remove( out_jpg, ec );
 			}
 			end = WallClock::now();
-			fprintf( msgout, "-> %i of %i file(s) processed before interrupt\n",
-				g_files_done.load(), file_proc_cnt );
+			if ( !module_mode )
+				fprintf( msgout, "-> %i of %i file(s) processed before interrupt\n",
+					g_files_done.load(), file_proc_cnt );
 			goto cleanup;
 		}
 
 		// overwrite last progress bar line with final completed state
+		if ( !module_mode ) {
 		#if defined(_WIN32)
 		fprintf( msgout, "\r  +  %3i / %-3i  %s[", file_proc_cnt, file_proc_cnt, COL_CYAN );
 		#else
@@ -1257,6 +1262,7 @@ int main( int argc, char** argv )
 			fprintf( msgout, "\xe2\x96\x88" );
 		#endif
 		fprintf( msgout, "%s]   \n", COL_RESET );
+		}
 	}
 	end = WallClock::now();
 
@@ -1264,7 +1270,7 @@ int main( int argc, char** argv )
 	// In MT mode, per-file output is suppressed during the bar — print a clean
 	// list of errors/warnings after the bar, before the summary counts.
 	// Also shown at verbosity 2 in single-thread mode.
-	if ( ( num_threads > 1 || verbosity == 2 ) && error_cnt > 0 ) {
+	if ( !module_mode && ( num_threads > 1 || verbosity == 2 ) && error_cnt > 0 ) {
 		fprintf( msgout, "\n\n%sfiles with errors:%s\n", COL_BRED, COL_RESET );
 		fprintf( msgout, "------------------\n" );
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
@@ -1272,7 +1278,7 @@ int main( int argc, char** argv )
 				fprintf( msgout, "%s%s%s (%s)\n", COL_BRED, filelist[ file_no ], COL_RESET, err_list[ file_no ] );
 		}
 	}
-	if ( ( num_threads > 1 || verbosity == 2 ) && warn_cnt > 0 ) {
+	if ( !module_mode && ( num_threads > 1 || verbosity == 2 ) && warn_cnt > 0 ) {
 		fprintf( msgout, "\n\n%sfiles with warnings:%s\n", COL_BYELLOW, COL_RESET );
 		fprintf( msgout, "------------------\n" );
 		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
@@ -1282,7 +1288,7 @@ int main( int argc, char** argv )
 	}
 	
 	// show statistics
-	if ( mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
+	if ( !module_mode && mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
 		fprintf( msgout, "\n%s[WARNING]%s Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", COL_BYELLOW, COL_RESET, acc_jpg_cnt, acc_pjg_cnt );
 		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
 		fprintf( msgout, "  Use 'a' (compress only) or 'x' (decompress only) for safer operation.\n" );

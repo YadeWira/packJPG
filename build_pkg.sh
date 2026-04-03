@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ─── Version (keep in sync with packjpg.cpp appversion/subversion) ───────────
-VERSION="3.1b"
+VERSION="3.1c"
 PKG="packjpg"
 
 SRC_DIR="source"
