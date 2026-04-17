@@ -31,6 +31,11 @@
 - tests: new `source/test/lib_concurrent_test.cpp` — hammers the lib from
   N threads to validate TLS correctness. Used together with ASan / UBSan /
   TSan builds as a repeatable audit
+- fixed: entropy decode error message no longer suggests the misleading
+  `-p` hint. `-p` only relaxes warnings (errorlevel=1) — real Huffman
+  decode failures are errorlevel=2 and cannot be "recovered". Files that
+  trigger this are typically malformed JPEGs (`djpeg -strict` rejects
+  them too); the new message points users at that diagnostic instead
 ---
 
 ## v3.1c (04/02/2026) — public
