@@ -725,8 +725,10 @@ INTERN bool list_jpg( void );
 	global variables: library only variables
 	----------------------------------------------- */
 #if defined(BUILD_LIB)
-INTERN int lib_in_type  = -1;
-INTERN int lib_out_type = -1;
+// THREAD_LOCAL so concurrent pjglib_convert_* calls from different threads
+// each maintain their own init/convert stream-type pairing.
+THREAD_LOCAL int lib_in_type  = -1;
+THREAD_LOCAL int lib_out_type = -1;
 #endif
 
 
@@ -857,7 +859,10 @@ THREAD_LOCAL int  errorlevel;
 
 // sfth_mode / decoded_from_sfth must exist in BUILD_LIB too: they are
 // referenced from pack_pjg/unpack_pjg which run in both CLI and lib paths.
-INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
+// Both THREAD_LOCAL: process_file() perturbs sfth_mode around pack_pjg during
+// verification, so a non-TL value would race across MT CLI workers and across
+// concurrent pjglib_convert_* calls from host threads.
+THREAD_LOCAL bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
 
 #if !defined( BUILD_LIB )
@@ -1126,10 +1131,11 @@ int main( int argc, char** argv )
 		int spinner_idx = 0;
 
 		// Capture settings from main thread before spawning workers.
-		// nois_trs, segm_cnt, auto_set are thread_local so each worker
-		// starts with defaults — we need to copy the parsed values in.
+		// nois_trs, segm_cnt, auto_set, sfth_mode are thread_local so each
+		// worker starts with defaults — copy the parsed values in.
 		unsigned char main_nois_trs[4], main_segm_cnt[4];
-		bool main_auto_set = auto_set;
+		bool main_auto_set  = auto_set;
+		bool main_sfth_mode = sfth_mode;
 		for ( int i = 0; i < 4; i++ ) {
 			main_nois_trs[i] = nois_trs[i];
 			main_segm_cnt[i] = segm_cnt[i];
@@ -1137,7 +1143,8 @@ int main( int argc, char** argv )
 
 		auto worker = [&]() {
 			// propagate main-thread settings into this thread's locals
-			auto_set = main_auto_set;
+			auto_set  = main_auto_set;
+			sfth_mode = main_sfth_mode;
 			for ( int i = 0; i < 4; i++ ) {
 				nois_trs[i] = main_nois_trs[i];
 				segm_cnt[i] = main_segm_cnt[i];

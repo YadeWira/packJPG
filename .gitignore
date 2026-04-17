@@ -47,3 +47,4 @@
 *.coll?
 *.zdst?
 *.dist
+/source/test/lib_concurrent_test
