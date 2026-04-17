@@ -3498,9 +3498,14 @@ INTERN bool decode_jpeg( void )
 			
 			// evaluate status
 			if ( sta == -1 ) { // status -1 means error
-				snprintf( errormessage, MSG_SIZE, "decode error in scan%i / mcu%i%s",
-					scnc, ( cs_cmpc > 1 ) ? mcu : dpos,
-					( jpegtype == 2 ) ? " (progressive JPEG -- use -p to attempt recovery)" : "" );
+				// Entropy decode errors (errorlevel=2) indicate a malformed Huffman
+				// stream -- this is NOT recoverable via -p (which only relaxes
+				// warnings). Typical causes: corrupted bitstream, out-of-bounds AC
+				// run-length, extraneous bytes before RST markers. Such files
+				// are usually rejected by `djpeg -strict` too.
+				snprintf( errormessage, MSG_SIZE,
+					"decode error in scan%i / mcu%i -- malformed JPEG bitstream (verify with: djpeg -strict)",
+					scnc, ( cs_cmpc > 1 ) ? mcu : dpos );
 				delete huffr;
 				errorlevel = 2;
 				return false;
