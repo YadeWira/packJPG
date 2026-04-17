@@ -1,0 +1,100 @@
+name: Cross-platform verification
+
+on:
+  push:
+    branches: [ master ]
+    tags:     [ '[0-9]*' ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build-and-roundtrip:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS Apple Silicon
+            install: brew install jpeg-turbo imagemagick
+          - os: macos-13
+            label: macOS Intel
+            install: brew install jpeg-turbo imagemagick
+          - os: ubuntu-24.04-arm
+            label: Linux ARM64
+            install: sudo apt-get update -q && sudo apt-get install -y libjpeg-turbo-progs imagemagick
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: ${{ matrix.install }}
+
+      - name: Show toolchain
+        run: |
+          uname -a
+          c++ --version
+          which cjpeg djpeg magick || which convert
+
+      - name: Build packJPG
+        working-directory: source
+        run: |
+          make CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
+          ls -la packJPG
+
+      - name: Build lib_roundtrip_test
+        working-directory: source
+        run: |
+          make lib CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -DBUILD_LIB -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
+          c++ -I. -O2 -std=c++17 test/lib_roundtrip_test.cpp packJPGlib.a -lpthread -o test/lib_roundtrip_test
+          ls -la test/lib_roundtrip_test
+
+      - name: Generate test JPEG corpus
+        run: |
+          mkdir -p rt_in rt_out rt_pjg
+          # Synthesize 12 diverse JPEGs at varying quality/size.
+          # ImageMagick is cross-platform ubiquitous; "magick" on v7, falls
+          # back to "convert" on v6.
+          MAGICK="magick"; command -v "$MAGICK" >/dev/null || MAGICK="convert"
+          for i in 1 2 3 4 5 6; do
+            size=$((256 + i*128))
+            $MAGICK -size ${size}x${size} gradient:red-blue -quality 85 rt_in/grad_${i}.jpg
+            $MAGICK -size ${size}x${size} plasma: -quality 70       rt_in/plasma_${i}.jpg
+          done
+          ls -la rt_in
+
+      - name: Round-trip (CLI, v4.0 default)
+        run: |
+          cp rt_in/*.jpg rt_out/
+          ./source/packJPG a -np -o rt_out/*.jpg
+          for f in rt_in/*.jpg; do
+            stem=$(basename "${f%.*}")
+            ./source/packJPG x -np -o -od/tmp rt_out/${stem}.pjg
+            cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $stem" || { echo "FAIL: $stem"; exit 1; }
+          done
+
+      - name: Round-trip (CLI, -legacy / v3.1d format)
+        run: |
+          rm -f rt_pjg/*
+          cp rt_in/*.jpg rt_pjg/
+          ./source/packJPG a -legacy -np -o rt_pjg/*.jpg
+          for f in rt_in/*.jpg; do
+            stem=$(basename "${f%.*}")
+            ./source/packJPG x -np -o -od/tmp rt_pjg/${stem}.pjg
+            cmp "$f" "/tmp/${stem}.jpg" && echo "PASS legacy: $stem" || { echo "FAIL legacy: $stem"; exit 1; }
+          done
+
+      - name: Round-trip (library harness)
+        working-directory: source
+        run: |
+          ./test/lib_roundtrip_test ../rt_in/*.jpg
+
+      - name: Cross-version decode (v4.0 decodes v3.1d emitted by this binary)
+        run: |
+          # The v4.0 binary should decode v3.1d PJGs produced by -legacy.
+          # We already asserted byte-for-byte above via cmp, so this just
+          # prints a reassuring summary:
+          echo "v4.0 default + -legacy round-trips both clean on this runner."
