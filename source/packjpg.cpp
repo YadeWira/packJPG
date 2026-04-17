@@ -2565,9 +2565,7 @@ INTERN void process_file( void )
 				snprintf( errormessage, MSG_SIZE, "-list is only supported for PJG files" );
 				errorlevel = 2;
 				break;
-			case A_STATS:
-				// stats only works on JPG files — skip PJG silently (compress_only is set)
-				break;
+			// A_STATS handled outside the DEV_BUILD block (runs list_jpg)
 			#else
 			default:
 				break;
