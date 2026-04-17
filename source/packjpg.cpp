@@ -868,6 +868,15 @@ THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 mark
 // THREAD_LOCAL for the same reason as sfth_mode — MT batch workers inherit it
 // from main, and concurrent lib callers must not race.
 THREAD_LOCAL bool legacy_mode = false;
+// On-disk format version seen by the decoder (set by unpack_pjg after reading
+// the version byte). Read by v4.0+ features to gate new context models.
+// THREAD_LOCAL because MT batch workers each decode their own file.
+THREAD_LOCAL unsigned char format_version_read = 0;
+// Cross-component prediction switch, set explicitly by each pack/unpack entry
+// point before pjg_encode_*/pjg_decode_* is called. Always false inside sfth
+// parallel workers (to preserve component parallelism). Sequential path sets
+// it according to encoder legacy_mode / decoder format_version_read.
+THREAD_LOCAL bool pjg_use_crosscomp_now = false;
 
 #if !defined( BUILD_LIB )
 INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
@@ -4227,8 +4236,11 @@ INTERN bool pack_pjg( void )
 	#if defined(DEV_INFOS)
 	int dev_size = 0;
 	#endif
-	
-	
+
+	// Reset cross-comp flag — sequential path re-enables below based on format;
+	// sfth worker threads inherit a fresh TLS default of false.
+	pjg_use_crosscomp_now = false;
+
 	// PJG-Header
 	str_out->write( reinterpret_cast<const unsigned char*>(pjg_magic), 2 );
 	
@@ -4330,8 +4342,11 @@ INTERN bool pack_pjg( void )
 	// store version number
 	hcode = legacy_mode ? format_version_legacy : format_version_current;
 	str_out->write_byte(hcode);
-	
-	
+
+	// v4.0 cross-component prediction is only enabled on the sequential path
+	// (sfth path keeps components parallel and cannot read Y during Cb/Cr decode).
+	pjg_use_crosscomp_now = !legacy_mode;
+
 	// init arithmetic compression
 	auto encoder = new ArithmeticEncoder(*str_out);
 	
@@ -4441,6 +4456,8 @@ INTERN bool unpack_pjg( void )
 	int cmp;
 	bool parallel_fmt = false; // set when 0x01 sfth marker seen
 	decoded_from_sfth = false; // reset before reading header
+	format_version_read = 0;   // reset; set by header loop below
+	pjg_use_crosscomp_now = false; // reset; sequential path enables below per-format
 	
 	
 	// check header codes ( maybe position in other function ? )
@@ -4469,7 +4486,8 @@ INTERN bool unpack_pjg( void )
 				errorlevel = 2;
 				return false;
 			}
-			else break;
+			format_version_read = hcode;
+			break;
 		}
 		else {
 			snprintf( errormessage, MSG_SIZE, "unknown header code, use newer version of %s", appname );
@@ -4542,6 +4560,10 @@ INTERN bool unpack_pjg( void )
 		else if ( !pjg_decode_generic( &gdec, &grbgdata, &grbs ) ) return false;
 	} else {
 		// ── Sequential path (default) ──────────────────────────────────────────
+		// v4.0 cross-component prediction active only when file declared v4.0
+		// and only on sequential path. Sfth branch above keeps it at its TLS
+		// default (false) inside workers.
+		pjg_use_crosscomp_now = ( format_version_read == format_version_current );
 		auto decoder = new ArithmeticDecoder(*str_in);
 		if ( !pjg_decode_generic( decoder, &hdrdata, &hdrs ) ) { delete decoder; return false; }
 		if ( !pjg_decode_bit(decoder, &cb) ) { delete decoder; return false; }
@@ -5948,14 +5970,14 @@ INTERN bool pjg_encode_zdst_low( ArithmeticEncoder* enc, int cmp )
 INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 {
 	unsigned char* segm_tab;
-	
+
 	model_s* mod_len;
 	model_b* mod_sgn;
 	model_b* mod_res;
-	
+
 	unsigned char* zdstls; // pointer to zero distribution list
 	signed short* coeffs; // pointer to current coefficent data
-	
+
 	unsigned short* absv_store; // absolute coefficients values storage
 	unsigned short* c_absc[ 6 ]; // quick access array for contexts
 	int c_weight[ 6 ]; // weighting for contexts
@@ -5981,6 +6003,11 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 	int w, bc;
 
 
+	// v4.0 cross-component DC: Cb/Cr DC uses Y DC bit-length as extra context.
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = use_cc ? colldata[ 0 ][ 0 ] : NULL;
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
 
@@ -5989,7 +6016,11 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 	max_len = BITLEN1024P( max_val );
 
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( max_len + 1, ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
+		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 ); // compound (ctx_len<<3|y_class)
+		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
 	mod_sgn = INIT_MODEL_B( 9, 1 );
 
@@ -6033,8 +6064,15 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 		// calculate contexts (for bit length)
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
+		int ctx_shift = ctx_len;
+		if ( use_cc ) {
+			int y_abs = ABS( y_coeffs[ dpos ] );
+			int y_clen = BITLEN1024P( y_abs );
+			if ( y_clen > 7 ) y_clen = 7;
+			ctx_shift = ( ctx_len << 3 ) | y_clen;
+		}
 		// shift context / do context modelling (segmentation is done per context)
-		shift_model( mod_len, ctx_len, snum );
+		shift_model( mod_len, ctx_shift, snum );
 
 		// simple treatment if coefficient is zero
 		if ( coeffs[ dpos ] == 0 ) {
@@ -6121,22 +6159,34 @@ INTERN bool pjg_encode_ac_high( ArithmeticEncoder* enc, int cmp )
 	int p_x, p_y;
 	int r_x; //, r_y;
 	int w, bc;
-	
-	
+
+
+	// v4.0 cross-component: Cb/Cr on sequential path use Y's bit-length at the
+	// same (bpos,dpos) as extra context. Only enabled for matching geometry
+	// (4:4:4); 4:2:x weakens the correlation (downsampling averages chroma) so
+	// gate on exact block-count equality.
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = NULL; // set per bpos inside the loop when use_cc
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
-	
+
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11;
+		if ( use_cc ) mod_len_maxc = 128; // holds compound (ctx_len<<3|y_class)
+		mod_len = INIT_MODEL_S( 11, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
 	mod_sgn = INIT_MODEL_B( 27, 1 );
-	
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
+
 	// allocate memory for absolute values & signs storage
-	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );	
+	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );
 	sgn_store = (unsigned char*) calloc ( bc, sizeof( char ) );
 	zdstls = (unsigned char*) calloc ( bc, sizeof( char ) );
 	if ( ( absv_store == NULL ) || ( sgn_store == NULL ) || ( zdstls == NULL ) ) {
@@ -6147,70 +6197,78 @@ INTERN bool pjg_encode_ac_high( ArithmeticEncoder* enc, int cmp )
 		errorlevel = 2;
 		return false;
 	}
-	
+
 	// set up quick access arrays for signs context
 	sgn_nbh = sgn_store - 1;
-	sgn_nbv = sgn_store - w;	
-	
+	sgn_nbv = sgn_store - w;
+
 	// locally store pointer to eob x / eob y
 	eob_x = eobxhigh[ cmp ];
 	eob_y = eobyhigh[ cmp ];
-	
+
 	// preset x/y eobs
 	memset( eob_x, 0x00, bc * sizeof( char ) );
 	memset( eob_y, 0x00, bc * sizeof( char ) );
-	
+
 	// make a local copy of the zero distribution list
 	for ( dpos = 0; dpos < bc; dpos++ )
 		zdstls[ dpos ] = zdstdata[ cmp ][ dpos ];
-	
+
 	// work through lower 7x7 bands in order of freqscan
 	for ( i = 1; i < 64; i++ )
-	{		
+	{
 		// work through blocks in order of frequency scan
 		bpos = (int) freqscan[cmp][i];
 		b_x = unzigzag[ bpos ] % 8;
 		b_y = unzigzag[ bpos ] / 8;
-	
+
 		if ( ( b_x == 0 ) || ( b_y == 0 ) )
 			continue; // process remaining coefficients elsewhere
-	
+
 		// preset absolute values/sign storage
 		memset( absv_store, 0x00, bc * sizeof( short ) );
 		memset( sgn_store, 0x00, bc * sizeof( char ) );
-		
+
 		// set up average context quick access arrays
 		pjg_aavrg_prepare( c_absc, c_weight, absv_store, cmp );
-		
+
 		// locally store pointer to coefficients
 		coeffs = colldata[ cmp ][ bpos ];
-		
+		if ( use_cc ) y_coeffs = colldata[ 0 ][ bpos ];
+
 		// get max bit length
 		max_val = MAX_V( cmp, bpos );
 		max_len = BITLEN1024P( max_val );
-		
+
 		// arithmetic compression loo
 		for ( dpos = 0; dpos < bc; dpos++ )
-		{		
+		{
 			// skip if beyound eob
 			if ( zdstls[dpos] == 0 )
 				continue;
-		
+
 			//calculate x/y positions in band
 			p_y = dpos / w;
 			// r_y = h - ( p_y + 1 );
 			p_x = dpos % w;
 			r_x = w - ( p_x + 1 );
-		
+
 			// get segment-number from zero distribution list and segmentation set
 			snum = segm_tab[ zdstls[dpos] ];
 			// calculate contexts (for bit length)
 			ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
-			ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context				
+			ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
+			int ctx_shift = ctx_len;
+			if ( use_cc ) {
+				int y_abs = ABS( y_coeffs[ dpos ] );
+				int y_clen = BITLEN1024P( y_abs );
+				if ( y_clen > 7 ) y_clen = 7;
+				ctx_shift = ( ctx_len << 3 ) | y_clen;
+			}
 			// shift context / do context modelling (segmentation is done per context)
-			shift_model( mod_len, ctx_len, snum );
-			mod_len->exclude_symbols(max_len);		
-		
+			shift_model( mod_len, ctx_shift, snum );
+			mod_len->exclude_symbols(max_len);
+
 			// simple treatment if coefficient is zero
 			if ( coeffs[ dpos ] == 0 ) {
 				// encode bit length (0) of current coefficien
@@ -6299,32 +6357,42 @@ INTERN bool pjg_encode_ac_low( ArithmeticEncoder* enc, int cmp )
 	int clen, absv, sgn;
 	int bt, bp;
 	int i;
-	
+
 	int b_x, b_y;
 	int p_x, p_y;
 	int w, bc;
-	
-	
+
+
+	// v4.0 cross-component: AC-low Cb/Cr use Y bit-len at same (bpos,dpos).
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = NULL;
+
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11;
+		if ( use_cc ) mod_len_maxc = 128; // compound (ctx_len<<3|y_class)
+		mod_len = INIT_MODEL_S( 11, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( 1 << 4, 2 );
 	mod_top = INIT_MODEL_B( ( nois_trs[cmp] > 4 ) ? 1 << nois_trs[cmp] : 1 << 4, 3 );
 	mod_sgn = INIT_MODEL_B( 11, 1 );
-	
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
+
 	// work through each first row / first collumn band
 	for ( i = 2; i < 16; i++ )
-	{		
+	{
 		// alternate between first row and first collumn
 		b_x = ( i % 2 == 0 ) ? i / 2 : 0;
 		b_y = ( i % 2 == 1 ) ? i / 2 : 0;
 		bpos = (int) zigzag[ b_x + (8*b_y) ];
-		
+
 		// locally store pointer to band coefficients
 		coeffs = colldata[ cmp ][ bpos ];
+		if ( use_cc ) y_coeffs = colldata[ 0 ][ bpos ];
 		// store pointers to prediction coefficients
 		if ( b_x == 0 ) {
 			for ( ; b_x < 8; b_x++ ) {
@@ -6368,10 +6436,17 @@ INTERN bool pjg_encode_ac_low( ArithmeticEncoder* enc, int cmp )
 			else ctx_lak = 0;
 			ctx_lak = CLAMPED( max_valn, max_valp, ctx_lak );
 			ctx_len = BITLEN2048N( ctx_lak ); // BITLENGTH context
-			
+			int ctx_shift = ctx_len;
+			if ( use_cc ) {
+				int y_abs = ABS( y_coeffs[ dpos ] );
+				int y_clen = BITLEN1024P( y_abs );
+				if ( y_clen > 7 ) y_clen = 7;
+				ctx_shift = ( ctx_len << 3 ) | y_clen;
+			}
+
 			// shift context / do context modelling (segmentation is done per context)
-			shift_model( mod_len, ctx_len, zdstls[ dpos ] );
-			mod_len->exclude_symbols(max_len);			
+			shift_model( mod_len, ctx_shift, zdstls[ dpos ] );
+			mod_len->exclude_symbols(max_len);
 			
 			// simple treatment if coefficient is zero
 			if ( coeffs[ dpos ] == 0 ) {
@@ -6632,14 +6707,14 @@ INTERN bool pjg_decode_zdst_low( ArithmeticDecoder* dec, int cmp )
 INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 {
 	unsigned char* segm_tab;
-	
+
 	model_s* mod_len;
 	model_b* mod_sgn;
 	model_b* mod_res;
-	
+
 	unsigned char* zdstls; // pointer to zero distribution list
 	signed short* coeffs; // pointer to current coefficent data
-	
+
 	unsigned short* absv_store; // absolute coefficients values storage
 	unsigned short* c_absc[ 6 ]; // quick access array for contexts
 	int c_weight[ 6 ]; // weighting for contexts
@@ -6665,6 +6740,11 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 	int w, bc;
 
 
+	// v4.0 cross-component DC: mirror of encoder.
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = use_cc ? colldata[ 0 ][ 0 ] : NULL;
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
 
@@ -6673,7 +6753,11 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 	max_len = BITLEN1024P( max_val );
 
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( max_len + 1, ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
+		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 );
+		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
 	mod_sgn = INIT_MODEL_B( 9, 1 );
 
@@ -6717,8 +6801,15 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 		// calculate contexts (for bit length)
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
+		int ctx_shift = ctx_len;
+		if ( use_cc ) {
+			int y_abs = ABS( y_coeffs[ dpos ] );
+			int y_clen = BITLEN1024P( y_abs );
+			if ( y_clen > 7 ) y_clen = 7;
+			ctx_shift = ( ctx_len << 3 ) | y_clen;
+		}
 		// shift context / do context modelling (segmentation is done per context)
-		shift_model( mod_len, ctx_len, snum );
+		shift_model( mod_len, ctx_shift, snum );
 		// decode bit length of current coefficient
 		clen = decode_ari( dec, mod_len );
 
@@ -6805,13 +6896,23 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 	int p_x, p_y;
 	int r_x;
 	int w, bc;
-	
-	
+
+
+	// v4.0 cross-component: mirror of encoder — only active for matching block
+	// geometry (4:4:4); 4:2:x gate ruled out by measurement.
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = NULL; // set per bpos inside the loop when use_cc
+
 	// decide segmentation setting
 	segm_tab = segm_tables[ segm_cnt[ cmp ] - 1 ];
-	
+
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11;
+		if ( use_cc ) mod_len_maxc = 128; // holds compound (ctx_len<<3|y_class)
+		mod_len = INIT_MODEL_S( 11, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
 	mod_sgn = INIT_MODEL_B( 27, 1 );
 	
@@ -6868,31 +6969,39 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 		
 		// locally store pointer to coefficients
 		coeffs = colldata[ cmp ][ bpos ];
-		
+		if ( use_cc ) y_coeffs = colldata[ 0 ][ bpos ];
+
 		// get max bit length
 		max_val = MAX_V( cmp, bpos );
 		max_len = BITLEN1024P( max_val );
-		
+
 		// arithmetic compression loop
 		for ( dpos = 0; dpos < bc; dpos++ )
 		{
 			// skip if beyound eob
 			if ( zdstls[dpos] == 0 )
 				continue;
-			
+
 			//calculate x/y positions in band
 			p_y = dpos / w;
 			// r_y = h - ( p_y + 1 );
 			p_x = dpos % w;
-			r_x = w - ( p_x + 1 );					
-			
+			r_x = w - ( p_x + 1 );
+
 			// get segment-number from zero distribution list and segmentation set
 			snum = segm_tab[ zdstls[dpos] ];
 			// calculate contexts (for bit length)
 			ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
-			ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context				
+			ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
+			int ctx_shift = ctx_len;
+			if ( use_cc ) {
+				int y_abs = ABS( y_coeffs[ dpos ] );
+				int y_clen = BITLEN1024P( y_abs );
+				if ( y_clen > 7 ) y_clen = 7;
+				ctx_shift = ( ctx_len << 3 ) | y_clen;
+			}
 			// shift context / do context modelling (segmentation is done per context)
-			shift_model( mod_len, ctx_len, snum );
+			shift_model( mod_len, ctx_shift, snum );
 			mod_len->exclude_symbols(max_len);
 			
 			// decode bit length of current coefficient
@@ -6983,32 +7092,42 @@ INTERN bool pjg_decode_ac_low( ArithmeticDecoder* dec, int cmp )
 	int clen, absv, sgn;
 	int bt, bp;
 	int i;
-	
+
 	int b_x, b_y;
 	int p_x, p_y;
 	int w, bc;
-	
-	
+
+
+	// v4.0 cross-component: AC-low Cb/Cr use Y bit-len at same (bpos,dpos).
+	bool use_cc = pjg_use_crosscomp_now && cmp != 0 && cmpc >= 2
+	            && cmpnfo[cmp].bc == cmpnfo[0].bc;
+	signed short* y_coeffs = NULL;
+
 	// init models for bitlenghts and -patterns
-	mod_len = INIT_MODEL_S( 11, ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11, 2 );
+	{
+		int mod_len_maxc = ( segm_cnt[cmp] > 11 ) ? segm_cnt[cmp] : 11;
+		if ( use_cc ) mod_len_maxc = 128; // compound (ctx_len<<3|y_class)
+		mod_len = INIT_MODEL_S( 11, mod_len_maxc, 2 );
+	}
 	mod_res = INIT_MODEL_B( 1 << 4, 2 );
 	mod_top = INIT_MODEL_B( ( nois_trs[cmp] > 4 ) ? 1 << nois_trs[cmp] : 1 << 4, 3 );
 	mod_sgn = INIT_MODEL_B( 11, 1 );
-	
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
+
 	// work through each first row / first collumn band
 	for ( i = 2; i < 16; i++ )
-	{		
+	{
 		// alternate between first row and first collumn
 		b_x = ( i % 2 == 0 ) ? i / 2 : 0;
 		b_y = ( i % 2 == 1 ) ? i / 2 : 0;
 		bpos = (int) zigzag[ b_x + (8*b_y) ];
-		
+
 		// locally store pointer to band coefficients
 		coeffs = colldata[ cmp ][ bpos ];
+		if ( use_cc ) y_coeffs = colldata[ 0 ][ bpos ];
 		// store pointers to prediction coefficients
 		if ( b_x == 0 ) {
 			for ( ; b_x < 8; b_x++ ) {
@@ -7051,11 +7170,18 @@ INTERN bool pjg_decode_ac_low( ArithmeticDecoder* dec, int cmp )
 				ctx_lak = pjg_lakh_context( coeffs_x, coeffs_a, pred_cf, dpos );
 			else ctx_lak = 0;
 			ctx_lak = CLAMPED( max_valn, max_valp, ctx_lak );
-			ctx_len = BITLEN2048N( ctx_lak ); // BITLENGTH context				
+			ctx_len = BITLEN2048N( ctx_lak ); // BITLENGTH context
+			int ctx_shift = ctx_len;
+			if ( use_cc ) {
+				int y_abs = ABS( y_coeffs[ dpos ] );
+				int y_clen = BITLEN1024P( y_abs );
+				if ( y_clen > 7 ) y_clen = 7;
+				ctx_shift = ( ctx_len << 3 ) | y_clen;
+			}
 			// shift context / do context modelling (segmentation is done per context)
-			shift_model( mod_len, ctx_len, zdstls[ dpos ] );
+			shift_model( mod_len, ctx_shift, zdstls[ dpos ] );
 			mod_len->exclude_symbols(max_len);
-			
+
 			// decode bit length of current coefficient
 			clen = decode_ari( dec, mod_len );
 			// simple treatment if coefficients == 0
