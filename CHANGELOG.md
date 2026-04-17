@@ -1,5 +1,38 @@
 # packJPG Changelog
 
+## v3.1d (unreleased) — thread safety + UB cleanup
+
+> Originally planned as v3.2 with an algorithmic improvement; the
+> proposed per-component arithmetic-model reset was measured against
+> the current `-sfth` path (which already does exactly that) and came
+> out *worse* than the sequential shared-state path by ~3 KB on the
+> 153-JPEG corpus. Cross-component adaptation is a net win for this
+> format, so the change is not pursued and v3.2 is left reserved for
+> a future algorithmic overhaul. This release ships the thread-safety
+> and UB cleanup work that stands on its own.
+
+
+- fixed: six undefined-behaviour sites in the progressive-JPEG decoder where
+  negative signed short coefficients were left-shifted by `cs_sal`. Under
+  C++17 §8.8 shifting a negative value is UB; coefficients are now cast via
+  `(unsigned int)` before the shift. UBSan reports clean on the full corpus;
+  production output is byte-identical (fixes are semantically neutral)
+- fixed (lib MT safety): `action`, `sfth_mode`, `lib_in_type`, `lib_out_type`
+  were declared process-wide (`INTERN`) but written during per-file
+  processing. Concurrent `pjglib_convert_*` calls from different host
+  threads would race on these globals. All four are now `THREAD_LOCAL`;
+  CLI MT workers propagate `sfth_mode` from the main thread next to
+  `auto_set` / `nois_trs` / `segm_cnt`. ThreadSanitizer reports clean
+  with 4 threads × 50 iters on the 152-JPEG corpus
+- docs: `packjpglib.h` now documents that buffers returned via
+  `pjglib_convert_stream2mem` are allocated with `malloc()` and must be
+  freed with `free()` (not `delete[]`). Existing test harnesses updated
+  accordingly
+- tests: new `source/test/lib_concurrent_test.cpp` — hammers the lib from
+  N threads to validate TLS correctness. Used together with ASan / UBSan /
+  TSan builds as a repeatable audit
+---
+
 ## v3.1c (04/02/2026) — public
 
 - fixed: `-module` flag with batch MT showed full UI output (progress bar,
