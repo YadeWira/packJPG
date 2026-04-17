@@ -1,5 +1,62 @@
 # packJPG Changelog
 
+## v4.0-β (unreleased) — format break: cross-component lazy prediction
+
+> packJPG v4.0 introduces a **format change** (version byte `0x28` / 40) that
+> adds cross-component adaptation to the PJG coder: when encoding the chroma
+> components (Cb/Cr) of 4:4:4 JPEGs, the bit-length of the co-located luma
+> (Y) coefficient is folded into the arithmetic model context. This tightens
+> the prediction in exactly the frames where chroma is most correlated with
+> luma (portraits, text, sharp diagonals) and delivers a measurable ratio
+> win on photographic corpora.
+>
+> A `-legacy` flag is provided to emit and decode PJG v3.1d (`0x1F` / 31)
+> files for interoperability. The decoder detects the version byte and
+> dispatches accordingly, so all existing v3.1d archives decompress to
+> byte-identical JPEGs without user intervention.
+
+- new: **cross-component lazy prediction** for 4:4:4 chroma DC and AC passes
+  in `pjg_encode_dc`, `pjg_encode_ac_high`, `pjg_encode_ac_low` and their
+  decoder counterparts. Y coefficient bit-length (`BITLEN1024P`, clamped to
+  7) is combined with the existing neighbourhood bit-length into a compound
+  context `ctx_shift = (ctx_len << 3) | y_clen`. The `mod_len` model is
+  widened from `max(11, segm_cnt)` to 128 (AC) or `(max_len+1) << 3` (DC).
+  Gated on `cmp != 0 && cmpc >= 2 && cmpnfo[cmp].bc == cmpnfo[0].bc` so
+  subsampled (4:2:0 / 4:2:2) files fall back to the v3.1d path byte-for-byte
+- new: `-legacy` flag — emit v3.1d-format PJGs; output is byte-identical to
+  packJPG v3.1d on the same input. Thread-local so concurrent MT batches
+  can mix v4.0 and v3.1d encoding safely
+- new: dual-version decoder — v3.1d PJGs are detected by their version byte
+  and decoded via the v3.1d path (no cross-component context). v4.0 PJGs
+  require packJPG v4.0+ to decompress
+- measurement (153-JPEG mixed corpus, 151 round-trippable):
+  - v4.0-β total PJG: **60,066,170 B** vs v3.1d **60,387,566 B** → **−0.532 %**
+  - `-legacy` output: **60,387,566 B**, byte-identical to v3.1d
+  - top per-file wins: 4:4:4 photographic JPEGs (e.g. `827C1CF27.jpg −5.01 %`);
+    subsampled JPEGs neutral by design (gate bypasses cross-comp)
+- `-sfth` path continues to emit v3.1d-format PJGs: the parallel encoder
+  processes components concurrently, so Y is not available as context when
+  Cb/Cr are being encoded. `pjg_use_crosscomp_now` is kept `false` for sfth;
+  sfth output remains byte-identical to v3.1d
+- validation:
+  - 151 / 151 round-trip byte-exact on corpus
+  - `-legacy` round-trip: 151 / 151 byte-exact
+  - MT stress (`-th8`, 50 iters on 151 files): 393 / 393 OK, 0 mismatches
+  - ThreadSanitizer (4 threads × 10 iters): 39 / 39 OK, 0 data races
+  - `lib_roundtrip_test`: 151 OK, ratio 76.59 %
+  - libFuzzer + ASan + UBSan 15 min: 0 crashes, 0 sanitizer reports,
+    coverage grew 2596→3012 edges, corpus 20→23
+- new: `source/test/pjg_decode_fuzzer.cpp` + `build_fuzzer.sh` — libFuzzer
+  harness over `pjglib_convert_stream2mem` covering both directions of the
+  codec (auto-detects JPG vs PJG by leading bytes)
+- incompatibility notice: **PJG files produced by v4.0 cannot be decoded
+  by packJPG v3.1d or earlier.** Use `-legacy` during the transition if
+  downstream consumers have not been upgraded. This is the first intentional
+  format break since v2.0 (2007)
+- maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
+
+---
+
 ## v3.1d (unreleased) — thread safety + UB cleanup
 
 > Originally planned as v3.2 with an algorithmic improvement; the

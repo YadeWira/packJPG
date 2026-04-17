@@ -51,3 +51,4 @@
 /source/test/lib_roundtrip_test_san
 /source/test/lib_concurrent_test_tsan
 /source/packJPG
+pjg_decode_fuzzer
