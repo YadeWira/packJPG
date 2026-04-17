@@ -9,6 +9,11 @@
 // in pjglib_convert_* functions.
 #define PJG_MSG_SIZE 512
 
+// Output buffers returned by pjglib_convert_stream2mem via *out_file
+// are allocated with malloc(). Callers must free them with free(),
+// NOT with delete[] (mixing allocators is undefined behaviour and is
+// flagged as an error by AddressSanitizer).
+
 /* -----------------------------------------------
 	function declarations: library only functions
 	----------------------------------------------- */

@@ -68,7 +68,7 @@ int main( int argc, char** argv ) {
             printf( "%-40s  %10zu  %10u  %6s  UNPACK FAIL: %s\n",
                     path, jpg.size(), pjg_size, "-", msg2 );
             fail_unpack++;
-            delete[] pjg_buf;
+            std::free( pjg_buf );
             continue;
         }
 
@@ -83,8 +83,8 @@ int main( int argc, char** argv ) {
         if ( same ) { ok++; tot_jpg += jpg.size(); tot_pjg += pjg_size; }
         else         mismatch++;
 
-        delete[] pjg_buf;
-        delete[] jpg2_buf;
+        std::free( pjg_buf );
+        std::free( jpg2_buf );
     }
 
     printf( "\n── summary ─────────────────────────────────────\n" );

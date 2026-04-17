@@ -895,7 +895,9 @@ THREAD_LOCAL bool   pipe_on  = false;	// use stdin/stdout instead of filelist
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
 THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
-INTERN int  action = A_COMPRESS;// what to do with JPEG/PJG files
+// THREAD_LOCAL: pjglib_convert_stream2mem writes action on every call; concurrent
+// host threads calling the lib would race on this otherwise.
+THREAD_LOCAL int  action = A_COMPRESS;// what to do with JPEG/PJG files
 #endif
 
 THREAD_LOCAL unsigned char nois_trs[ 4 ] = {6,6,6,6}; // bit pattern noise threshold
@@ -3498,9 +3500,10 @@ INTERN bool decode_jpeg( void )
 						colldata[cmp][0][dpos] = block[0] + lastdc[ cmp ];
 						lastdc[ cmp ] = colldata[cmp][0][dpos];
 						
-						// bitshift for succesive approximation
-						colldata[cmp][0][dpos] <<= cs_sal;
-						
+						// bitshift for succesive approximation (cast avoids UB
+						// when the coefficient value is negative — C++17 §8.8)
+						colldata[cmp][0][dpos] = (short)( (unsigned int)colldata[cmp][0][dpos] << cs_sal );
+
 						// next mcupos if no error happened
 						if ( sta != -1 )
 							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
@@ -3513,10 +3516,10 @@ INTERN bool decode_jpeg( void )
 						// decode next bit
 						sta = jpg_decode_dc_prg_sa( huffr,
 							block );
-						
-						// shift in next bit
-						colldata[cmp][0][dpos] += block[0] << cs_sal;
-						
+
+						// shift in next bit (cast avoids UB for negative block[0])
+						colldata[cmp][0][dpos] += (short)( (unsigned int)block[0] << cs_sal );
+
 						// next mcupos if no error happened
 						if ( sta != -1 )
 							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
@@ -3565,10 +3568,10 @@ INTERN bool decode_jpeg( void )
 							// fix dc for diff coding
 							colldata[cmp][0][dpos] = block[0] + lastdc[ cmp ];
 							lastdc[ cmp ] = colldata[cmp][0][dpos];
-							
-							// bitshift for succesive approximation
-							colldata[cmp][0][dpos] <<= cs_sal;
-							
+
+							// bitshift for succesive approximation (UB-safe cast)
+							colldata[cmp][0][dpos] = (short)( (unsigned int)colldata[cmp][0][dpos] << cs_sal );
+
 							// check for errors, increment dpos otherwise
 							if ( sta != -1 )
 								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
@@ -3581,10 +3584,10 @@ INTERN bool decode_jpeg( void )
 							// decode next bit
 							sta = jpg_decode_dc_prg_sa( huffr,
 								block );
-							
-							// shift in next bit
-							colldata[cmp][0][dpos] += block[0] << cs_sal;
-							
+
+							// shift in next bit (UB-safe cast)
+							colldata[cmp][0][dpos] += (short)( (unsigned int)block[0] << cs_sal );
+
 							// check for errors, increment dpos otherwise
 							if ( sta != -1 )
 								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
@@ -3614,9 +3617,9 @@ INTERN bool decode_jpeg( void )
 									eobrun--;
 								} else peobrun = 0;
 							
-								// copy to colldata
+								// copy to colldata (UB-safe cast for negative coeffs)
 								for ( bpos = cs_from; bpos < eob; bpos++ )
-									colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ] << cs_sal;
+									colldata[ cmp ][ bpos ][ dpos ] = (short)( (unsigned int)block[ bpos ] << cs_sal );
 							} else eobrun--;
 							
 							// check for errors
@@ -3663,9 +3666,9 @@ INTERN bool decode_jpeg( void )
 								eobrun--;
 							}
 								
-							// copy back to colldata
+							// copy back to colldata (UB-safe cast for negative coeffs)
 							for ( bpos = cs_from; bpos <= cs_to; bpos++ )
-								colldata[ cmp ][ bpos ][ dpos ] += block[ bpos ] << cs_sal;
+								colldata[ cmp ][ bpos ][ dpos ] += (short)( (unsigned int)block[ bpos ] << cs_sal );
 							
 							// proceed only if no error encountered
 							if ( eob < 0 ) sta = -1;

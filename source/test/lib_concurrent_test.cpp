@@ -92,9 +92,13 @@ void worker(int tid, int iters, const std::vector<JpegFile>* corpus,
             fprintf(stderr, "[tid %d] MISMATCH on %s (orig=%zu round=%u)\n",
                     tid, jf.path.c_str(), jf.bytes.size(), out_size);
             stop->store(true);
+            std::free(pjg_buf);
+            std::free(out_buf);
             return;
         }
         out->iters_ok++;
+        std::free(pjg_buf);
+        std::free(out_buf);
     }
 }
 

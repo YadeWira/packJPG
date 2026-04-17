@@ -688,8 +688,10 @@ INTERN bool list_jpg( void );
 	global variables: library only variables
 	----------------------------------------------- */
 #if defined(BUILD_LIB)
-INTERN int lib_in_type  = -1;
-INTERN int lib_out_type = -1;
+// THREAD_LOCAL so concurrent pjglib_convert_* calls from different threads
+// each maintain their own init/convert stream-type pairing.
+THREAD_LOCAL int lib_in_type  = -1;
+THREAD_LOCAL int lib_out_type = -1;
 #endif
 
 
@@ -822,7 +824,9 @@ THREAD_LOCAL int  errorlevel;
 INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
-INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
+// THREAD_LOCAL: process_file() perturbs sfth_mode around pack_pjg during
+// verify, so MT CLI workers would race on a non-TL value.
+THREAD_LOCAL bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
@@ -3302,10 +3306,10 @@ INTERN bool decode_jpeg( void )
 						// fix dc for diff coding
 						colldata[cmp][0][dpos] = block[0] + lastdc[ cmp ];
 						lastdc[ cmp ] = colldata[cmp][0][dpos];
-						
-						// bitshift for succesive approximation
-						colldata[cmp][0][dpos] <<= cs_sal;
-						
+
+						// bitshift for succesive approximation (UB-safe cast)
+						colldata[cmp][0][dpos] = (short)( (unsigned int)colldata[cmp][0][dpos] << cs_sal );
+
 						// next mcupos if no error happened
 						if ( sta != -1 )
 							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
@@ -3313,14 +3317,14 @@ INTERN bool decode_jpeg( void )
 				}
 				else {
 					// ---> progressive interleaved DC decoding <---
-					// ---> succesive approximation later stage <---					
+					// ---> succesive approximation later stage <---
 					while ( sta == 0 ) {
 						// decode next bit
 						sta = jpg_decode_dc_prg_sa( huffr,
 							block );
-						
-						// shift in next bit
-						colldata[cmp][0][dpos] += block[0] << cs_sal;
+
+						// shift in next bit (UB-safe cast)
+						colldata[cmp][0][dpos] += (short)( (unsigned int)block[0] << cs_sal );
 						
 						// next mcupos if no error happened
 						if ( sta != -1 )
@@ -3370,10 +3374,10 @@ INTERN bool decode_jpeg( void )
 							// fix dc for diff coding
 							colldata[cmp][0][dpos] = block[0] + lastdc[ cmp ];
 							lastdc[ cmp ] = colldata[cmp][0][dpos];
-							
-							// bitshift for succesive approximation
-							colldata[cmp][0][dpos] <<= cs_sal;
-							
+
+							// bitshift for succesive approximation (UB-safe cast)
+							colldata[cmp][0][dpos] = (short)( (unsigned int)colldata[cmp][0][dpos] << cs_sal );
+
 							// check for errors, increment dpos otherwise
 							if ( sta != -1 )
 								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
@@ -3386,9 +3390,9 @@ INTERN bool decode_jpeg( void )
 							// decode next bit
 							sta = jpg_decode_dc_prg_sa( huffr,
 								block );
-							
-							// shift in next bit
-							colldata[cmp][0][dpos] += block[0] << cs_sal;
+
+							// shift in next bit (UB-safe cast)
+							colldata[cmp][0][dpos] += (short)( (unsigned int)block[0] << cs_sal );
 							
 							// check for errors, increment dpos otherwise
 							if ( sta != -1 )
@@ -3419,9 +3423,9 @@ INTERN bool decode_jpeg( void )
 									eobrun--;
 								} else peobrun = 0;
 							
-								// copy to colldata
+								// copy to colldata (UB-safe cast for negative coeffs)
 								for ( bpos = cs_from; bpos < eob; bpos++ )
-									colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ] << cs_sal;
+									colldata[ cmp ][ bpos ][ dpos ] = (short)( (unsigned int)block[ bpos ] << cs_sal );
 							} else eobrun--;
 							
 							// check for errors
@@ -3468,9 +3472,9 @@ INTERN bool decode_jpeg( void )
 								eobrun--;
 							}
 								
-							// copy back to colldata
+							// copy back to colldata (UB-safe cast for negative coeffs)
 							for ( bpos = cs_from; bpos <= cs_to; bpos++ )
-								colldata[ cmp ][ bpos ][ dpos ] += block[ bpos ] << cs_sal;
+								colldata[ cmp ][ bpos ][ dpos ] += (short)( (unsigned int)block[ bpos ] << cs_sal );
 							
 							// proceed only if no error encountered
 							if ( eob < 0 ) sta = -1;
