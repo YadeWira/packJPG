@@ -1,6 +1,6 @@
 # packJPG Changelog
 
-## v4.0-β (unreleased) — format break: cross-component lazy prediction
+## v4.0 (unreleased) — format break: cross-component lazy prediction
 
 > packJPG v4.0 introduces a **format change** (version byte `0x28` / 40) that
 > adds cross-component adaptation to the PJG coder: when encoding the chroma
@@ -30,7 +30,7 @@
   and decoded via the v3.1d path (no cross-component context). v4.0 PJGs
   require packJPG v4.0+ to decompress
 - measurement (153-JPEG mixed corpus, 151 round-trippable):
-  - v4.0-β total PJG: **60,066,170 B** vs v3.1d **60,387,566 B** → **−0.532 %**
+  - v4.0 total PJG: **60,066,170 B** vs v3.1d **60,387,566 B** → **−0.532 %**
   - `-legacy` output: **60,387,566 B**, byte-identical to v3.1d
   - top per-file wins: 4:4:4 photographic JPEGs (e.g. `827C1CF27.jpg −5.01 %`);
     subsampled JPEGs neutral by design (gate bypasses cross-comp)
