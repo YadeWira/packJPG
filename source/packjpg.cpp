@@ -445,6 +445,8 @@ static void init_colors( void )
 
 // Helper: convert a char* path (CP_ACP on Windows, UTF-8 on Linux) to
 // std::filesystem::path safely — avoids filesystem_error on accented chars.
+// CLI-only (not used from the library entry points).
+#if !defined( BUILD_LIB )
 static std::filesystem::path safe_path( const char* s )
 {
 	if ( s == NULL ) return std::filesystem::path();
@@ -457,6 +459,7 @@ static std::filesystem::path safe_path( const char* s )
 	#endif
 	return std::filesystem::path( s );
 }
+#endif // BUILD_LIB
 
 #include "bitops.h"
 #include "aricoder.h"
@@ -614,7 +617,7 @@ INTERN int jpg_decode_ac_prg_sa( BitReader* huffr, huffTree* actree, short* bloc
 INTERN int jpg_encode_ac_prg_sa( BitWriter* huffw, std::vector<std::uint8_t>& storw, huffCodes* actbl,
 						short* block, int* eobrun, int from, int to );
 
-INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* eobrun, int from, int to );
+INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* /*eobrun*/, int from, int to );
 INTERN int jpg_encode_eobrun( BitWriter* huffw, huffCodes* actbl, int* eobrun );
 INTERN int jpg_encode_crbits( BitWriter* huffw, std::vector<std::uint8_t>& storw );
 
@@ -665,8 +668,8 @@ INTERN void get_context_nnb( int pos, int w, int *a, int *b );
 #if !defined(BUILD_LIB) && defined(DEV_BUILD)
 INTERN int idct_2d_fst_8x8( int cmp, int dpos, int ix, int iy );
 #endif
-INTERN int idct_2d_fst_1x8( int cmp, int dpos, int ix, int iy );
-INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy );
+INTERN int idct_2d_fst_1x8( int cmp, int dpos, int /*ix*/, int iy );
+INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int /*iy*/ );
 
 
 /* -----------------------------------------------
@@ -852,12 +855,15 @@ THREAD_LOCAL int  errorlevel;
 	global variables: settings
 	----------------------------------------------- */
 
+// sfth_mode / decoded_from_sfth must exist in BUILD_LIB too: they are
+// referenced from pack_pjg/unpack_pjg which run in both CLI and lib paths.
+INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
+THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
+
 #if !defined( BUILD_LIB )
 INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
 INTERN bool overwrite  = false;	// overwrite files yes / no
 INTERN bool wait_exit  = true;	// pause after finished yes / no
-INTERN bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
-THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
@@ -1069,7 +1075,7 @@ int main( int argc, char** argv )
 				err_list[ file_no ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
 				err_tp[ file_no ] = errorlevel;
 				if ( err_list[ file_no ] != NULL )
-					strcpy( err_list[ file_no ], errormessage );
+					snprintf( err_list[ file_no ], MSG_SIZE, "%s", errormessage );
 			}
 			// count errors / warnings / file sizes
 			// unknown filetype (F_UNK) is silently skipped — not counted as error
@@ -1153,7 +1159,7 @@ int main( int argc, char** argv )
 							err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
 							err_tp[ fn ] = errorlevel;
 							if ( err_list[ fn ] != NULL )
-								strcpy( err_list[ fn ], errormessage );
+								snprintf( err_list[ fn ], MSG_SIZE, "%s", errormessage );
 						}
 						if ( errorlevel >= err_tol ) error_cnt++;
 						else {
@@ -1451,7 +1457,7 @@ EXPORT bool pjglib_convert_stream2mem( unsigned char** out_file, unsigned int* o
 				if ( file_exists( jpgfilename ) ) remove( jpgfilename );
 			}
 		}
-		if ( msg != NULL ) strcpy( msg, errormessage );
+		if ( msg != NULL ) snprintf( msg, MSG_SIZE, "%s", errormessage );
 		return false;
 	}
 	
@@ -1464,16 +1470,16 @@ EXPORT bool pjglib_convert_stream2mem( unsigned char** out_file, unsigned int* o
 		switch( filetype )
 		{
 			case F_JPG:
-				sprintf( msg, "Compressed to %s (%.2f%%) in %ims",
+				snprintf( msg, MSG_SIZE, "Compressed to %s (%.2f%%) in %ims",
 					pjgfilename, cr, ( total >= 0 ) ? total : -1 );
 				break;
 			case F_PJG:
-				sprintf( msg, "Decompressed to %s (%.2f%%) in %ims",
+				snprintf( msg, MSG_SIZE, "Decompressed to %s (%.2f%%) in %ims",
 					jpgfilename, cr, ( total >= 0 ) ? total : -1 );
 				break;
 			case F_UNK:
-				sprintf( msg, "Unknown filetype" );
-				break;	
+				snprintf( msg, MSG_SIZE, "Unknown filetype" );
+				break;
 		}
 	}
 	
@@ -1632,7 +1638,7 @@ EXPORT const char* pjglib_version_info( void )
 	static char v_info[ 256 ];
 	
 	// copy version info to string
-	sprintf( v_info, "--> %s library v%i.%i%s (%s) by %s <--",
+	snprintf( v_info, sizeof( v_info ), "--> %s library v%i.%i%s (%s) by %s <--",
 			apptitle, appversion / 10, appversion % 10, subversion, versiondate, author );
 			
 	return (const char*) v_info;
@@ -1650,7 +1656,7 @@ EXPORT const char* pjglib_short_name( void )
 	static char v_name[ 256 ];
 	
 	// copy version info to string
-	sprintf( v_name, "%s v%i.%i%s",
+	snprintf( v_name, sizeof( v_name ), "%s v%i.%i%s",
 			apptitle, appversion / 10, appversion % 10, subversion );
 			
 	return (const char*) v_name;
@@ -1903,20 +1909,23 @@ INTERN void initialize_options( int argc, char** argv )
 			// On Windows the shell does not expand wildcards, so we do it here.
 			// Use Wide API (FindFirstFileW) to handle accented/Unicode filenames.
 			if ( strchr( *argv, '*' ) != NULL || strchr( *argv, '?' ) != NULL ) {
-				// Convert pattern to wide string
-				wchar_t wpattern[MAX_PATH];
-				MultiByteToWideChar( CP_ACP, 0, *argv, -1, wpattern, MAX_PATH );
+				// Convert pattern to wide string; use 32768 to handle long paths (Win10+)
+				wchar_t wpattern[32768];
+				MultiByteToWideChar( CP_ACP, 0, *argv, -1, wpattern, 32768 );
 				WIN32_FIND_DATAW fd;
 				HANDLE hFind = FindFirstFileW( wpattern, &fd );
 				if ( hFind != INVALID_HANDLE_VALUE ) {
 					// Extract directory prefix from the pattern (e.g. "imgs\*.jpg" → "imgs\")
-					char dir_prefix[MAX_PATH] = "";
+					// Win10+ long paths can exceed MAX_PATH, so size to match wpattern.
+					char dir_prefix[32768] = "";
 					const char* last_sep = strrchr( *argv, '\\' );
 					const char* last_sep2 = strrchr( *argv, '/' );
 					if ( last_sep2 > last_sep ) last_sep = last_sep2;
 					if ( last_sep != NULL ) {
 						size_t prefix_len = (size_t)(last_sep - *argv) + 1;
-						strncpy( dir_prefix, *argv, prefix_len );
+						if ( prefix_len >= sizeof(dir_prefix) )
+							prefix_len = sizeof(dir_prefix) - 1;
+						memcpy( dir_prefix, *argv, prefix_len );
 						dir_prefix[ prefix_len ] = '\0';
 					}
 					do {
@@ -1927,9 +1936,13 @@ INTERN void initialize_options( int argc, char** argv )
 						// Without -r, skip directories as before.
 						if ( ( fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) && !recursive )
 							continue;
-						// Convert wide filename back to UTF-8
-						char fname_utf8[MAX_PATH];
-						WideCharToMultiByte( CP_ACP, 0, fd.cFileName, -1, fname_utf8, MAX_PATH, NULL, NULL );
+						// Convert wide filename back to CP_ACP; skip if chars can't be represented
+						// (avoids silently corrupted filenames with best-fit substitution).
+						char fname_utf8[MAX_PATH * 2];
+						BOOL used_default = FALSE;
+						int r = WideCharToMultiByte( CP_ACP, WC_NO_BEST_FIT_CHARS,
+							fd.cFileName, -1, fname_utf8, (int)sizeof(fname_utf8), NULL, &used_default );
+						if ( r == 0 || used_default ) continue;
 						size_t len = strlen( dir_prefix ) + strlen( fname_utf8 ) + 1;
 						char* fn = (char*) malloc( len );
 						if ( fn ) {
@@ -2056,6 +2069,14 @@ INTERN void process_ui( void )
 	const char* actionmsg  = NULL;
 	const char* errtypemsg = NULL;
 
+	// Reset per-file state up front so module_mode's short-circuit also benefits.
+	// Without this, a failed file leaves errorlevel=2, which makes the next file's
+	// check inside the module branch skip process_file() and still count as error.
+	errorfunction = NULL;
+	errorlevel    = 0;
+	jpgfilesize   = 0;
+	pjgfilesize   = 0;
+
 	// In module mode, suppress all per-file output — only final OK/ERROR is shown
 	if ( module_mode ) {
 		// still need to process the file, just skip all UI
@@ -2079,13 +2100,10 @@ INTERN void process_ui( void )
 	// A_LIST/A_STATS also forces verbosity 0: output is printed inside list_pjg/list_jpg
 	int local_verbosity = ( ( use_buf && verbosity < 0 ) || action == A_LIST || action == A_STATS ) ? 0 : verbosity;
 	int total, bpms;
-	float cr;	
-	
-	
-	errorfunction = NULL;
-	errorlevel = 0;
-	jpgfilesize = 0;
-	pjgfilesize = 0;	
+	float cr;
+
+	// errorfunction/errorlevel/jpgfilesize/pjgfilesize already reset at top of function
+
 	#if !defined(DEV_BUILD)
 	if ( action != A_LIST && action != A_STATS ) action = A_COMPRESS;
 	#endif
@@ -2585,7 +2603,8 @@ INTERN void process_file( void )
 				#endif
 				break;
 				
-			#if !defined(BUILD_LIB) && defined(DEV_BUILD)
+			#if !defined(BUILD_LIB)
+				#if defined(DEV_BUILD)
 			case A_SPLIT_DUMP:
 				execute( unpack_pjg );
 				execute( adapt_icos );
@@ -2594,47 +2613,49 @@ INTERN void process_file( void )
 				execute( dump_hdr );
 				execute( dump_huf );
 				break;
-				
+
 			case A_COLL_DUMP:
 				execute( unpack_pjg );
-				execute( adapt_icos );			
+				execute( adapt_icos );
 				execute( unpredict_dc );
 				execute( dump_coll );
 				break;
-				
-			case A_FCOLL_DUMP:				
+
+			case A_FCOLL_DUMP:
 				execute( unpack_pjg );
 				execute( dump_coll );
 				break;
-				
+
 			case A_ZDST_DUMP:
 				execute( unpack_pjg );
 				execute( dump_zdst );
 				break;
-			
+
 			case A_TXT_INFO:
 				execute( unpack_pjg );
 				execute( dump_info );
 				break;
-			
+
 			case A_DIST_INFO:
 				execute( unpack_pjg );
 				execute( dump_dist );
 				break;
-			
+
 			case A_PGM_DUMP:
 				execute( unpack_pjg );
 				execute( adapt_icos );
 				execute( unpredict_dc );
 				execute( dump_pgm );
 				break;
-			#else
-			default:
-				break;
-			#endif
+				#endif // DEV_BUILD
+
 			case A_LIST:
 				execute( list_pjg );
 				break;
+			#else
+			default:
+				break;
+			#endif // BUILD_LIB
 		}
 	}	
 	#if !defined(BUILD_LIB) && defined(DEV_BUILD)
@@ -3663,8 +3684,9 @@ INTERN bool decode_jpeg( void )
 			
 			// evaluate status
 			if ( sta == -1 ) { // status -1 means error
-				snprintf( errormessage, MSG_SIZE, "decode error in scan%i / mcu%i",
-					scnc, ( cs_cmpc > 1 ) ? mcu : dpos );
+				snprintf( errormessage, MSG_SIZE, "decode error in scan%i / mcu%i%s",
+					scnc, ( cs_cmpc > 1 ) ? mcu : dpos,
+					( jpegtype == 2 ) ? " (progressive JPEG — use -p to attempt recovery)" : "" );
 				delete huffr;
 				errorlevel = 2;
 				return false;
@@ -5454,7 +5476,7 @@ INTERN int jpg_encode_ac_prg_sa( BitWriter* huffw, std::vector<std::uint8_t>& st
 /* -----------------------------------------------
 	run of EOB SA decoding routine
 	----------------------------------------------- */
-INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* eobrun, int from, int to )
+INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* /*eobrun*/, int from, int to )
 {
 	unsigned short n;
 	int bpos;
@@ -7549,7 +7571,7 @@ INTERN int idct_2d_fst_8x8( int cmp, int dpos, int ix, int iy )
 /* -----------------------------------------------
 	inverse DCT transform using precalc tables (fast)
 	----------------------------------------------- */
-INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy )
+INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int /*iy*/ )
 {
 	int idct = 0;
 	int ixy;
@@ -7576,7 +7598,7 @@ INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy )
 /* -----------------------------------------------
 	inverse DCT transform using precalc tables (fast)
 	----------------------------------------------- */
-INTERN int idct_2d_fst_1x8( int cmp, int dpos, int ix, int iy )
+INTERN int idct_2d_fst_1x8( int cmp, int dpos, int /*ix*/, int iy )
 {
 	int idct = 0;
 	int ixy;
@@ -7846,10 +7868,14 @@ INTERN inline void add_underscore( char* filename )
 	// add underscore before extension
 	if ( extstr != NULL ) {
 		(*extstr++) = '_';
-		strcpy( extstr, strrchr( tmpname, '.' ) );
+		strcpy( extstr, strrchr( tmpname, '.' ) ); // safe: same length as original
 	}
-	else
-		sprintf( filename, "%s_", tmpname );
+	else {
+		size_t n = strlen( tmpname );
+		memcpy( filename, tmpname, n );
+		filename[ n ] = '_';
+		filename[ n + 1 ] = '\0';
+	}
 		
 	// free memory
 	free( tmpname );

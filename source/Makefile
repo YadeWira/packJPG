@@ -88,7 +88,8 @@ clean:
 WIN64       = x86_64-w64-mingw32-g++
 WIN32       = i686-w64-mingw32-g++
 CROSS_FLAGS = -I. -O3 -Wall -funroll-loops -ffast-math \
-              -fomit-frame-pointer -std=c++17
+              -fomit-frame-pointer -std=c++17 \
+              -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 CROSS_LD    = -static -static-libgcc -static-libstdc++
 
 bin:

@@ -580,7 +580,7 @@ INTERN int jpg_decode_ac_prg_sa( BitReader* huffr, huffTree* actree, short* bloc
 INTERN int jpg_encode_ac_prg_sa( BitWriter* huffw, std::vector<std::uint8_t>& storw, huffCodes* actbl,
 						short* block, int* eobrun, int from, int to );
 
-INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* eobrun, int from, int to );
+INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* /*eobrun*/, int from, int to );
 INTERN int jpg_encode_eobrun( BitWriter* huffw, huffCodes* actbl, int* eobrun );
 INTERN int jpg_encode_crbits( BitWriter* huffw, std::vector<std::uint8_t>& storw );
 
@@ -631,8 +631,8 @@ INTERN void get_context_nnb( int pos, int w, int *a, int *b );
 #if !defined(BUILD_LIB) && defined(DEV_BUILD)
 INTERN int idct_2d_fst_8x8( int cmp, int dpos, int ix, int iy );
 #endif
-INTERN int idct_2d_fst_1x8( int cmp, int dpos, int ix, int iy );
-INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy );
+INTERN int idct_2d_fst_1x8( int cmp, int dpos, int /*ix*/, int iy );
+INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int /*iy*/ );
 
 
 /* -----------------------------------------------
@@ -894,8 +894,7 @@ static bool par_pre_pack( int n, std::function<bool(int)> fn )
             // CreateThread failed — run in this thread
             if ( !fn(c) ) {
                 args[c].failed = 1;
-                strncpy( args[c].errmsg, errormessage, MSG_SIZE - 1 );
-                args[c].errmsg[MSG_SIZE - 1] = '\0';
+                snprintf( args[c].errmsg, MSG_SIZE, "%s", errormessage );
             }
         }
     }
@@ -3495,8 +3494,9 @@ INTERN bool decode_jpeg( void )
 			
 			// evaluate status
 			if ( sta == -1 ) { // status -1 means error
-				snprintf( errormessage, MSG_SIZE, "decode error in scan%i / mcu%i",
-					scnc, ( cs_cmpc > 1 ) ? mcu : dpos );
+				snprintf( errormessage, MSG_SIZE, "decode error in scan%i / mcu%i%s",
+					scnc, ( cs_cmpc > 1 ) ? mcu : dpos,
+					( jpegtype == 2 ) ? " (progressive JPEG -- use -p to attempt recovery)" : "" );
 				delete huffr;
 				errorlevel = 2;
 				return false;
@@ -5272,7 +5272,7 @@ INTERN int jpg_encode_ac_prg_sa( BitWriter* huffw, std::vector<std::uint8_t>& st
 /* -----------------------------------------------
 	run of EOB SA decoding routine
 	----------------------------------------------- */
-INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* eobrun, int from, int to )
+INTERN int jpg_decode_eobrun_sa( BitReader* huffr, short* block, int* /*eobrun*/, int from, int to )
 {
 	unsigned short n;
 	int bpos;
@@ -7367,7 +7367,7 @@ INTERN int idct_2d_fst_8x8( int cmp, int dpos, int ix, int iy )
 /* -----------------------------------------------
 	inverse DCT transform using precalc tables (fast)
 	----------------------------------------------- */
-INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy )
+INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int /*iy*/ )
 {
 	int idct = 0;
 	int ixy;
@@ -7394,7 +7394,7 @@ INTERN int idct_2d_fst_8x1( int cmp, int dpos, int ix, int iy )
 /* -----------------------------------------------
 	inverse DCT transform using precalc tables (fast)
 	----------------------------------------------- */
-INTERN int idct_2d_fst_1x8( int cmp, int dpos, int ix, int iy )
+INTERN int idct_2d_fst_1x8( int cmp, int dpos, int /*ix*/, int iy )
 {
 	int idct = 0;
 	int ixy;

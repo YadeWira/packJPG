@@ -5,6 +5,10 @@
 	#define EXPORT extern
 #endif
 
+// Minimum buffer size callers must allocate for the msg parameter
+// in pjglib_convert_* functions.
+#define PJG_MSG_SIZE 512
+
 /* -----------------------------------------------
 	function declarations: library only functions
 	----------------------------------------------- */

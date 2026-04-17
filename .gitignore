@@ -30,6 +30,11 @@
 # Folders to ignore
 /zzz_backup/
 /dist/
+/source/bin/
+/source4xp/bin/
+
+# Compiled test harnesses (keep sources, ignore binaries)
+/source/test/lib_roundtrip_test
 
 # Test / output files
 *.jpg
