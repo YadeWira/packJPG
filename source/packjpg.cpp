@@ -864,6 +864,10 @@ THREAD_LOCAL int  errorlevel;
 // concurrent pjglib_convert_* calls from host threads.
 THREAD_LOCAL bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
+// -legacy: force encoder to emit v3.1d-compatible bytes (version byte 31).
+// THREAD_LOCAL for the same reason as sfth_mode — MT batch workers inherit it
+// from main, and concurrent lib callers must not race.
+THREAD_LOCAL bool legacy_mode = false;
 
 #if !defined( BUILD_LIB )
 INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
@@ -994,11 +998,16 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 31;
-INTERN const char*  subversion   = "d";
+INTERN const unsigned char appversion = 40;
+INTERN const char*  subversion   = "a";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "04/17/2026";
+// On-disk PJG format version. `format_version_current` is what new encodes
+// write; `format_version_legacy` is the last v3.1d format we still *decode*
+// byte-exactly. `-legacy` flag forces encoder to emit legacy bytes.
+INTERN const unsigned char format_version_current = 40;
+INTERN const unsigned char format_version_legacy  = 31;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -1133,11 +1142,12 @@ int main( int argc, char** argv )
 		int spinner_idx = 0;
 
 		// Capture settings from main thread before spawning workers.
-		// nois_trs, segm_cnt, auto_set, sfth_mode are thread_local so each
-		// worker starts with defaults — copy the parsed values in.
+		// nois_trs, segm_cnt, auto_set, sfth_mode, legacy_mode are thread_local
+		// so each worker starts with defaults — copy the parsed values in.
 		unsigned char main_nois_trs[4], main_segm_cnt[4];
-		bool main_auto_set  = auto_set;
-		bool main_sfth_mode = sfth_mode;
+		bool main_auto_set    = auto_set;
+		bool main_sfth_mode   = sfth_mode;
+		bool main_legacy_mode = legacy_mode;
 		for ( int i = 0; i < 4; i++ ) {
 			main_nois_trs[i] = nois_trs[i];
 			main_segm_cnt[i] = segm_cnt[i];
@@ -1145,8 +1155,9 @@ int main( int argc, char** argv )
 
 		auto worker = [&]() {
 			// propagate main-thread settings into this thread's locals
-			auto_set  = main_auto_set;
-			sfth_mode = main_sfth_mode;
+			auto_set    = main_auto_set;
+			sfth_mode   = main_sfth_mode;
+			legacy_mode = main_legacy_mode;
 			for ( int i = 0; i < 4; i++ ) {
 				nois_trs[i] = main_nois_trs[i];
 				segm_cnt[i] = main_segm_cnt[i];
@@ -1819,6 +1830,9 @@ INTERN void initialize_options( int argc, char** argv )
 				fprintf( msgout, "\nWarning: -sfth works best with 3+ cores (detected: %i)\n\n", cores );
 			}
 		}
+		else if ( strcmp((*argv), "-legacy" ) == 0 || strcmp((*argv), "-pjgv1" ) == 0 ) {
+			legacy_mode = true;
+		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
@@ -2442,6 +2456,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
+	fprintf( msgout, " [-legacy] write v3.1d-compatible PJG format (for old decoders)\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
@@ -4229,7 +4244,8 @@ INTERN bool pack_pjg( void )
 	if ( sfth_mode && cmpc > 1 ) {
 		// Write 0x01 marker BEFORE version so decoder loop processes it first
 		str_out->write_byte( 0x01 );
-		hcode = appversion; str_out->write_byte( hcode );
+		hcode = legacy_mode ? format_version_legacy : format_version_current;
+		str_out->write_byte( hcode );
 
 		// Encode shared header into a bounded MemoryWriter, prefix its size.
 		// The decoder reads exactly this many bytes keeping stream aligned.
@@ -4312,7 +4328,7 @@ INTERN bool pack_pjg( void )
 
 	// ── Sequential path (default, compatible with stable) ───────────────────────
 	// store version number
-	hcode = appversion;
+	hcode = legacy_mode ? format_version_legacy : format_version_current;
 	str_out->write_byte(hcode);
 	
 	
@@ -4446,8 +4462,8 @@ INTERN bool unpack_pjg( void )
 			decoded_from_sfth = true;
 		}
 		else if ( hcode >= 0x14 ) {
-			// compare version number
-			if ( hcode != appversion ) {
+			// compare version number: accept current format + last legacy format
+			if ( hcode != format_version_current && hcode != format_version_legacy ) {
 				snprintf( errormessage, MSG_SIZE, "incompatible file, use %s v%i.%i",
 					appname, hcode / 10, hcode % 10 );
 				errorlevel = 2;

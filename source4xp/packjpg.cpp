@@ -828,6 +828,9 @@ INTERN bool wait_exit  = true;	// pause after finished yes / no
 // verify, so MT CLI workers would race on a non-TL value.
 THREAD_LOCAL bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
+// -legacy: force encoder to emit v3.1d-compatible PJG bytes. THREAD_LOCAL for
+// same reason as sfth_mode (MT batch workers + lib concurrent callers).
+THREAD_LOCAL bool legacy_mode = false;
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
@@ -981,11 +984,14 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 31;
-INTERN const char*  subversion   = "d";
+INTERN const unsigned char appversion = 40;
+INTERN const char*  subversion   = "a";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "04/17/2026";
+// On-disk PJG format version (see source/packjpg.cpp for full rationale).
+INTERN const unsigned char format_version_current = 40;
+INTERN const unsigned char format_version_legacy  = 31;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -1644,6 +1650,9 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
 			sfth_mode = true;
 		}
+		else if ( strcmp((*argv), "-legacy" ) == 0 || strcmp((*argv), "-pjgv1" ) == 0 ) {
+			legacy_mode = true;
+		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
@@ -2251,6 +2260,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  parallel single-file compression via Win32 threads\n" );
+	fprintf( msgout, " [-legacy] write v3.1d-compatible PJG format (for old decoders)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
@@ -4033,7 +4043,8 @@ INTERN bool pack_pjg( void )
 	// -sfth: parallel component encoding via Win32 CreateThread
 	if ( sfth_mode && cmpc > 1 ) {
 		str_out->write_byte( 0x01 );
-		hcode = appversion; str_out->write_byte( hcode );
+		hcode = legacy_mode ? format_version_legacy : format_version_current;
+		str_out->write_byte( hcode );
 
 		// Encode shared header into a bounded MemoryWriter, prefix its size.
 		{
@@ -4106,7 +4117,7 @@ INTERN bool pack_pjg( void )
 
 	// ── Sequential path (compatible with all versions) ─────────────────────────
 	// store version number
-	hcode = appversion;
+	hcode = legacy_mode ? format_version_legacy : format_version_current;
 	str_out->write_byte(hcode);
 	
 	
@@ -4240,8 +4251,8 @@ INTERN bool unpack_pjg( void )
 			decoded_from_sfth = true;
 		}
 		else if ( hcode >= 0x14 ) {
-			// compare version number
-			if ( hcode != appversion ) {
+			// compare version number: accept current format + last legacy
+			if ( hcode != format_version_current && hcode != format_version_legacy ) {
 				snprintf( errormessage, MSG_SIZE, "incompatible file, use %s v%i.%i",
 					appname, hcode / 10, hcode % 10 );
 				errorlevel = 2;
