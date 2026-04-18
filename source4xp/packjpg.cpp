@@ -382,8 +382,6 @@ packJPG by Matthias Stirner, 01/2016
 #include <functional>
 #include <csignal>
 #include <chrono>
-#include <future>
-#include <atomic>
 #include "xp_compat.h"
 
 #if defined(_WIN32) || defined(WIN32)
@@ -965,10 +963,10 @@ struct XpSfthDecArgs {
     const std::vector<uint8_t>* buf;
     std::string*                err;
     int*                        failed;
-    std::atomic<bool>*          any_err;
-    std::shared_future<void>*   f_y_ach;  // barrier: Y.ac_high done
-    std::shared_future<void>*   f_y_acl;  // barrier: Y.ac_low done
-    std::shared_future<void>*   f_y_dc;   // barrier: Y.dc done
+    volatile LONG*              any_err;   // InterlockedExchange/-CompareExchange
+    HANDLE                      ev_y_ach;  // barrier: Y.ac_high done (manual-reset)
+    HANDLE                      ev_y_acl;  // barrier: Y.ac_low done  (manual-reset)
+    HANDLE                      ev_y_dc;   // barrier: Y.dc done      (manual-reset)
 };
 
 static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
@@ -977,16 +975,23 @@ static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
     pjg_use_crosscomp_now = a->cc_enable;
     MemoryReader mr( *(a->buf) );
     ArithmeticDecoder dec( mr );
-    #define XP_DEC_FAIL() do { *(a->err) = errormessage; *(a->failed) = 1; \
-                               if ( a->any_err ) a->any_err->store(true); return 1; } while (0)
+    #define XP_DEC_FAIL() do { \
+        *(a->err) = errormessage; \
+        *(a->failed) = 1; \
+        if ( a->any_err ) InterlockedExchange( a->any_err, 1 ); \
+        return 1; \
+    } while (0)
     if ( !pjg_decode_zstscan  ( &dec, a->cmp ) ) XP_DEC_FAIL();
     if ( !pjg_decode_zdst_high( &dec, a->cmp ) ) XP_DEC_FAIL();
-    a->f_y_ach->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    WaitForSingleObject( a->ev_y_ach, INFINITE );
+    if ( a->any_err && InterlockedCompareExchange( a->any_err, 0, 0 ) ) return 1;
     if ( !pjg_decode_ac_high  ( &dec, a->cmp ) ) XP_DEC_FAIL();
     if ( !pjg_decode_zdst_low ( &dec, a->cmp ) ) XP_DEC_FAIL();
-    a->f_y_acl->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    WaitForSingleObject( a->ev_y_acl, INFINITE );
+    if ( a->any_err && InterlockedCompareExchange( a->any_err, 0, 0 ) ) return 1;
     if ( !pjg_decode_ac_low   ( &dec, a->cmp ) ) XP_DEC_FAIL();
-    a->f_y_dc ->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    WaitForSingleObject( a->ev_y_dc, INFINITE );
+    if ( a->any_err && InterlockedCompareExchange( a->any_err, 0, 0 ) ) return 1;
     if ( !pjg_decode_dc       ( &dec, a->cmp ) ) XP_DEC_FAIL();
     #undef XP_DEC_FAIL
     return 0;
@@ -4332,14 +4337,14 @@ INTERN bool unpack_pjg( void )
 		const bool cc_enable = ( format_version_read == format_version_current );
 		std::vector<std::string>   cmp_errs( cmpc );
 		std::vector<int>           cmp_failed( cmpc, 0 );
-		std::atomic<bool>          any_err{ false };
-		std::promise<void> p_y_ach, p_y_acl, p_y_dc;
-		std::shared_future<void> f_y_ach = p_y_ach.get_future().share();
-		std::shared_future<void> f_y_acl = p_y_acl.get_future().share();
-		std::shared_future<void> f_y_dc  = p_y_dc .get_future().share();
+		volatile LONG              any_err = 0;
+		// Manual-reset events: once Set they stay signaled until CloseHandle.
+		HANDLE ev_y_ach = CreateEvent( NULL, TRUE, FALSE, NULL );
+		HANDLE ev_y_acl = CreateEvent( NULL, TRUE, FALSE, NULL );
+		HANDLE ev_y_dc  = CreateEvent( NULL, TRUE, FALSE, NULL );
 		// Legacy sfth: no dependency on Y → pre-satisfy barriers.
 		if ( !cc_enable || cmpc < 2 ) {
-			p_y_ach.set_value(); p_y_acl.set_value(); p_y_dc.set_value();
+			SetEvent( ev_y_ach ); SetEvent( ev_y_acl ); SetEvent( ev_y_dc );
 		}
 		int cmp_start = ( cc_enable && cmpc >= 2 ) ? 1 : 0;
 
@@ -4352,9 +4357,9 @@ INTERN bool unpack_pjg( void )
 			args[cmp].err       = &cmp_errs[cmp];
 			args[cmp].failed    = &cmp_failed[cmp];
 			args[cmp].any_err   = &any_err;
-			args[cmp].f_y_ach   = &f_y_ach;
-			args[cmp].f_y_acl   = &f_y_acl;
-			args[cmp].f_y_dc    = &f_y_dc;
+			args[cmp].ev_y_ach  = ev_y_ach;
+			args[cmp].ev_y_acl  = ev_y_acl;
+			args[cmp].ev_y_dc   = ev_y_dc;
 			threads[cmp] = CreateThread( NULL, 0, xp_sfth_dec_worker, &args[cmp], 0, NULL );
 			if ( threads[cmp] == NULL )
 				xp_sfth_dec_worker( &args[cmp] ); // fallback: run in this thread
@@ -4366,22 +4371,23 @@ INTERN bool unpack_pjg( void )
 			bool y_ok = pjg_decode_zstscan( &ydec, 0 )
 			         && pjg_decode_zdst_high( &ydec, 0 )
 			         && pjg_decode_ac_high ( &ydec, 0 );
-			if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
-			p_y_ach.set_value();
+			if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; InterlockedExchange( &any_err, 1 ); }
+			SetEvent( ev_y_ach );
 			if ( y_ok ) {
 				y_ok = pjg_decode_zdst_low( &ydec, 0 )
 				    && pjg_decode_ac_low  ( &ydec, 0 );
-				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
+				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; InterlockedExchange( &any_err, 1 ); }
 			}
-			p_y_acl.set_value();
+			SetEvent( ev_y_acl );
 			if ( y_ok ) {
 				y_ok = pjg_decode_dc( &ydec, 0 );
-				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
+				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; InterlockedExchange( &any_err, 1 ); }
 			}
-			p_y_dc.set_value();
+			SetEvent( ev_y_dc );
 		}
 		for ( cmp = cmp_start; cmp < cmpc; cmp++ )
 			if ( threads[cmp] ) { WaitForSingleObject( threads[cmp], INFINITE ); CloseHandle( threads[cmp] ); }
+		CloseHandle( ev_y_ach ); CloseHandle( ev_y_acl ); CloseHandle( ev_y_dc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			if ( cmp_failed[cmp] ) {
 				if ( !cmp_errs[cmp].empty() ) {
