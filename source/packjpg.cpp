@@ -4237,8 +4237,9 @@ INTERN bool pack_pjg( void )
 	int dev_size = 0;
 	#endif
 
-	// Reset cross-comp flag — sequential path re-enables below based on format;
-	// sfth worker threads inherit a fresh TLS default of false.
+	// Reset cross-comp flag on main thread; sequential path and sfth workers
+	// re-enable it below based on format. Sfth workers set their own TLS
+	// after tls() (capture cc_enable by value).
 	pjg_use_crosscomp_now = false;
 
 	// PJG-Header
@@ -4282,6 +4283,9 @@ INTERN bool pack_pjg( void )
 
 		// Encode each component into its own MemoryWriter in parallel.
 		// make_tls_init() snapshots TLS so each worker sees the current file's data.
+		// Cross-comp is safe in parallel on encode: colldata[0] is pre-populated
+		// read-only by jpg_decode() before pack_pjg() runs, so all workers read Y.
+		const bool cc_enable = !legacy_mode;
 		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
 		std::vector<std::string> cmp_errs( cmpc );
 		std::atomic<bool> any_err{ false };
@@ -4289,8 +4293,9 @@ INTERN bool pack_pjg( void )
 		std::vector<std::future<void>> futs;
 		futs.reserve( cmpc );
 		for ( int c = 0; c < cmpc; c++ ) {
-			futs.push_back( std::async( std::launch::async, [&, c]() {
+			futs.push_back( std::async( std::launch::async, [&, c, cc_enable]() {
 				tls();
+				pjg_use_crosscomp_now = cc_enable;
 				MemoryWriter mw;
 				{
 					ArithmeticEncoder enc( mw );
@@ -4528,23 +4533,83 @@ INTERN bool unpack_pjg( void )
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
 		}
-		// Decode components in parallel
+		// v4.0 sfth pipeline: cross-comp reads colldata[0][bpos] during Cb/Cr
+		// decode. AC bands partition is disjoint (ac_high=7×7 inner, ac_low=
+		// row0+col0, dc=[0,0]), so Cb/Cr need Y's ac_high / ac_low / dc each
+		// to complete ONLY before their own matching step — earlier steps
+		// (zstscan, zdst_high, zdst_low) have no Y dependency and run in
+		// parallel with Y. Legacy sfth (pre-v4.0 format) keeps all-parallel.
+		const bool cc_enable = ( format_version_read == format_version_current );
 		std::vector<std::string> cmp_errs( cmpc );
 		std::atomic<bool> any_err{ false };
 		auto tls = make_tls_init();
-		std::vector<std::future<void>> futs; futs.reserve( cmpc );
-		for ( cmp = 0; cmp < cmpc; cmp++ ) {
-			futs.push_back( std::async( std::launch::async, [&, cmp]() {
-				tls();
-				MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
-				bool ok =
-					pjg_decode_zstscan  ( &dec, cmp ) && pjg_decode_zdst_high( &dec, cmp ) &&
-					pjg_decode_ac_high  ( &dec, cmp ) && pjg_decode_zdst_low ( &dec, cmp ) &&
-					pjg_decode_ac_low   ( &dec, cmp ) && pjg_decode_dc       ( &dec, cmp );
-				if ( !ok ) { cmp_errs[cmp] = errormessage; any_err.store(true); }
-			} ) );
+
+		if ( cc_enable && cmpc >= 2 ) {
+			std::promise<void> p_y_ach, p_y_acl, p_y_dc;
+			std::shared_future<void> f_y_ach = p_y_ach.get_future().share();
+			std::shared_future<void> f_y_acl = p_y_acl.get_future().share();
+			std::shared_future<void> f_y_dc  = p_y_dc .get_future().share();
+
+			std::vector<std::future<void>> futs; futs.reserve( cmpc - 1 );
+			for ( cmp = 1; cmp < cmpc; cmp++ ) {
+				futs.push_back( std::async( std::launch::async,
+				                            [&, cmp, cc_enable]() {
+					tls();
+					pjg_use_crosscomp_now = cc_enable;
+					MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
+					auto fail = [&] { cmp_errs[cmp] = errormessage; any_err.store(true); };
+					if ( !pjg_decode_zstscan  ( &dec, cmp ) ) { fail(); return; }
+					if ( !pjg_decode_zdst_high( &dec, cmp ) ) { fail(); return; }
+					f_y_ach.wait(); if ( any_err.load() ) return;
+					if ( !pjg_decode_ac_high  ( &dec, cmp ) ) { fail(); return; }
+					if ( !pjg_decode_zdst_low ( &dec, cmp ) ) { fail(); return; }
+					f_y_acl.wait(); if ( any_err.load() ) return;
+					if ( !pjg_decode_ac_low   ( &dec, cmp ) ) { fail(); return; }
+					f_y_dc .wait(); if ( any_err.load() ) return;
+					if ( !pjg_decode_dc       ( &dec, cmp ) ) { fail(); return; }
+				} ) );
+			}
+
+			// Y on main thread — signal after ac_high / ac_low / dc regardless
+			// of outcome so workers can observe any_err and unblock.
+			pjg_use_crosscomp_now = cc_enable;
+			MemoryReader ymr( cbufs[0] ); ArithmeticDecoder ydec( ymr );
+			bool y_ok = pjg_decode_zstscan( &ydec, 0 )
+			         && pjg_decode_zdst_high( &ydec, 0 )
+			         && pjg_decode_ac_high ( &ydec, 0 );
+			if ( !y_ok ) { cmp_errs[0] = errormessage; any_err.store(true); }
+			p_y_ach.set_value();
+			if ( y_ok ) {
+				y_ok = pjg_decode_zdst_low( &ydec, 0 )
+				    && pjg_decode_ac_low  ( &ydec, 0 );
+				if ( !y_ok ) { cmp_errs[0] = errormessage; any_err.store(true); }
+			}
+			p_y_acl.set_value();
+			if ( y_ok ) {
+				y_ok = pjg_decode_dc( &ydec, 0 );
+				if ( !y_ok ) { cmp_errs[0] = errormessage; any_err.store(true); }
+			}
+			p_y_dc.set_value();
+
+			for ( auto& f : futs ) f.get();
+		} else {
+			// Legacy sfth: no cross-comp → all components parallel.
+			std::vector<std::future<void>> futs; futs.reserve( cmpc );
+			for ( cmp = 0; cmp < cmpc; cmp++ ) {
+				futs.push_back( std::async( std::launch::async,
+				                            [&, cmp, cc_enable]() {
+					tls();
+					pjg_use_crosscomp_now = cc_enable;
+					MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
+					bool ok =
+						pjg_decode_zstscan  ( &dec, cmp ) && pjg_decode_zdst_high( &dec, cmp ) &&
+						pjg_decode_ac_high  ( &dec, cmp ) && pjg_decode_zdst_low ( &dec, cmp ) &&
+						pjg_decode_ac_low   ( &dec, cmp ) && pjg_decode_dc       ( &dec, cmp );
+					if ( !ok ) { cmp_errs[cmp] = errormessage; any_err.store(true); }
+				} ) );
+			}
+			for ( auto& f : futs ) f.get();
 		}
-		for ( auto& f : futs ) f.get();
 		if ( any_err.load() ) {
 			for ( int c = 0; c < cmpc; c++ )
 				if ( !cmp_errs[c].empty() ) {

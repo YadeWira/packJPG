@@ -382,6 +382,8 @@ packJPG by Matthias Stirner, 01/2016
 #include <functional>
 #include <csignal>
 #include <chrono>
+#include <future>
+#include <atomic>
 #include "xp_compat.h"
 
 #if defined(_WIN32) || defined(WIN32)
@@ -928,6 +930,7 @@ static bool par_pre_pack( int n, std::function<bool(int)> fn )
 
 struct XpSfthEncArgs {
     int  cmp;
+    bool cc_enable;
     std::vector<uint8_t>* buf;
     std::string*          err;
     int*                  failed;
@@ -936,6 +939,7 @@ struct XpSfthEncArgs {
 static DWORD WINAPI xp_sfth_enc_worker( LPVOID arg )
 {
     XpSfthEncArgs* a = (XpSfthEncArgs*) arg;
+    pjg_use_crosscomp_now = a->cc_enable;
     MemoryWriter mw;
     {
         ArithmeticEncoder enc( mw );
@@ -957,27 +961,34 @@ static DWORD WINAPI xp_sfth_enc_worker( LPVOID arg )
 
 struct XpSfthDecArgs {
     int  cmp;
+    bool cc_enable;
     const std::vector<uint8_t>* buf;
     std::string*                err;
     int*                        failed;
+    std::atomic<bool>*          any_err;
+    std::shared_future<void>*   f_y_ach;  // barrier: Y.ac_high done
+    std::shared_future<void>*   f_y_acl;  // barrier: Y.ac_low done
+    std::shared_future<void>*   f_y_dc;   // barrier: Y.dc done
 };
 
 static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
 {
     XpSfthDecArgs* a = (XpSfthDecArgs*) arg;
+    pjg_use_crosscomp_now = a->cc_enable;
     MemoryReader mr( *(a->buf) );
     ArithmeticDecoder dec( mr );
-    bool ok = pjg_decode_zstscan  ( &dec, a->cmp ) &&
-              pjg_decode_zdst_high( &dec, a->cmp ) &&
-              pjg_decode_ac_high  ( &dec, a->cmp ) &&
-              pjg_decode_zdst_low ( &dec, a->cmp ) &&
-              pjg_decode_ac_low   ( &dec, a->cmp ) &&
-              pjg_decode_dc       ( &dec, a->cmp );
-    if ( !ok ) {
-        *(a->err)    = errormessage;
-        *(a->failed) = 1;
-        return 1;
-    }
+    #define XP_DEC_FAIL() do { *(a->err) = errormessage; *(a->failed) = 1; \
+                               if ( a->any_err ) a->any_err->store(true); return 1; } while (0)
+    if ( !pjg_decode_zstscan  ( &dec, a->cmp ) ) XP_DEC_FAIL();
+    if ( !pjg_decode_zdst_high( &dec, a->cmp ) ) XP_DEC_FAIL();
+    a->f_y_ach->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    if ( !pjg_decode_ac_high  ( &dec, a->cmp ) ) XP_DEC_FAIL();
+    if ( !pjg_decode_zdst_low ( &dec, a->cmp ) ) XP_DEC_FAIL();
+    a->f_y_acl->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    if ( !pjg_decode_ac_low   ( &dec, a->cmp ) ) XP_DEC_FAIL();
+    a->f_y_dc ->wait(); if ( a->any_err && a->any_err->load() ) return 1;
+    if ( !pjg_decode_dc       ( &dec, a->cmp ) ) XP_DEC_FAIL();
+    #undef XP_DEC_FAIL
     return 0;
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4073,7 +4084,10 @@ INTERN bool pack_pjg( void )
 			str_out->write( hdr_mw.get_data() );
 		}
 
-		// Encode each component into its own buffer in parallel.
+		// Encode each component into its own buffer in parallel. Cross-comp is
+		// safe on encode: colldata[0] is pre-populated read-only by jpg_decode()
+		// before pack_pjg(), so all workers can read Y's bands concurrently.
+		const bool cc_enable = !legacy_mode;
 		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
 		std::vector<std::string>          cmp_errs( cmpc );
 		std::vector<int>                  cmp_failed( cmpc, 0 );
@@ -4081,6 +4095,7 @@ INTERN bool pack_pjg( void )
 		std::vector<HANDLE>               threads( cmpc, NULL );
 		for ( int c = 0; c < cmpc; c++ ) {
 			args[c].cmp    = c;
+			args[c].cc_enable = cc_enable;
 			args[c].buf    = &cmp_bufs[c];
 			args[c].err    = &cmp_errs[c];
 			args[c].failed = &cmp_failed[c];
@@ -4310,21 +4325,62 @@ INTERN bool unpack_pjg( void )
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
 		}
-		// Decode components in parallel via Win32 threads
+		// v4.0 sfth pipeline (mirror of source/): Cb/Cr workers decode their
+		// zstscan/zdst_high in parallel with Y, then wait on 3 barriers for
+		// Y's ac_high / ac_low / dc each before reading colldata[0][bpos].
+		// Legacy path (pre-v4.0 fmt) pre-satisfies all barriers for all-par.
+		const bool cc_enable = ( format_version_read == format_version_current );
 		std::vector<std::string>   cmp_errs( cmpc );
 		std::vector<int>           cmp_failed( cmpc, 0 );
+		std::atomic<bool>          any_err{ false };
+		std::promise<void> p_y_ach, p_y_acl, p_y_dc;
+		std::shared_future<void> f_y_ach = p_y_ach.get_future().share();
+		std::shared_future<void> f_y_acl = p_y_acl.get_future().share();
+		std::shared_future<void> f_y_dc  = p_y_dc .get_future().share();
+		// Legacy sfth: no dependency on Y → pre-satisfy barriers.
+		if ( !cc_enable || cmpc < 2 ) {
+			p_y_ach.set_value(); p_y_acl.set_value(); p_y_dc.set_value();
+		}
+		int cmp_start = ( cc_enable && cmpc >= 2 ) ? 1 : 0;
+
 		std::vector<XpSfthDecArgs> args( cmpc );
 		std::vector<HANDLE>        threads( cmpc, NULL );
-		for ( cmp = 0; cmp < cmpc; cmp++ ) {
-			args[cmp].cmp    = cmp;
-			args[cmp].buf    = &cbufs[cmp];
-			args[cmp].err    = &cmp_errs[cmp];
-			args[cmp].failed = &cmp_failed[cmp];
+		for ( cmp = cmp_start; cmp < cmpc; cmp++ ) {
+			args[cmp].cmp       = cmp;
+			args[cmp].cc_enable = cc_enable;
+			args[cmp].buf       = &cbufs[cmp];
+			args[cmp].err       = &cmp_errs[cmp];
+			args[cmp].failed    = &cmp_failed[cmp];
+			args[cmp].any_err   = &any_err;
+			args[cmp].f_y_ach   = &f_y_ach;
+			args[cmp].f_y_acl   = &f_y_acl;
+			args[cmp].f_y_dc    = &f_y_dc;
 			threads[cmp] = CreateThread( NULL, 0, xp_sfth_dec_worker, &args[cmp], 0, NULL );
 			if ( threads[cmp] == NULL )
 				xp_sfth_dec_worker( &args[cmp] ); // fallback: run in this thread
 		}
-		for ( cmp = 0; cmp < cmpc; cmp++ )
+		// Y on main thread — signal after ac_high / ac_low / dc regardless.
+		if ( cc_enable && cmpc >= 2 ) {
+			pjg_use_crosscomp_now = cc_enable;
+			MemoryReader ymr( cbufs[0] ); ArithmeticDecoder ydec( ymr );
+			bool y_ok = pjg_decode_zstscan( &ydec, 0 )
+			         && pjg_decode_zdst_high( &ydec, 0 )
+			         && pjg_decode_ac_high ( &ydec, 0 );
+			if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
+			p_y_ach.set_value();
+			if ( y_ok ) {
+				y_ok = pjg_decode_zdst_low( &ydec, 0 )
+				    && pjg_decode_ac_low  ( &ydec, 0 );
+				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
+			}
+			p_y_acl.set_value();
+			if ( y_ok ) {
+				y_ok = pjg_decode_dc( &ydec, 0 );
+				if ( !y_ok ) { cmp_errs[0] = errormessage; cmp_failed[0] = 1; any_err.store(true); }
+			}
+			p_y_dc.set_value();
+		}
+		for ( cmp = cmp_start; cmp < cmpc; cmp++ )
 			if ( threads[cmp] ) { WaitForSingleObject( threads[cmp], INFINITE ); CloseHandle( threads[cmp] ); }
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			if ( cmp_failed[cmp] ) {
