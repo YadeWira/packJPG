@@ -39,19 +39,19 @@ jobs:
           c++ --version
           which cjpeg djpeg magick || which convert
 
-      - name: Build packJPG
-        working-directory: source
-        run: |
-          make CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
-          ls -la packJPG
-
       - name: Build lib_roundtrip_test
         working-directory: source
         run: |
-          make clean
           make lib CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -DBUILD_LIB -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
           c++ -I. -O2 -std=c++17 test/lib_roundtrip_test.cpp packJPGlib.a -lpthread -o test/lib_roundtrip_test
           ls -la test/lib_roundtrip_test
+
+      - name: Build packJPG
+        working-directory: source
+        run: |
+          make clean
+          make CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
+          ls -la packJPG
 
       - name: Generate test JPEG corpus
         run: |
