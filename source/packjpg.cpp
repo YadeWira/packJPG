@@ -1009,10 +1009,10 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "";
+INTERN const char*  subversion   = "a";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "04/17/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "04/21/2026";
 // On-disk PJG format version. `format_version_current` is what new encodes
 // write; `format_version_legacy` is the last v3.1d format we still *decode*
 // byte-exactly. `-legacy` flag forces encoder to emit legacy bytes.

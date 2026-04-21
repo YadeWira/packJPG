@@ -1,5 +1,11 @@
 # packJPG Changelog
 
+## v4.0a (2026-04-21) — bugfix
+
+- fix: `decode_jpeg()` leaked a `BitReader` (32 bytes) when `jpg_parse_jfif()`
+  returned an error mid-scan loop. Found by libFuzzer + LeakSanitizer on a
+  malformed JPEG; added `delete huffr` before the early return.
+
 ## v4.0 (2026-04-21) — format break: cross-component lazy prediction
 
 > packJPG v4.0 introduces a **format change** (version byte `0x28` / 40) that
