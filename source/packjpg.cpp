@@ -3432,6 +3432,7 @@ INTERN bool decode_jpeg( void )
 			len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
 			if ( ( type == 0xC4 ) || ( type == 0xDA ) || ( type == 0xDD ) ) {
 				if ( !jpg_parse_jfif( type, len, &( hdrdata[ hpos ] ) ) ) {
+					delete huffr;
 					return false;
 				}
 			}
