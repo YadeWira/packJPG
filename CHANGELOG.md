@@ -61,8 +61,8 @@
   baseline 4:2:0, 4:4:4, grayscale, photographic, solid color) for CI
   smoke tests
 - **Windows XP support policy:** v4.0 is the **last feature release** for
-  Windows XP. Future XP releases will be bugfix-only (versioned v4.0.1,
-  v4.0.2, …). New features introduced in v4.1 and later will not be
+  Windows XP. Future XP releases will be bugfix-only (versioned v4.0a,
+  v4.0b, …). New features introduced in v4.1 and later will not be
   backported to the XP build
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
