@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ─── Version (keep in sync with packjpg.cpp appversion/subversion) ───────────
-VERSION="3.1d"
+VERSION="4.0a"
 PKG="packjpg"
 
 SRC_DIR="source"
@@ -171,13 +171,13 @@ achieving better compression than standard JPEG storage. Supports
 single-file parallel compression (-sfth) and batch multi-threading (-th).
 
 %install
-cp -a %{_builddir}/usr %{buildroot}/
+cp -a %{_topdir}/BUILD/usr %{buildroot}/
 
 %files
 %{_bindir}/packjpg
 
 %changelog
-* $(date '+%a %b %d %Y') Yade Bravo <https://github.com/YadeWira/packJPG> - ${VERSION}-1
+* $(LC_ALL=C date '+%a %b %d %Y') Yade Bravo <https://github.com/YadeWira/packJPG> - ${VERSION}-1
 - Release ${VERSION}
 EOF
 
