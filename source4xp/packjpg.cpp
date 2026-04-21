@@ -1,5 +1,5 @@
 /*
-packJPG v3.1a (04/02/2026)
+packJPG v4.0 (04/21/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -1010,7 +1010,7 @@ INTERN const unsigned char appversion = 40;
 INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "04/17/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "04/21/2026";
 // On-disk PJG format version (see source/packjpg.cpp for full rationale).
 INTERN const unsigned char format_version_current = 40;
 INTERN const unsigned char format_version_legacy  = 31;

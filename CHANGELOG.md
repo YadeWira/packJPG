@@ -53,6 +53,17 @@
   by packJPG v3.1d or earlier.** Use `-legacy` during the transition if
   downstream consumers have not been upgraded. This is the first intentional
   format break since v2.0 (2007)
+- build: Linux builds now use `-flto=thin` (clang) for ~8 % encode speedup
+  via cross-TU inlining; ratio and output are bit-identical
+- build: `check_value_range` rewritten with `std::minmax_element` for
+  cleaner SIMD-friendly range validation
+- test corpus: `test-files/` directory added (5 representative JPEGs:
+  baseline 4:2:0, 4:4:4, grayscale, photographic, solid color) for CI
+  smoke tests
+- **Windows XP support policy:** v4.0 is the **last feature release** for
+  Windows XP. Future XP releases will be bugfix-only (versioned v4.0.1,
+  v4.0.2, …). New features introduced in v4.1 and later will not be
+  backported to the XP build
 - maintainer: Yade Bravo (https://github.com/YadeWira/packJPG)
 
 ---
