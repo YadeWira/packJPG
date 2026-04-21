@@ -1,6 +1,6 @@
 # packJPG Changelog
 
-## v4.0 (unreleased) — format break: cross-component lazy prediction
+## v4.0 (2026-04-21) — format break: cross-component lazy prediction
 
 > packJPG v4.0 introduces a **format change** (version byte `0x28` / 40) that
 > adds cross-component adaptation to the PJG coder: when encoding the chroma

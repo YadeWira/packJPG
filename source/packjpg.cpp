@@ -1,5 +1,5 @@
 /*
-packJPG v3.1a (04/02/2026)
+packJPG v4.0 (04/21/2026)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 packJPG is a compression program specially designed for further
@@ -370,6 +370,7 @@ ____________________________________
 packJPG by Matthias Stirner, 01/2016
 */
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -4174,24 +4175,24 @@ INTERN bool unpredict_dc( void )
 
 INTERN bool check_value_range( void )
 {
-	int absmax;
-	int cmp, bpos, dpos;
-	
-	// out of range should never happen with unmodified JPEGs
-	for ( cmp = 0; cmp < cmpc; cmp++ )
-	for ( bpos = 0; bpos < 64; bpos++ ) {
-		absmax = MAX_V( cmp, bpos );
-		for ( dpos = 0; dpos < cmpnfo[cmp].bc; dpos++ )
-		if ( ( colldata[cmp][bpos][dpos] > absmax ) ||
-			 ( colldata[cmp][bpos][dpos] < -absmax ) ) {
+	// Out of range should never happen with unmodified JPEGs.
+	// Use minmax_element so the compiler can auto-vectorize the inner scan.
+	for ( int cmp = 0; cmp < cmpc; cmp++ )
+	for ( int bpos = 0; bpos < 64; bpos++ ) {
+		const int bc = cmpnfo[cmp].bc;
+		if ( bc == 0 ) continue;
+		const int absmax = MAX_V( cmp, bpos );
+		const signed short* data = colldata[cmp][bpos];
+		const auto [lo, hi] = std::minmax_element( data, data + bc );
+		if ( *hi > absmax || *lo < -absmax ) {
+			const int bad = ( *hi > absmax ) ? *hi : *lo;
 			snprintf( errormessage, MSG_SIZE, "value out of range error: cmp%i, frq%i, val %i, max %i",
-					cmp, bpos, colldata[cmp][bpos][dpos], absmax );
+					cmp, bpos, bad, absmax );
 			errorlevel = 2;
 			return false;
 		}
 	}
-	
-	
+
 	return true;
 }
 
