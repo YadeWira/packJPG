@@ -61,7 +61,7 @@ Unix path (`source/packjpg.cpp` under `#ifdef UNIX` uses pthreads through
 the C++ standard library). Should port directly to macOS and Linux-ARM64
 with the system libc++ / libstdc++.
 
-Windows XP (`source4xp/`) uses Win32 `CreateThread` and is unaffected by
+Windows XP (`sourcelegacy/`) uses Win32 `CreateThread` and is unaffected by
 v4.0's new changes on non-Windows platforms.
 
 ## Build system status

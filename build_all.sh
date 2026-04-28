@@ -5,7 +5,7 @@
 #   Linux x64            (native, requires g++ or clang++)
 #   Windows x64          (requires x86_64-w64-mingw32-g++)
 #   Windows x86 / Win7   (requires i686-w64-mingw32-g++)
-#   Windows XP 32-bit    (requires i686-w64-mingw32-g++, source4xp build)
+#   Windows legacy (XP/Win7) 32-bit    (requires i686-w64-mingw32-g++, sourcelegacy build)
 #
 # All binaries are collected into ./dist/
 #
@@ -116,19 +116,19 @@ else
     ok "dist/packJPG_win_x86.exe"
 fi
 
-# ─── Windows XP 32-bit ───────────────────────────────────────────────────────
+# ─── Windows legacy (XP/Win7) 32-bit ───────────────────────────────────────────────────────
 
 echo ""
-echo "==> Windows XP 32-bit (source4xp/)"
-if [[ ! -f source4xp/Makefile ]]; then
-    skip "source4xp/Makefile not found — skipping XP build"
+echo "==> Windows legacy (XP/Win7) 32-bit (sourcelegacy/)"
+if [[ ! -f sourcelegacy/Makefile ]]; then
+    skip "sourcelegacy/Makefile not found — skipping XP build"
 elif ! command -v "$WIN32" &>/dev/null; then
     skip "$WIN32 not found — skipping Windows XP build"
     skip "Install with: sudo apt install mingw-w64"
 else
-    (cd source4xp && make)
-    if [[ -f source4xp/bin/packJPG_win_xp.exe ]]; then
-        cp source4xp/bin/packJPG_win_xp.exe "$DIST/"
+    (cd sourcelegacy && make)
+    if [[ -f sourcelegacy/bin/packJPG_win_xp.exe ]]; then
+        cp sourcelegacy/bin/packJPG_win_xp.exe "$DIST/"
         ok "dist/packJPG_win_xp.exe"
     fi
 fi

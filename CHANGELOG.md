@@ -1,42 +1,91 @@
 # packJPG Changelog
 
-## v4.1 (2026-04-27) — format break: diagonal DC neighbor context
+## v4.0b (2026-04-27) — format simplification + diagonal DC neighbor context
 
-> packJPG v4.1 introduces a small **format change** (version byte `0x29` / 41)
-> that adds a 4-bucket diagonal/anti-diagonal variance context to the DC
-> arithmetic model. The signal `|L - T| + |T - TR|` (computed from the absolute
-> values of the already-encoded left, top, and top-right neighbors) captures
-> directional gradient patterns that the existing weighted-average context
-> blends away. Result: a small but measurable ratio win at neutral speed.
+> v4.0b is the new starting point of the post-v4.0 lineage. It collapses
+> the three-format dispatch (v4.0 + v4.0a + v3.1d-via-legacy) into a single
+> accepted version byte (`0x28` / 40) plus an optional sub-marker (`0x02`)
+> that flags the new diagonal DC neighbor context. The `-legacy` flag is
+> removed; v3.1d archives are no longer decoded by this build.
 >
-> The decoder accepts three formats: `0x29`/41 (v4.1, current), `0x28`/40
-> (v4.0, decoded byte-exactly so all existing PJG files still work) and
-> `0x1F`/31 (v3.1d legacy via `-legacy` flag). v4.0 binaries reading v4.1
-> files get a clean error `"incompatible file, use packjpg v4.1"`.
+> **Versioning policy** (new): `N.0x` releases (4.0, 4.0a, 4.0b, …) are
+> LTS-style with binary filename `packJPG`, bug-fix only after their
+> initial drop. `N.Mx` releases (4.1, 4.1a, 4.2, …) are feature-bearing
+> with binary filename `packJPG-N.Mx`, format breaks land here. v4.0b is
+> a one-time exception — it carries the diagonal DC change that was
+> originally tagged v4.1 (never released publicly), rebranded so the v4.1
+> slot stays available for a real feature drop.
 >
-> Inspired by the SITX (StuffIt JPEG) reverse-engineered codebase shared by
-> Melirius on encode.su. SITX dequant achieves ~5% better than packJPG via
-> ensemble-blended context models (4 parallel histograms with weights 8/6/4/2);
-> packJPG's single-context arith coder cannot replicate that without a major
-> refactor. Of three SITX-inspired ideas tested (diagonal context,
-> multi-resolution variance, zigzag-position AC priors), only the diagonal
-> context paid off — multi-resolution variance correlated too tightly with
-> the existing `ctx_len`, and zigzag AC priors spread statistics too thin
-> across the (already well-tuned) AC bit-length model.
+> The diagonal DC change adds a 4-bucket variance context computed from
+> `|L − T| + |T − TR|` (absolute values of the already-encoded left, top
+> and top-right DC neighbors). It captures directional gradient patterns
+> that the existing weighted-average context blends away. Result: a small
+> but consistent ratio win at neutral wall time.
+>
+> Inspired by the SITX (StuffIt JPEG) reverse-engineered codebase shared
+> by Melirius on encode.su. SITX dequant achieves ~5 % better than
+> packJPG via ensemble-blended context models (4 parallel histograms with
+> weights 8/6/4/2); packJPG's single-context arith coder can't replicate
+> that without a major refactor. Of three SITX-inspired ideas tested
+> (diagonal context, multi-resolution variance, zigzag-position AC priors)
+> only the diagonal context paid off — multi-resolution variance
+> correlated too tightly with the existing `ctx_len`, and zigzag AC priors
+> spread statistics too thin across the well-tuned AC bit-length model.
 
-- new: **diagonal/anti-diagonal DC neighbor context** in `pjg_encode_dc` and
-  `pjg_decode_dc`. Computes 4 buckets from `|L - T| + |T - TR|` of the absv
-  neighbors and adds the bucket as a third context dimension multiplying
-  `mod_len_maxc` by 4 (or 32 when stacked with cross-component).
-- new: `format_version_v40_compat = 40` constant — decoder accepts v4.0 PJG
-  files and decodes them byte-exactly with the old (no-diag) DC context.
-  Prevents breaking existing user archives.
-- chore: helper `pjg_set_v41_flags()` plus `pjg_use_diag_dc_now` THREAD_LOCAL
-  flag mirror the existing cross-component plumbing — sfth workers and legacy
-  decode paths set it false; sequential v4.1 encode/decode set it true.
-- bench (43 mixed JPGs / 10.86 MB): v4.0 → 6,730,670 B (59.125 %); v4.1 →
-  6,727,753 B (59.099 %). Δ = −0.043 % bytes, 0.994× wall time, all
-  round-trips byte-exact.
+### Format
+
+- new: **0x02 sub-marker** before the version byte (`0x28`) signals
+  v4.0b features. Decoder semantics:
+  - `JS 28 …`     → v4.0 / v4.0a file, `pjg_use_diag_dc_now = false`
+    (old DC context, full backward-compat decode of legacy archives)
+  - `JS 02 28 …`  → v4.0b file, `pjg_use_diag_dc_now = true`
+    (new diagonal DC context active)
+  - v4.0 / v4.0a binaries reading a v4.0b file see `0x02`, fall through
+    to "unknown header code" → clean error, no silent corruption.
+- removed: `-legacy` CLI flag and `format_version_legacy = 31` /
+  `format_version_v40_compat = 40` constants. Single accepted format byte.
+- removed: `legacy_mode` THREAD_LOCAL global and its MT-worker propagation.
+
+### Encoder / decoder
+
+- new: **diagonal/anti-diagonal DC neighbor context** in `pjg_encode_dc`
+  and `pjg_decode_dc`. 4 buckets from `|L − T| + |T − TR|` of the
+  absolute-value neighbors, multiplying `mod_len_maxc` by 4 (or 32 when
+  stacked with cross-component). Gated by `pjg_use_diag_dc_now`.
+- the v4.0a cross-component DC prediction stays on permanently in the
+  sequential encode/decode path. Sfth workers keep it off (no Y available
+  during parallel Cb/Cr encoding) — unchanged from v4.0.
+
+### Repository
+
+- renamed `source4xp/` → `sourcelegacy/` and `build4xp.sh` → `build_legacy.sh`
+  (Win XP/Win7/Win8 community-maintained port now lives here; documents
+  the boundary explicitly: `source/` targets Win10+/Linux/macOS via
+  `std::filesystem`, `sourcelegacy/` targets legacy Windows via Win32 API
+  through `xp_compat.h`).
+- `source/` Win-version-specific comments updated to reflect Win10+ scope.
+
+### Bench
+
+43 mixed JPGs / 10.86 MB on Linux x64:
+
+| | Output | Ratio | Time |
+|---|---|---|---|
+| v4.0a | 6,730,670 B | 65.574 % | 12.09 s |
+| **v4.0b** | **6,727,753 B** | **65.566 %** | **12.02 s** |
+
+Δ: −0.043 % bytes, 0.994× wall time, all round-trips byte-exact. All
+v4.0/v4.0a-encoded files in the test corpus decoded byte-exactly with
+v4.0b (backward-compat verified).
+
+### Migration notes
+
+- Existing v4.0 / v4.0a `.pjg` archives keep working — v4.0b reads them
+  transparently.
+- v4.0b-encoded `.pjg` files are NOT readable by v4.0/v4.0a binaries
+  (clean rejection, no crash).
+- v3.1d archives need the original v3.1d binary (or v4.0 with `-legacy`,
+  for which a v4.0a build is still archived in `dist/` of the v4.0a tag).
 
 ---
 

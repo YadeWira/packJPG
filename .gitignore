@@ -59,3 +59,8 @@ pjg_decode_fuzzer
 /test/jpgs/
 /test/results.txt
 /test/out.enc
+
+# Personal/reference files (not for public repo)
+SITX.zip
+packJPG_v4.0a_untested_WinXP.7z
+packjpg.txt

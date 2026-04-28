@@ -42,17 +42,71 @@ Download the latest `.exe` from the [Releases](https://github.com/YadeWira/packJ
 | `packJPG_win_xp.exe` | Windows XP SP2+ (experimental) |
 
 
-## Windows XP build (EXPERIMENTAL)
+## Format policy and version layout (v4.0b+)
 
-The `source4xp/` directory contains an experimental port targeting
-Windows XP SP2 and later. It is a single-threaded build (no `-th`)
-compiled with C++14 and Win32 API in place of `std::filesystem`.
-Single-file parallel compression (`-sfth`) is supported via Win32 CreateThread.
+Starting at v4.0b, packJPG separates **target** from **format**:
 
-> **WARNING:** This build is experimental and unsupported. It may produce
-> incorrect results or fail on certain files. Use it at your own risk.
+| Directory | Target platforms | Maintained by | Format |
+|---|---|---|---|
+| `source/` | Windows 10+, Linux, macOS | upstream | byte `0x28` + sub-marker `0x02` (v4.0b features) |
+| `sourcelegacy/` | Windows XP SP2+, Windows 7, Windows 8 | community best-effort, no SLA | byte `0x28` (v4.0a-compatible) |
 
-To build it, from `source4xp/`:
+**Why the split.** `source/` uses C++17 `std::filesystem`, which has known
+correctness issues on Windows XP and Windows 7 (intermittent `0.00 %` ratio
+display and accented-path bugs reported on encode.su). `sourcelegacy/`
+keeps a parallel codebase using Win32 native API
+(`GetFileAttributesEx`, `FindFirstFileW`, etc.) via `xp_compat.h`, which
+is correct on every Windows from XP SP2 onward. This split was previously
+implicit (`source4xp/` for "Windows XP only"); v4.0b makes it explicit
+and renames it to `sourcelegacy/` to reflect that it covers Win7/Win8 too.
+
+**Versioning policy.** Going forward:
+
+- **N.0x releases** (`4.0`, `4.0a`, `4.0b`, `4.0c`, …) are LTS-style,
+  binary filename `packJPG`. Bug-fix only after the initial feature
+  drop, except v4.0b which is a one-time rebrand of the unreleased v4.1
+  diagonal-DC change.
+- **N.Mx releases** (`4.1`, `4.1a`, `4.2`, …) are feature-bearing,
+  binary filename `packJPG-N.Mx`. Format breaks land here.
+
+**Format break in v4.0b.** v4.0b introduces a sub-marker (`0x02`) before
+the version byte to flag the new diagonal DC neighbor context inherited
+from the unreleased v4.1 work. The `-legacy` flag (which previously
+emitted v3.1d-compatible output) was removed — v4.0b is the clean
+starting point of the new lineage.
+
+- v4.0b decoders **read v4.0/v4.0a files transparently** (no sub-marker
+  → diag DC off, decoder behaves exactly like v4.0a).
+- v4.0/v4.0a decoders **reject v4.0b files cleanly** with
+  `"unknown header code, use newer version of packjpg"` — no silent
+  corruption.
+- v3.1d files (legacy from packJPG 3.x line) are no longer decoded by
+  v4.0b. Users with v3.1d archives need to keep an older binary
+  (v3.1d, v4.0, or v4.0a) on hand.
+
+**Bench (43 mixed JPGs, 10.86 MB).** Diagonal DC ctx delivers a small but
+consistent ratio win without speed regression:
+
+| Variant | Output | Ratio | Time |
+|---|---|---|---|
+| v4.0a | 6,730,670 B | 65.574 % | 12.09 s |
+| **v4.0b** | **6,727,753 B** | **65.566 %** | **12.02 s** |
+
+Δ: −0.043 % bytes, 0.994× wall time, all round-trips byte-exact.
+
+### Windows XP / Win7 / Win8 build (community-maintained)
+
+The `sourcelegacy/` directory contains the legacy-Windows port. Single-threaded
+build (no `-th`), compiled with C++14 and Win32 API in place of
+`std::filesystem`. Single-file parallel compression (`-sfth`) is supported
+via Win32 `CreateThread`.
+
+> **WARNING:** This build is community-maintained best-effort. It may produce
+> incorrect results or fail on certain files. Use it at your own risk. The
+> upstream maintainer does not actively test on legacy Windows; bug reports
+> with self-contained reproduction steps are welcome.
+
+To build it, from `sourcelegacy/`:
 
 ```
 make        # -> bin/packJPG_win_xp.exe   (release)
@@ -470,12 +524,12 @@ sudo apt install build-essential mingw-w64
 | Script | What it builds |
 |---|---|
 | `build_all.sh` | All targets: Linux x64, Windows x64, Windows x86, Windows XP |
-| `build4xp.sh` | Windows XP only (`dist/packJPG_win_xp.exe`) |
+| `build_legacy.sh` | Windows XP only (`dist/packJPG_win_xp.exe`) |
 | `build_pkg.sh` | Linux packages: `.tar.gz`, `.deb`, `.rpm`, `.snap` |
 
 ```bash
 bash build_all.sh              # all binaries → dist/
-bash build4xp.sh               # XP only      → dist/packJPG_win_xp.exe
+bash build_legacy.sh               # XP only      → dist/packJPG_win_xp.exe
 bash build_pkg.sh              # all packages → dist/
 bash build_pkg.sh --deb --rpm  # selected formats only
 ```
@@ -492,9 +546,9 @@ dist/packjpg_3.1_amd64.deb
 dist/packjpg-3.1-1.x86_64.rpm
 ```
 
-**Windows XP (from `source4xp/`):**
+**Windows XP (from `sourcelegacy/`):**
 ```
-cd source4xp/
+cd sourcelegacy/
 make                  # bin/packJPG_win_xp.exe
 ```
 
