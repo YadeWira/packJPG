@@ -37,9 +37,9 @@ Download the latest `.exe` from the [Releases](https://github.com/YadeWira/packJ
 
 | File | Target |
 |---|---|
-| `packJPG_win_x64.exe` | Windows 7+ 64-bit |
-| `packJPG_win_x86.exe` | Windows 7+ 32-bit |
-| `packJPG_win_xp.exe` | Windows XP SP2+ (experimental) |
+| `packJPG_win_x64.exe` | Windows 10/11 64-bit (Win7/8 works without ANSI colors) |
+| `packJPG_win_legacy_x64.exe` | Windows XP x64 / Vista / 7 / 8 — 64-bit (experimental) |
+| `packJPG_win_legacy_x86.exe` | Windows XP / Vista / 7 / 8 — 32-bit (experimental) |
 
 
 ## Format policy and version layout (v4.0b+)
@@ -109,11 +109,13 @@ via Win32 `CreateThread`.
 To build it, from `sourcelegacy/`:
 
 ```
-make        # -> bin/packJPG_win_xp.exe   (release)
-make dev    # -> bin/packJPG_win_xp_dev.exe (with developer functions)
+make        # -> bin/packJPG_win_legacy_x86.exe + bin/packJPG_win_legacy_x64.exe
+make x86    # -> bin/packJPG_win_legacy_x86.exe only
+make x64    # -> bin/packJPG_win_legacy_x64.exe only
+make dev    # -> bin/packJPG_win_legacy_x86_dev.exe (with developer functions)
 ```
 
-Requires `i686-w64-mingw32-g++` (mingw-w64 package).
+Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package).
 
 
 ## License
@@ -511,8 +513,8 @@ with large images.
 |---|---|
 | Linux x64 | `g++` ≥ 13 or `clang++` ≥ 18 (C++17) |
 | Windows x64 | `x86_64-w64-mingw32-g++` |
-| Windows x86 / Win7 | `i686-w64-mingw32-g++` |
-| Windows XP | `i686-w64-mingw32-g++` (C++14 mode) |
+| Windows legacy x86 (XP/Vista/7/8) | `i686-w64-mingw32-g++` (C++14 mode) |
+| Windows legacy x64 (XP/Vista/7/8) | `x86_64-w64-mingw32-g++` (C++14 mode) |
 
 On Debian/Ubuntu, install cross-compilers with:
 ```
@@ -523,13 +525,13 @@ sudo apt install build-essential mingw-w64
 
 | Script | What it builds |
 |---|---|
-| `build_all.sh` | All targets: Linux x64, Windows x64, Windows x86, Windows XP |
-| `build_legacy.sh` | Windows XP only (`dist/packJPG_win_xp.exe`) |
+| `build_all.sh` | All targets: Linux x64, Windows x64, Windows legacy x86 + x64 |
+| `build_legacy.sh` | Windows legacy x86 + x64 only (XP/Vista/7/8) |
 | `build_pkg.sh` | Linux packages: `.tar.gz`, `.deb`, `.rpm`, `.snap` |
 
 ```bash
 bash build_all.sh              # all binaries → dist/
-bash build_legacy.sh               # XP only      → dist/packJPG_win_xp.exe
+bash build_legacy.sh           # legacy only  → dist/packJPG_win_legacy_x86.exe + _x64.exe
 bash build_pkg.sh              # all packages → dist/
 bash build_pkg.sh --deb --rpm  # selected formats only
 ```
@@ -539,17 +541,17 @@ Output binaries are collected in `dist/`:
 dist/packJPG_linux_x64
 dist/packJPG_linux_x64_native   (optimized for this machine, do not distribute)
 dist/packJPG_win_x64.exe
-dist/packJPG_win_x86.exe
-dist/packJPG_win_xp.exe
-dist/packjpg-3.1-linux-x64.tar.gz
-dist/packjpg_3.1_amd64.deb
-dist/packjpg-3.1-1.x86_64.rpm
+dist/packJPG_win_legacy_x86.exe
+dist/packJPG_win_legacy_x64.exe
+dist/packjpg-4.0b-linux-x64.tar.gz
+dist/packjpg_4.0b_amd64.deb
+dist/packjpg-4.0b-1.x86_64.rpm
 ```
 
-**Windows XP (from `sourcelegacy/`):**
+**Legacy Windows (from `sourcelegacy/`):**
 ```
 cd sourcelegacy/
-make                  # bin/packJPG_win_xp.exe
+make                  # bin/packJPG_win_legacy_x86.exe + bin/packJPG_win_legacy_x64.exe
 ```
 
 Binaries are stripped automatically to reduce file size.

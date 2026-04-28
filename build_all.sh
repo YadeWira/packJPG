@@ -2,10 +2,14 @@
 # build_all.sh — build all packJPG release targets from project root
 #
 # Targets:
-#   Linux x64            (native, requires g++ or clang++)
-#   Windows x64          (requires x86_64-w64-mingw32-g++)
-#   Windows x86 / Win7   (requires i686-w64-mingw32-g++)
-#   Windows legacy (XP/Win7) 32-bit    (requires i686-w64-mingw32-g++, sourcelegacy build)
+#   Linux x64                          (native, requires g++ or clang++)
+#   Windows x64                        (requires x86_64-w64-mingw32-g++)
+#   Windows legacy x86 (XP/Vista/7/8)  (requires i686-w64-mingw32-g++,    sourcelegacy build)
+#   Windows legacy x64 (XP/Vista/7/8)  (requires x86_64-w64-mingw32-g++,  sourcelegacy build)
+#
+# Note: modern Windows x86 (32-bit Win10) was dropped — that audience is
+# vanishingly small, and Win7/8 x86 users are better served by the legacy
+# x86 build (which also runs on XP).
 #
 # All binaries are collected into ./dist/
 #
@@ -87,50 +91,30 @@ else
     ok "dist/packJPG_win_x64.exe"
 fi
 
-# ─── Windows x86 (32-bit) ────────────────────────────────────────────────────
+# ─── Windows legacy x86 + x64 (XP/Vista/7/8) ─────────────────────────────────
 
 echo ""
-echo "==> Windows x86 (32-bit)"
+echo "==> Windows legacy x86 + x64 (sourcelegacy/)"
 WIN32="i686-w64-mingw32-g++"
-WINDRES32="i686-w64-mingw32-windres"
-if ! command -v "$WIN32" &>/dev/null; then
-    skip "$WIN32 not found — skipping Windows x86"
-    skip "Install with: sudo apt install mingw-w64"
-else
-    ICONS32=""
-    if command -v "$WINDRES32" &>/dev/null; then
-        (cd "$SRC_DIR" && $WINDRES32 -O coff icons.rc -o icons_x86.o \
-            && echo "    [OK] icons compiled for x86" \
-            || echo "    [!!] icon compilation failed — binary will have no icon")
-        [ -f "$SRC_DIR/icons_x86.o" ] && ICONS32="icons_x86.o"
-    else
-        echo "    [!!] $WINDRES32 not found — binary will have no icon"
-    fi
-
-    (cd "$SRC_DIR" && $WIN32 $CFLAGS \
-        -o "../$DIST/packJPG_win_x86.exe" \
-        $SRC $ICONS32 \
-        -static -static-libgcc -static-libstdc++ \
-        && i686-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x86.exe")
-    [ -f "$SRC_DIR/icons_x86.o" ] && rm -f "$SRC_DIR/icons_x86.o"
-    ok "dist/packJPG_win_x86.exe"
-fi
-
-# ─── Windows legacy (XP/Win7) 32-bit ───────────────────────────────────────────────────────
-
-echo ""
-echo "==> Windows legacy (XP/Win7) 32-bit (sourcelegacy/)"
 if [[ ! -f sourcelegacy/Makefile ]]; then
-    skip "sourcelegacy/Makefile not found — skipping XP build"
+    skip "sourcelegacy/Makefile not found — skipping legacy build"
 elif ! command -v "$WIN32" &>/dev/null; then
-    skip "$WIN32 not found — skipping Windows XP build"
+    skip "$WIN32 not found — skipping legacy build"
     skip "Install with: sudo apt install mingw-w64"
+elif ! command -v "$WIN64" &>/dev/null; then
+    skip "$WIN64 not found — skipping legacy x64 (legacy x86 alone built)"
+    (cd sourcelegacy && make x86)
+    [ -f sourcelegacy/bin/packJPG_win_legacy_x86.exe ] && \
+        cp sourcelegacy/bin/packJPG_win_legacy_x86.exe "$DIST/" && \
+        ok "dist/packJPG_win_legacy_x86.exe"
 else
     (cd sourcelegacy && make)
-    if [[ -f sourcelegacy/bin/packJPG_win_xp.exe ]]; then
-        cp sourcelegacy/bin/packJPG_win_xp.exe "$DIST/"
-        ok "dist/packJPG_win_xp.exe"
-    fi
+    [ -f sourcelegacy/bin/packJPG_win_legacy_x86.exe ] && \
+        cp sourcelegacy/bin/packJPG_win_legacy_x86.exe "$DIST/" && \
+        ok "dist/packJPG_win_legacy_x86.exe"
+    [ -f sourcelegacy/bin/packJPG_win_legacy_x64.exe ] && \
+        cp sourcelegacy/bin/packJPG_win_legacy_x64.exe "$DIST/" && \
+        ok "dist/packJPG_win_legacy_x64.exe"
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────
