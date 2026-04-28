@@ -1,5 +1,45 @@
 # packJPG Changelog
 
+## v4.1 (2026-04-27) — format break: diagonal DC neighbor context
+
+> packJPG v4.1 introduces a small **format change** (version byte `0x29` / 41)
+> that adds a 4-bucket diagonal/anti-diagonal variance context to the DC
+> arithmetic model. The signal `|L - T| + |T - TR|` (computed from the absolute
+> values of the already-encoded left, top, and top-right neighbors) captures
+> directional gradient patterns that the existing weighted-average context
+> blends away. Result: a small but measurable ratio win at neutral speed.
+>
+> The decoder accepts three formats: `0x29`/41 (v4.1, current), `0x28`/40
+> (v4.0, decoded byte-exactly so all existing PJG files still work) and
+> `0x1F`/31 (v3.1d legacy via `-legacy` flag). v4.0 binaries reading v4.1
+> files get a clean error `"incompatible file, use packjpg v4.1"`.
+>
+> Inspired by the SITX (StuffIt JPEG) reverse-engineered codebase shared by
+> Melirius on encode.su. SITX dequant achieves ~5% better than packJPG via
+> ensemble-blended context models (4 parallel histograms with weights 8/6/4/2);
+> packJPG's single-context arith coder cannot replicate that without a major
+> refactor. Of three SITX-inspired ideas tested (diagonal context,
+> multi-resolution variance, zigzag-position AC priors), only the diagonal
+> context paid off — multi-resolution variance correlated too tightly with
+> the existing `ctx_len`, and zigzag AC priors spread statistics too thin
+> across the (already well-tuned) AC bit-length model.
+
+- new: **diagonal/anti-diagonal DC neighbor context** in `pjg_encode_dc` and
+  `pjg_decode_dc`. Computes 4 buckets from `|L - T| + |T - TR|` of the absv
+  neighbors and adds the bucket as a third context dimension multiplying
+  `mod_len_maxc` by 4 (or 32 when stacked with cross-component).
+- new: `format_version_v40_compat = 40` constant — decoder accepts v4.0 PJG
+  files and decodes them byte-exactly with the old (no-diag) DC context.
+  Prevents breaking existing user archives.
+- chore: helper `pjg_set_v41_flags()` plus `pjg_use_diag_dc_now` THREAD_LOCAL
+  flag mirror the existing cross-component plumbing — sfth workers and legacy
+  decode paths set it false; sequential v4.1 encode/decode set it true.
+- bench (43 mixed JPGs / 10.86 MB): v4.0 → 6,730,670 B (59.125 %); v4.1 →
+  6,727,753 B (59.099 %). Δ = −0.043 % bytes, 0.994× wall time, all
+  round-trips byte-exact.
+
+---
+
 ## v4.0a (2026-04-21) — bugfix
 
 - fix: `decode_jpeg()` leaked a `BitReader` (32 bytes) when `jpg_parse_jfif()`

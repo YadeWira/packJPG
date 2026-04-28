@@ -878,6 +878,16 @@ THREAD_LOCAL unsigned char format_version_read = 0;
 // parallel workers (to preserve component parallelism). Sequential path sets
 // it according to encoder legacy_mode / decoder format_version_read.
 THREAD_LOCAL bool pjg_use_crosscomp_now = false;
+// v4.1 features (only enabled when format_version_read == format_version_current).
+// Same THREAD_LOCAL semantics as pjg_use_crosscomp_now: sfth workers always set
+// these to false; sequential path enables them based on encoder legacy_mode /
+// decoder format version.
+THREAD_LOCAL bool pjg_use_diag_dc_now = false;  // Idea A: diagonal DC neighbor context
+
+// Helper: set all v4.1 feature flags coherently.
+INTERN inline void pjg_set_v41_flags( bool on ) {
+    pjg_use_diag_dc_now = on;
+}
 
 #if !defined( BUILD_LIB )
 INTERN int  verbosity  =  0;	// level of verbosity (0=table, -1=progress bar via -vp)
@@ -1008,16 +1018,19 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "a";
+INTERN const unsigned char appversion = 41;
+INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "04/21/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "04/27/2026";
 // On-disk PJG format version. `format_version_current` is what new encodes
-// write; `format_version_legacy` is the last v3.1d format we still *decode*
-// byte-exactly. `-legacy` flag forces encoder to emit legacy bytes.
-INTERN const unsigned char format_version_current = 40;
-INTERN const unsigned char format_version_legacy  = 31;
+// write. We accept three formats on read:
+//   format_version_current    = 41 - v4.1 (adds DC diag/multi-res ctx, AC zigzag priors)
+//   format_version_v40_compat = 40 - v4.0 (cross-comp DC); decoded byte-exact
+//   format_version_legacy     = 31 - v3.1d; decoded byte-exact (-legacy emits this)
+INTERN const unsigned char format_version_current    = 41;
+INTERN const unsigned char format_version_v40_compat = 40;
+INTERN const unsigned char format_version_legacy     = 31;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -4243,6 +4256,7 @@ INTERN bool pack_pjg( void )
 	// re-enable it below based on format. Sfth workers set their own TLS
 	// after tls() (capture cc_enable by value).
 	pjg_use_crosscomp_now = false;
+	pjg_set_v41_flags( false );
 
 	// PJG-Header
 	str_out->write( reinterpret_cast<const unsigned char*>(pjg_magic), 2 );
@@ -4287,7 +4301,8 @@ INTERN bool pack_pjg( void )
 		// make_tls_init() snapshots TLS so each worker sees the current file's data.
 		// Cross-comp is safe in parallel on encode: colldata[0] is pre-populated
 		// read-only by jpg_decode() before pack_pjg() runs, so all workers read Y.
-		const bool cc_enable = !legacy_mode;
+		const bool cc_enable  = !legacy_mode;
+		const bool v41_enable = !legacy_mode;
 		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
 		std::vector<std::string> cmp_errs( cmpc );
 		std::atomic<bool> any_err{ false };
@@ -4295,9 +4310,10 @@ INTERN bool pack_pjg( void )
 		std::vector<std::future<void>> futs;
 		futs.reserve( cmpc );
 		for ( int c = 0; c < cmpc; c++ ) {
-			futs.push_back( std::async( std::launch::async, [&, c, cc_enable]() {
+			futs.push_back( std::async( std::launch::async, [&, c, cc_enable, v41_enable]() {
 				tls();
 				pjg_use_crosscomp_now = cc_enable;
+				pjg_set_v41_flags( v41_enable );
 				MemoryWriter mw;
 				{
 					ArithmeticEncoder enc( mw );
@@ -4352,7 +4368,9 @@ INTERN bool pack_pjg( void )
 
 	// v4.0 cross-component prediction is only enabled on the sequential path
 	// (sfth path keeps components parallel and cannot read Y during Cb/Cr decode).
+	// v4.1 features piggyback on !legacy_mode (always emitted in fresh encodes).
 	pjg_use_crosscomp_now = !legacy_mode;
+	pjg_set_v41_flags( !legacy_mode );
 
 	// init arithmetic compression
 	auto encoder = new ArithmeticEncoder(*str_out);
@@ -4465,6 +4483,7 @@ INTERN bool unpack_pjg( void )
 	decoded_from_sfth = false; // reset before reading header
 	format_version_read = 0;   // reset; set by header loop below
 	pjg_use_crosscomp_now = false; // reset; sequential path enables below per-format
+	pjg_set_v41_flags( false );    // reset all v4.1 flags too
 	
 	
 	// check header codes ( maybe position in other function ? )
@@ -4486,8 +4505,10 @@ INTERN bool unpack_pjg( void )
 			decoded_from_sfth = true;
 		}
 		else if ( hcode >= 0x14 ) {
-			// compare version number: accept current format + last legacy format
-			if ( hcode != format_version_current && hcode != format_version_legacy ) {
+			// compare version number: accept current format + last v40 + last legacy
+			if ( hcode != format_version_current
+			  && hcode != format_version_v40_compat
+			  && hcode != format_version_legacy ) {
 				snprintf( errormessage, MSG_SIZE, "incompatible file, use %s v%i.%i",
 					appname, hcode / 10, hcode % 10 );
 				errorlevel = 2;
@@ -4541,7 +4562,9 @@ INTERN bool unpack_pjg( void )
 		// to complete ONLY before their own matching step — earlier steps
 		// (zstscan, zdst_high, zdst_low) have no Y dependency and run in
 		// parallel with Y. Legacy sfth (pre-v4.0 format) keeps all-parallel.
-		const bool cc_enable = ( format_version_read == format_version_current );
+		// cc available in v4.0 and v4.1; v4.1-only features gated separately.
+		const bool cc_enable  = ( format_version_read >= format_version_v40_compat );
+		const bool v41_enable = ( format_version_read == format_version_current );
 		std::vector<std::string> cmp_errs( cmpc );
 		std::atomic<bool> any_err{ false };
 		auto tls = make_tls_init();
@@ -4555,9 +4578,10 @@ INTERN bool unpack_pjg( void )
 			std::vector<std::future<void>> futs; futs.reserve( cmpc - 1 );
 			for ( cmp = 1; cmp < cmpc; cmp++ ) {
 				futs.push_back( std::async( std::launch::async,
-				                            [&, cmp, cc_enable]() {
+				                            [&, cmp, cc_enable, v41_enable]() {
 					tls();
 					pjg_use_crosscomp_now = cc_enable;
+					pjg_set_v41_flags( v41_enable );
 					MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
 					auto fail = [&] { cmp_errs[cmp] = errormessage; any_err.store(true); };
 					if ( !pjg_decode_zstscan  ( &dec, cmp ) ) { fail(); return; }
@@ -4575,6 +4599,7 @@ INTERN bool unpack_pjg( void )
 			// Y on main thread — signal after ac_high / ac_low / dc regardless
 			// of outcome so workers can observe any_err and unblock.
 			pjg_use_crosscomp_now = cc_enable;
+			pjg_set_v41_flags( v41_enable );
 			MemoryReader ymr( cbufs[0] ); ArithmeticDecoder ydec( ymr );
 			bool y_ok = pjg_decode_zstscan( &ydec, 0 )
 			         && pjg_decode_zdst_high( &ydec, 0 )
@@ -4599,9 +4624,10 @@ INTERN bool unpack_pjg( void )
 			std::vector<std::future<void>> futs; futs.reserve( cmpc );
 			for ( cmp = 0; cmp < cmpc; cmp++ ) {
 				futs.push_back( std::async( std::launch::async,
-				                            [&, cmp, cc_enable]() {
+				                            [&, cmp, cc_enable, v41_enable]() {
 					tls();
 					pjg_use_crosscomp_now = cc_enable;
+					pjg_set_v41_flags( v41_enable );
 					MemoryReader mr( cbufs[cmp] ); ArithmeticDecoder dec( mr );
 					bool ok =
 						pjg_decode_zstscan  ( &dec, cmp ) && pjg_decode_zdst_high( &dec, cmp ) &&
@@ -4630,7 +4656,9 @@ INTERN bool unpack_pjg( void )
 		// v4.0 cross-component prediction active only when file declared v4.0
 		// and only on sequential path. Sfth branch above keeps it at its TLS
 		// default (false) inside workers.
-		pjg_use_crosscomp_now = ( format_version_read == format_version_current );
+		// cc available in v4.0 and v4.1 files; v4.1-only features gated separately.
+		pjg_use_crosscomp_now = ( format_version_read >= format_version_v40_compat );
+		pjg_set_v41_flags( format_version_read == format_version_current );
 		auto decoder = new ArithmeticDecoder(*str_in);
 		if ( !pjg_decode_generic( decoder, &hdrdata, &hdrs ) ) { delete decoder; return false; }
 		if ( !pjg_decode_bit(decoder, &cb) ) { delete decoder; return false; }
@@ -6086,6 +6114,8 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 	{
 		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
 		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 ); // compound (ctx_len<<3|y_class)
+		// v4.1 idea A: 4 diag-variance buckets multiply the context space
+		if ( pjg_use_diag_dc_now ) mod_len_maxc <<= 2;
 		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
 	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
@@ -6132,11 +6162,29 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		int ctx_shift = ctx_len;
+		int ctx_dim   = max_len + 1;
 		if ( use_cc ) {
 			int y_abs = ABS( y_coeffs[ dpos ] );
 			int y_clen = BITLEN1024P( y_abs );
 			if ( y_clen > 7 ) y_clen = 7;
 			ctx_shift = ( ctx_len << 3 ) | y_clen;
+			ctx_dim   = ( max_len + 1 ) << 3;
+		}
+		// v4.1 idea A: diagonal/anti-diagonal absv variance from already-encoded
+		// neighbors. |L - T| captures main-diagonal slope; |T - TR| captures
+		// anti-diagonal slope at the top edge. Both available pre-encode in raster.
+		if ( pjg_use_diag_dc_now ) {
+			int diag_var = 0;
+			if ( p_y > 0 ) {
+				int top_v = (int) c_absc[2][dpos];
+				if ( p_x > 0 ) diag_var += ABS( (int) c_absc[5][dpos] - top_v );
+				if ( r_x > 0 ) diag_var += ABS( top_v - (int) c_absc[3][dpos] );
+			}
+			int diag_ctx = ( diag_var < 2 ) ? 0
+			             : ( diag_var < 8 ) ? 1
+			             : ( diag_var < 32 ) ? 2
+			             : 3;
+			ctx_shift += diag_ctx * ctx_dim;
 		}
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_shift, snum );
@@ -6823,6 +6871,8 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 	{
 		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
 		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 );
+		// v4.1 idea A: 4 diag-variance buckets multiply the context space
+		if ( pjg_use_diag_dc_now ) mod_len_maxc <<= 2;
 		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
 	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
@@ -6869,11 +6919,27 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		int ctx_shift = ctx_len;
+		int ctx_dim   = max_len + 1;
 		if ( use_cc ) {
 			int y_abs = ABS( y_coeffs[ dpos ] );
 			int y_clen = BITLEN1024P( y_abs );
 			if ( y_clen > 7 ) y_clen = 7;
 			ctx_shift = ( ctx_len << 3 ) | y_clen;
+			ctx_dim   = ( max_len + 1 ) << 3;
+		}
+		// v4.1 idea A: mirror of encoder — must compute identical diag_ctx.
+		if ( pjg_use_diag_dc_now ) {
+			int diag_var = 0;
+			if ( p_y > 0 ) {
+				int top_v = (int) c_absc[2][dpos];
+				if ( p_x > 0 ) diag_var += ABS( (int) c_absc[5][dpos] - top_v );
+				if ( r_x > 0 ) diag_var += ABS( top_v - (int) c_absc[3][dpos] );
+			}
+			int diag_ctx = ( diag_var < 2 ) ? 0
+			             : ( diag_var < 8 ) ? 1
+			             : ( diag_var < 32 ) ? 2
+			             : 3;
+			ctx_shift += diag_ctx * ctx_dim;
 		}
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_shift, snum );
@@ -6982,13 +7048,13 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
 	mod_sgn = INIT_MODEL_B( 27, 1 );
-	
+
 	// set width/height of each band
 	bc = cmpnfo[cmp].bc;
 	w = cmpnfo[cmp].bch;
-	
+
 	// allocate memory for absolute values & signs storage
-	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );	
+	absv_store = (unsigned short*) calloc ( bc, sizeof( short ) );
 	sgn_store = (unsigned char*) calloc ( bc, sizeof( char ) );
 	zdstls = (unsigned char*) calloc ( bc, sizeof( char ) );
 	if ( ( absv_store == NULL ) || ( sgn_store == NULL ) || ( zdstls == NULL ) ) {
@@ -7018,22 +7084,22 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 	
 	// work through lower 7x7 bands in order of freqscan
 	for ( i = 1; i < 64; i++ )
-	{		
+	{
 		// work through blocks in order of frequency scan
 		bpos = (int) freqscan[cmp][i];
 		b_x = unzigzag[ bpos ] % 8;
-		b_y = unzigzag[ bpos ] / 8;		
-		
+		b_y = unzigzag[ bpos ] / 8;
+
 		if ( ( b_x == 0 ) || ( b_y == 0 ) )
 				continue; // process remaining coefficients elsewhere
-		
+
 		// preset absolute values/sign storage
 		memset( absv_store, 0x00, bc * sizeof( short ) );
 		memset( sgn_store, 0x00, bc * sizeof( char ) );
-		
+
 		// set up average context quick access arrays
 		pjg_aavrg_prepare( c_absc, c_weight, absv_store, cmp );
-		
+
 		// locally store pointer to coefficients
 		coeffs = colldata[ cmp ][ bpos ];
 		if ( use_cc ) y_coeffs = colldata[ 0 ][ bpos ];
@@ -7070,9 +7136,9 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 			// shift context / do context modelling (segmentation is done per context)
 			shift_model( mod_len, ctx_shift, snum );
 			mod_len->exclude_symbols(max_len);
-			
+
 			// decode bit length of current coefficient
-			clen = decode_ari( dec, mod_len );			
+			clen = decode_ari( dec, mod_len );
 			// simple treatment if coefficient is zero
 			if ( clen == 0 ) {
 				// coeffs[ dpos ] = 0;
