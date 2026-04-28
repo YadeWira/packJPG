@@ -52,3 +52,10 @@
 /source/test/lib_concurrent_test_tsan
 /source/packJPG
 pjg_decode_fuzzer
+
+# /test/ — local SITX-vs-packJPG benchmark harness (keep sources, ignore binaries + outputs)
+/test/sitx
+/test/packJPG
+/test/jpgs/
+/test/results.txt
+/test/out.enc
