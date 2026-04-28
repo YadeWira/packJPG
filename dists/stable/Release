@@ -5,20 +5,20 @@ Codename: stable
 Architectures: amd64
 Components: main
 Description: packJPG apt repository
-Date: Tue, 28 Apr 2026 03:52:09 +0000
+Date: Tue, 28 Apr 2026 22:23:23 +0000
 MD5Sum:
- 10f02585565a08f5fc03c677affad37a              174 Release
- 95524ba081c60a019fe8fe5a59378d7c             2540 main/binary-amd64/Packages
- 442b356d2b17128952aaebf09fb42d44              798 main/binary-amd64/Packages.gz
+ a5b493aef53f3a09057ab56230656ebc              174 Release
+ 44b856016e6feff59d7207d1ef7c1679             3175 main/binary-amd64/Packages
+ e61c572a2afb2f05afddb69a7c9d80a6              904 main/binary-amd64/Packages.gz
 SHA1:
- e1dd034249abd527ab60e886c6912833f21aab09              174 Release
- 44d3e80dfdb704754bf7652455f2c97b6b615930             2540 main/binary-amd64/Packages
- 0313b5f2e2b750fb4893cdd7b1ea745d37c970ab              798 main/binary-amd64/Packages.gz
+ 357f43a0138f44f8ec104110e77890d3cbaa2ed7              174 Release
+ d41134516bfccf583e4242a25b2a9dbc99d0d2a7             3175 main/binary-amd64/Packages
+ 89199179bd897944d05a9401dd8b15927f6f7270              904 main/binary-amd64/Packages.gz
 SHA256:
- 5ac3a8ac701838ac25d15037b94328a9a67a4391ea6531e6a3c153b0f3842de8              174 Release
- c28907b73125f8b0f6cf8b517b237fdb3243bc129fba55fdf48e9273db96206c             2540 main/binary-amd64/Packages
- c8e973898ee7a94edc58b52d46b0bd7cb6a0fd4a51ac6d9522505dafc3389fa0              798 main/binary-amd64/Packages.gz
+ 496af904f2b07c3f8d72a39929ea7baa4ab575cc9e108608fe6f2d8955ce719b              174 Release
+ 71d4046b53069e7c8370eeb4838f1f36ddc7699bc46fc9cee64fc84f9783d3b6             3175 main/binary-amd64/Packages
+ d3af7383aacb207eb769bef10ebf8487fe39876d3338bb4cf38e96ffec8f3c5d              904 main/binary-amd64/Packages.gz
 SHA512:
- 833d0f831d6eb0f9a338b5fa96eccab75a034eb9521acbe4a96b3e4aea9d168981a8ff25c9a2ca9eebdaffcf927ac42bbd8a346b1f2b9ffebaa4ae3f048e8ce1              174 Release
- e2d986193d01c1ceb513e595f608fd482fed519ffcc7ec03d2a136e6825548f6543d2ef914691594997eb38f26f97e8b29096027b60399f67cbc60ea598cd1e7             2540 main/binary-amd64/Packages
- d301394a48dc760c4bb04d5cb0fe74dc16295ce9448a4ef58f6bc6800ae1da90e95a7cf55286cc75b1e51261b9c072272f8c1aa8f315a5f5f19623abfd2a3ca5              798 main/binary-amd64/Packages.gz
+ 30668ed40510b41b27ec15b5e8e983161994f78ede66e374087779a9030aa5e9f9adf70764bc15f591a12f394bc0eec1833fef394d207dccda18db4651de8c94              174 Release
+ b13ca49f4b14aed7cf2c68f1717b46bda30212214d519f7aa6d21f4f8f060a0613367a766b7539a52fe41decb6bf3a94a2e36e3689b35eef992569d8d15aa1f4             3175 main/binary-amd64/Packages
+ a60334194a4ccc2b05c38111e537c85454a24f14e70421b2e0a1591cfc626773a7b744f19b6599fd0c9886c09488490f90a615b55fdc89cafbfe39b633e84be7              904 main/binary-amd64/Packages.gz
