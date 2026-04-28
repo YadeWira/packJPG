@@ -1,6 +1,8 @@
 // packJPGlib.h - function declarations for the packJPG library
 #if defined BUILD_DLL
 	#define EXPORT __declspec( dllexport )
+#elif defined __cplusplus
+	#define EXPORT extern "C"   // ensure C-linkage when building as a static lib for FFI hosts
 #else
 	#define EXPORT extern
 #endif
