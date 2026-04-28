@@ -1005,6 +1005,114 @@ static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
     #undef XP_DEC_FAIL
     return 0;
 }
+
+// ─── MT batch worker (for -thN multi-file processing) ──────────────────────
+// Win32-native equivalent of source/'s std::thread-based MT batch loop. Each
+// worker thread pulls the next file index via InterlockedIncrement and runs
+// process_ui() on it; per-file stats are merged under a CRITICAL_SECTION.
+
+static volatile LONG    g_xp_files_done = 0;  // count of processable files completed
+static volatile LONG    g_xp_next_file  = 0;  // atomic counter for next file index
+static CRITICAL_SECTION g_xp_stats_cs;        // protects stats merge + console output
+static int              g_xp_spinner_idx = 0; // shared, advanced under g_xp_stats_cs
+
+// Pointers to main()'s local accumulators — workers update these under
+// g_xp_stats_cs so the post-loop summary sees the merged totals.
+struct XpBatchAccum {
+    double* acc_jpgsize;
+    double* acc_pjgsize;
+    int*    acc_jpg_cnt;
+    int*    acc_pjg_cnt;
+    int*    acc_list_cnt;
+    int*    error_cnt;
+    int*    warn_cnt;
+};
+
+struct XpBatchWorkerArgs {
+    // Snapshot of main-thread TLS settings — workers copy these to their own
+    // TLS before processing files (since nois_trs / segm_cnt / auto_set / sfth_mode
+    // are THREAD_LOCAL). Set once by main, read-only after spawn.
+    unsigned char nois_trs[4];
+    unsigned char segm_cnt[4];
+    bool          auto_set;
+    bool          sfth_mode;
+    XpBatchAccum  accum;        // pointers to main's locals
+};
+
+static DWORD WINAPI xp_batch_worker( LPVOID arg )
+{
+    XpBatchWorkerArgs* a = (XpBatchWorkerArgs*) arg;
+    // propagate main-thread settings into this thread's TLS
+    auto_set    = a->auto_set;
+    sfth_mode   = a->sfth_mode;
+    for ( int i = 0; i < 4; i++ ) {
+        nois_trs[i] = a->nois_trs[i];
+        segm_cnt[i] = a->segm_cnt[i];
+    }
+
+    int fn;
+    while ( ( fn = (int) InterlockedIncrement( &g_xp_next_file ) - 1 ) < file_cnt ) {
+        file_no = fn;
+        process_ui();
+
+        EnterCriticalSection( &g_xp_stats_cs );
+
+        // unknown filetype is silently skipped; errors on unknown still count
+        if ( filetype == F_UNK && errorlevel > 0 ) (*a->accum.error_cnt)++;
+        if ( filetype != F_UNK ) {
+            if ( errorlevel > 0 ) {
+                err_list[ fn ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
+                err_tp[ fn ] = errorlevel;
+                if ( err_list[ fn ] != NULL )
+                    snprintf( err_list[ fn ], MSG_SIZE, "%s", errormessage );
+            }
+            if ( errorlevel >= err_tol ) (*a->accum.error_cnt)++;
+            else {
+                if ( errorlevel == 1 ) (*a->accum.warn_cnt)++;
+                if ( action == A_LIST ) {
+                    (*a->accum.acc_list_cnt)++;
+                } else if ( action != A_STATS ) {
+                    if ( filetype == F_JPG ) {
+                        *a->accum.acc_jpgsize += jpgfilesize;
+                        *a->accum.acc_pjgsize += pjgfilesize;
+                        (*a->accum.acc_jpg_cnt)++;
+                    } else if ( filetype == F_PJG ) {
+                        *a->accum.acc_jpgsize += jpgfilesize;
+                        *a->accum.acc_pjgsize += pjgfilesize;
+                        (*a->accum.acc_pjg_cnt)++;
+                    }
+                }
+            }
+        }
+        // only count non-skipped files for the progress display
+        int done = ( filetype != F_UNK ) ? (int) ++g_xp_files_done : (int) g_xp_files_done;
+
+        // flush per-thread output buffer if verbose
+        if ( !tl_ui_buf.empty() && verbosity >= 1 ) {
+            fprintf( msgout, "\r%*s\r", BARLEN + 34, "" );
+            fwrite( tl_ui_buf.data(), 1, tl_ui_buf.size(), msgout );
+        }
+        tl_ui_buf.clear();
+
+        // progress bar — Windows console: ASCII-only spinner + blocks
+        if ( !module_mode ) {
+            int total = ( file_proc_cnt > 0 ) ? file_proc_cnt : 1;
+            int barpos = ( done * BARLEN ) / total;
+            static const char* spinners[] = { "-", "\\", "|", "/" };
+            const char* spin = spinners[ g_xp_spinner_idx % 4 ];
+            g_xp_spinner_idx++;
+            fprintf( msgout, "\r  %s  %3i / %-3i  %s[", spin, done, file_proc_cnt, COL_CYAN );
+            for ( int b = 0; b < barpos; b++ ) fprintf( msgout, "#" );
+            fprintf( msgout, "%s", COL_RESET );
+            for ( int b = barpos; b < BARLEN; b++ ) fprintf( msgout, " " );
+            fprintf( msgout, "]" );
+            fflush( msgout );
+        }
+
+        LeaveCriticalSection( &g_xp_stats_cs );
+    }
+    return 0;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 #if !defined( BUILD_LIB )
 THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
@@ -1137,41 +1245,60 @@ int main( int argc, char** argv )
 			}
 		}
 	} else {
-		// XP build: multi-threading not supported. Process sequentially.
-		// (-th flag is accepted but ignored)
-		int st_proc_done = 0;
-		for ( file_no = 0; file_no < file_cnt; file_no++ ) {
-			process_ui();
-			if ( errorlevel > 0 ) {
-				err_list[ file_no ] = (char*) calloc( MSG_SIZE, sizeof( char ) );
-				err_tp[ file_no ] = errorlevel;
-				if ( err_list[ file_no ] != NULL )
-					strcpy( err_list[ file_no ], errormessage );
-			}
-			if ( filetype == F_UNK ) {
-				if ( errorlevel > 0 ) error_cnt++; // inaccessible/unreadable file — count error
-				// else: silently skip wrong file type
-			} else {
-				file_proc_no = ++st_proc_done;
-				if ( errorlevel >= err_tol ) {
-					error_cnt++;
-				} else {
-					if ( errorlevel == 1 ) warn_cnt++;
-					if ( action == A_LIST ) {
-						acc_list_cnt++;
-					} else if ( action != A_STATS ) {
-						if ( filetype == F_JPG ) {
-							acc_jpgsize += jpgfilesize;
-							acc_pjgsize += pjgfilesize;
-							acc_jpg_cnt++;
-						} else if ( filetype == F_PJG ) {
-							acc_jpgsize += jpgfilesize;
-							acc_pjgsize += pjgfilesize;
-							acc_pjg_cnt++;
-						}
-					}
-				}
-			}
+		// --- multi-threaded (Win32 CreateThread, XP-compatible) ---
+		// Force verification in MT mode to catch any silent corruption.
+		if ( verify_lv < 1 ) verify_lv = 1;
+		if ( !module_mode ) {
+			SYSTEM_INFO si;
+			GetSystemInfo( &si );
+			int detected = (int) si.dwNumberOfProcessors;
+			if ( detected < 1 ) detected = 1;
+			fprintf( msgout, "Using %i of %i detected thread(s) (verify enabled)\n",
+				num_threads, detected );
+		}
+		g_xp_files_done   = 0;
+		g_xp_next_file    = 0;
+		g_xp_spinner_idx  = 0;
+		InitializeCriticalSection( &g_xp_stats_cs );
+
+		// Capture main-thread TLS settings + accumulator pointers
+		XpBatchWorkerArgs wargs = {};
+		wargs.auto_set    = auto_set;
+		wargs.sfth_mode   = sfth_mode;
+		for ( int i = 0; i < 4; i++ ) {
+			wargs.nois_trs[i] = nois_trs[i];
+			wargs.segm_cnt[i] = segm_cnt[i];
+		}
+		wargs.accum.acc_jpgsize  = &acc_jpgsize;
+		wargs.accum.acc_pjgsize  = &acc_pjgsize;
+		wargs.accum.acc_jpg_cnt  = &acc_jpg_cnt;
+		wargs.accum.acc_pjg_cnt  = &acc_pjg_cnt;
+		wargs.accum.acc_list_cnt = &acc_list_cnt;
+		wargs.accum.error_cnt    = &error_cnt;
+		wargs.accum.warn_cnt     = &warn_cnt;
+
+		// Cap thread count at file_cnt (no point spawning more workers than files)
+		int n_workers = ( num_threads < file_cnt ) ? num_threads : file_cnt;
+		std::vector<HANDLE> threads;
+		threads.reserve( n_workers );
+		for ( int i = 0; i < n_workers; i++ ) {
+			HANDLE h = CreateThread( NULL, 0, xp_batch_worker, &wargs, 0, NULL );
+			if ( h != NULL ) threads.push_back( h );
+			else xp_batch_worker( &wargs ); // fallback inline if CreateThread fails
+		}
+		for ( size_t i = 0; i < threads.size(); i++ ) {
+			WaitForSingleObject( threads[i], INFINITE );
+			CloseHandle( threads[i] );
+		}
+
+		DeleteCriticalSection( &g_xp_stats_cs );
+
+		// Final progress bar — overwrite the in-progress line with completed state
+		if ( !module_mode ) {
+			fprintf( msgout, "\r  +  %3i / %-3i  %s[", file_proc_cnt, file_proc_cnt, COL_CYAN );
+			for ( int b = 0; b < BARLEN; b++ ) fprintf( msgout, "#" );
+			fprintf( msgout, "%s]\n", COL_RESET );
+			fflush( msgout );
 		}
 	}
 	end = WallClock::now();

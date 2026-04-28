@@ -97,12 +97,14 @@ consistent ratio win without speed regression:
 ### Windows XP / Vista / 7 / 8 build (community-maintained)
 
 The `sourcelegacy/` directory contains the legacy-Windows port for both
-x86 and x64. Single-threaded only (no `-th`), compiled with C++14 and
-Win32 API in place of `std::filesystem` — `xp_compat.h` provides the
-shim layer. Single-file parallel compression (`-sfth`) is supported
-via Win32 `CreateThread`. As of v4.0b the legacy code is at full feature
-parity with `source/` (diagonal DC neighbor context, `0x02` sub-marker,
-single accepted format byte).
+x86 and x64. Compiled with C++14 and Win32 API in place of
+`std::filesystem` — `xp_compat.h` provides the shim layer. Both
+single-file parallel compression (`-sfth`) and multi-file batch threading
+(`-thN`) are supported via Win32 `CreateThread` + `CRITICAL_SECTION` +
+`InterlockedIncrement` (no C++17 `<thread>`/`<future>` required).
+As of v4.0b the legacy code is at full feature parity with `source/`
+(diagonal DC neighbor context, `0x02` sub-marker, single accepted format
+byte, MT batch with auto-verify).
 
 > **WARNING:** This build is community-maintained best-effort. The
 > upstream maintainer does not own legacy-Windows test hardware and
