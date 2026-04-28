@@ -828,15 +828,20 @@ INTERN bool wait_exit  = true;	// pause after finished yes / no
 // verify, so MT CLI workers would race on a non-TL value.
 THREAD_LOCAL bool sfth_mode  = false;	// -sfth: use 3 cores for single-file pre-pack
 THREAD_LOCAL bool decoded_from_sfth = false; // set by unpack_pjg when 0x01 marker found
-// -legacy: force encoder to emit v3.1d-compatible PJG bytes. THREAD_LOCAL for
-// same reason as sfth_mode (MT batch workers + lib concurrent callers).
-THREAD_LOCAL bool legacy_mode = false;
-// v4.0-β: runtime gate for cross-component lazy prediction. pack_pjg sets
-// this true when writing current-format (non-legacy) sequential path;
-// unpack_pjg sets it by reading format_version_read. TLS because MT workers
-// share the encoder/decoder codepath.
+// On-disk format version seen by the decoder (set by unpack_pjg after reading
+// the version byte). THREAD_LOCAL because MT batch workers each decode their
+// own file.
 THREAD_LOCAL unsigned char format_version_read = 0;
+// Cross-component prediction switch — sequential path sets it true unconditionally
+// in v4.0b (only one accepted format). sfth workers set it false (components are
+// decoded in parallel and cannot read Y during Cb/Cr decode).
 THREAD_LOCAL bool pjg_use_crosscomp_now = false;
+// v4.0b feature flag: diagonal/anti-diagonal DC neighbor context. Encoder
+// always writes this on (preceded by sub-marker 0x02 in the file header).
+// Decoder sets it true only when it sees the 0x02 sub-marker — files generated
+// by v4.0/v4.0a (no marker) decode with this off, preserving backward compat.
+// THREAD_LOCAL like pjg_use_crosscomp_now: sfth workers each set their own.
+THREAD_LOCAL bool pjg_use_diag_dc_now = false;
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
@@ -929,6 +934,7 @@ static bool par_pre_pack( int n, std::function<bool(int)> fn )
 struct XpSfthEncArgs {
     int  cmp;
     bool cc_enable;
+    bool diag_dc_enable;   // v4.0b: gates diagonal DC neighbor context
     std::vector<uint8_t>* buf;
     std::string*          err;
     int*                  failed;
@@ -938,6 +944,7 @@ static DWORD WINAPI xp_sfth_enc_worker( LPVOID arg )
 {
     XpSfthEncArgs* a = (XpSfthEncArgs*) arg;
     pjg_use_crosscomp_now = a->cc_enable;
+    pjg_use_diag_dc_now   = a->diag_dc_enable;
     MemoryWriter mw;
     {
         ArithmeticEncoder enc( mw );
@@ -960,6 +967,7 @@ static DWORD WINAPI xp_sfth_enc_worker( LPVOID arg )
 struct XpSfthDecArgs {
     int  cmp;
     bool cc_enable;
+    bool diag_dc_enable;   // v4.0b: gates diagonal DC neighbor context (true if 0x02 marker)
     const std::vector<uint8_t>* buf;
     std::string*                err;
     int*                        failed;
@@ -973,6 +981,7 @@ static DWORD WINAPI xp_sfth_dec_worker( LPVOID arg )
 {
     XpSfthDecArgs* a = (XpSfthDecArgs*) arg;
     pjg_use_crosscomp_now = a->cc_enable;
+    pjg_use_diag_dc_now   = a->diag_dc_enable;
     MemoryReader mr( *(a->buf) );
     ArithmeticDecoder dec( mr );
     #define XP_DEC_FAIL() do { \
@@ -1007,13 +1016,14 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "a";
+INTERN const char*  subversion   = "b";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "04/21/2026";
-// On-disk PJG format version (see source/packjpg.cpp for full rationale).
+[[maybe_unused]] INTERN const char*  versiondate  = "04/27/2026";
+// On-disk PJG format version. v4.0b is a clean break — only one accepted
+// format. Legacy v3.1d (31) and v4.0/v4.0a (40 without diag DC) files are
+// no longer decoded by this build. See README "Format policy" section.
 INTERN const unsigned char format_version_current = 40;
-INTERN const unsigned char format_version_legacy  = 31;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
 INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
@@ -1672,9 +1682,6 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
 			sfth_mode = true;
 		}
-		else if ( strcmp((*argv), "-legacy" ) == 0 || strcmp((*argv), "-pjgv1" ) == 0 ) {
-			legacy_mode = true;
-		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
@@ -2282,7 +2289,6 @@ INTERN void show_help( void )
 	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
 	fprintf( msgout, " [-o]     overwrite existing files\n" );
 	fprintf( msgout, " [-sfth]  parallel single-file compression via Win32 threads\n" );
-	fprintf( msgout, " [-legacy] write v3.1d-compatible PJG format (for old decoders)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
@@ -4049,12 +4055,15 @@ INTERN bool pack_pjg( void )
 	#if defined(DEV_INFOS)
 	int dev_size = 0;
 	#endif
+	// Reset feature flags on main thread; sequential path and sfth workers
+	// re-enable below. Sfth workers copy via XpSfthEncArgs into their TLS.
 	pjg_use_crosscomp_now = false;
+	pjg_use_diag_dc_now   = false;
 
 
 	// PJG-Header
 	str_out->write( reinterpret_cast<const unsigned char*>(pjg_magic), 2 );
-	
+
 	// store settings if not auto
 	if ( !auto_set ) {
 		hcode = 0x00;
@@ -4062,11 +4071,14 @@ INTERN bool pack_pjg( void )
 		str_out->write( nois_trs, 4 );
 		str_out->write( segm_cnt, 4 );
 	}
-	
+
 	// -sfth: parallel component encoding via Win32 CreateThread
 	if ( sfth_mode && cmpc > 1 ) {
+		// Write markers BEFORE version so decoder loop processes them first.
+		// 0x01 = sfth parallel format, 0x02 = v4.0b features (diagonal DC ctx).
 		str_out->write_byte( 0x01 );
-		hcode = legacy_mode ? format_version_legacy : format_version_current;
+		str_out->write_byte( 0x02 );
+		hcode = format_version_current;
 		str_out->write_byte( hcode );
 
 		// Encode shared header into a bounded MemoryWriter, prefix its size.
@@ -4092,7 +4104,7 @@ INTERN bool pack_pjg( void )
 		// Encode each component into its own buffer in parallel. Cross-comp is
 		// safe on encode: colldata[0] is pre-populated read-only by jpg_decode()
 		// before pack_pjg(), so all workers can read Y's bands concurrently.
-		const bool cc_enable = !legacy_mode;
+		// v4.0b: cross-comp + diag DC always on for fresh encodes.
 		std::vector<std::vector<uint8_t>> cmp_bufs( cmpc );
 		std::vector<std::string>          cmp_errs( cmpc );
 		std::vector<int>                  cmp_failed( cmpc, 0 );
@@ -4100,7 +4112,8 @@ INTERN bool pack_pjg( void )
 		std::vector<HANDLE>               threads( cmpc, NULL );
 		for ( int c = 0; c < cmpc; c++ ) {
 			args[c].cmp    = c;
-			args[c].cc_enable = cc_enable;
+			args[c].cc_enable      = true;
+			args[c].diag_dc_enable = true;
 			args[c].buf    = &cmp_bufs[c];
 			args[c].err    = &cmp_errs[c];
 			args[c].failed = &cmp_failed[c];
@@ -4142,11 +4155,18 @@ INTERN bool pack_pjg( void )
 		return true;
 	}
 
-	// ── Sequential path (compatible with all versions) ─────────────────────────
+	// ── Sequential path (default) ──────────────────────────────────────────────
+	// Write 0x02 sub-marker BEFORE version byte to signal v4.0b features
+	// (diagonal DC ctx). v4.0/v4.0a binaries reading this hit "unknown header
+	// code" → clean error. v4.0b binaries reading v4.0a files (no 0x02) keep
+	// pjg_use_diag_dc_now = false → backward-compatible decoding.
+	str_out->write_byte( 0x02 );
 	// store version number
-	hcode = legacy_mode ? format_version_legacy : format_version_current;
+	hcode = format_version_current;
 	str_out->write_byte(hcode);
-	pjg_use_crosscomp_now = !legacy_mode;
+	// v4.0b sequential: cross-component DC + diag DC ctx always on.
+	pjg_use_crosscomp_now = true;
+	pjg_use_diag_dc_now   = true;
 
 
 	// init arithmetic compression
@@ -4259,7 +4279,9 @@ INTERN bool unpack_pjg( void )
 	bool parallel_fmt = false; // set when 0x01 sfth marker seen
 	decoded_from_sfth = false; // reset before reading header
 	format_version_read = 0;
-	pjg_use_crosscomp_now = false;
+	pjg_use_crosscomp_now = false; // reset; sequential path enables below
+	pjg_use_diag_dc_now   = false; // reset; set true if 0x02 sub-marker seen
+	bool v40b_features    = false; // local flag tracking 0x02 sub-marker presence
 
 
 	// check header codes ( maybe position in other function ? )
@@ -4280,11 +4302,19 @@ INTERN bool unpack_pjg( void )
 			parallel_fmt = true;
 			decoded_from_sfth = true;
 		}
+		else if ( hcode == 0x02 ) {
+			// v4.0b sub-marker: file uses diagonal DC ctx (and any future v4.0b
+			// features). Files without this marker (v4.0a or older) decode with
+			// pjg_use_diag_dc_now stuck at false → backward-compatible.
+			v40b_features = true;
+		}
 		else if ( hcode >= 0x14 ) {
-			// compare version number: accept current format + last legacy
-			if ( hcode != format_version_current && hcode != format_version_legacy ) {
-				snprintf( errormessage, MSG_SIZE, "incompatible file, use %s v%i.%i",
-					appname, hcode / 10, hcode % 10 );
+			// v4.0b accepts version byte 0x28 (40). The 0x02 sub-marker controls
+			// feature gating, not format acceptance.
+			if ( hcode != format_version_current ) {
+				snprintf( errormessage, MSG_SIZE,
+					"incompatible file (version byte 0x%02x); this build accepts 0x%02x.",
+					hcode, format_version_current );
 				errorlevel = 2;
 				return false;
 			}
@@ -4330,11 +4360,10 @@ INTERN bool unpack_pjg( void )
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
 		}
-		// v4.0 sfth pipeline (mirror of source/): Cb/Cr workers decode their
+		// v4.0b sfth pipeline (mirror of source/): Cb/Cr workers decode their
 		// zstscan/zdst_high in parallel with Y, then wait on 3 barriers for
 		// Y's ac_high / ac_low / dc each before reading colldata[0][bpos].
-		// Legacy path (pre-v4.0 fmt) pre-satisfies all barriers for all-par.
-		const bool cc_enable = ( format_version_read == format_version_current );
+		// v4.0b: cc always on (only one accepted format).
 		std::vector<std::string>   cmp_errs( cmpc );
 		std::vector<int>           cmp_failed( cmpc, 0 );
 		volatile LONG              any_err = 0;
@@ -4342,31 +4371,33 @@ INTERN bool unpack_pjg( void )
 		HANDLE ev_y_ach = CreateEvent( NULL, TRUE, FALSE, NULL );
 		HANDLE ev_y_acl = CreateEvent( NULL, TRUE, FALSE, NULL );
 		HANDLE ev_y_dc  = CreateEvent( NULL, TRUE, FALSE, NULL );
-		// Legacy sfth: no dependency on Y → pre-satisfy barriers.
-		if ( !cc_enable || cmpc < 2 ) {
+		// Grayscale (cmpc < 2): no Y to read from → pre-satisfy barriers.
+		if ( cmpc < 2 ) {
 			SetEvent( ev_y_ach ); SetEvent( ev_y_acl ); SetEvent( ev_y_dc );
 		}
-		int cmp_start = ( cc_enable && cmpc >= 2 ) ? 1 : 0;
+		int cmp_start = ( cmpc >= 2 ) ? 1 : 0;
 
 		std::vector<XpSfthDecArgs> args( cmpc );
 		std::vector<HANDLE>        threads( cmpc, NULL );
 		for ( cmp = cmp_start; cmp < cmpc; cmp++ ) {
-			args[cmp].cmp       = cmp;
-			args[cmp].cc_enable = cc_enable;
-			args[cmp].buf       = &cbufs[cmp];
-			args[cmp].err       = &cmp_errs[cmp];
-			args[cmp].failed    = &cmp_failed[cmp];
-			args[cmp].any_err   = &any_err;
-			args[cmp].ev_y_ach  = ev_y_ach;
-			args[cmp].ev_y_acl  = ev_y_acl;
-			args[cmp].ev_y_dc   = ev_y_dc;
+			args[cmp].cmp            = cmp;
+			args[cmp].cc_enable      = ( cmpc >= 2 );
+			args[cmp].diag_dc_enable = v40b_features;
+			args[cmp].buf            = &cbufs[cmp];
+			args[cmp].err            = &cmp_errs[cmp];
+			args[cmp].failed         = &cmp_failed[cmp];
+			args[cmp].any_err        = &any_err;
+			args[cmp].ev_y_ach       = ev_y_ach;
+			args[cmp].ev_y_acl       = ev_y_acl;
+			args[cmp].ev_y_dc        = ev_y_dc;
 			threads[cmp] = CreateThread( NULL, 0, xp_sfth_dec_worker, &args[cmp], 0, NULL );
 			if ( threads[cmp] == NULL )
 				xp_sfth_dec_worker( &args[cmp] ); // fallback: run in this thread
 		}
 		// Y on main thread — signal after ac_high / ac_low / dc regardless.
-		if ( cc_enable && cmpc >= 2 ) {
-			pjg_use_crosscomp_now = cc_enable;
+		if ( cmpc >= 2 ) {
+			pjg_use_crosscomp_now = true;
+			pjg_use_diag_dc_now   = v40b_features;
 			MemoryReader ymr( cbufs[0] ); ArithmeticDecoder ydec( ymr );
 			bool y_ok = pjg_decode_zstscan( &ydec, 0 )
 			         && pjg_decode_zdst_high( &ydec, 0 )
@@ -4404,6 +4435,10 @@ INTERN bool unpack_pjg( void )
 		else if ( !pjg_decode_generic( &gdec, &grbgdata, &grbs ) ) return false;
 	} else {
 		// ── Sequential path (default) ──────────────────────────────────────────
+		// v4.0b: cross-component DC always on. Diagonal DC ctx gated by 0x02
+		// sub-marker presence (true for v4.0b files, false for v4.0/v4.0a).
+		pjg_use_crosscomp_now = true;
+		pjg_use_diag_dc_now   = v40b_features;
 		auto decoder = new ArithmeticDecoder(*str_in);
 		if ( !pjg_decode_generic( decoder, &hdrdata, &hdrs ) ) { delete decoder; return false; }
 		if ( !pjg_decode_bit(decoder, &cb) ) { delete decoder; return false; }
@@ -4413,7 +4448,6 @@ INTERN bool unpack_pjg( void )
 		if ( !pjg_unoptimize_header() ) { delete decoder; return false; }
 		if ( disc_meta ) if ( !jpg_rebuild_header() ) { delete decoder; return false; }
 		if ( !jpg_setup_imginfo() ) { delete decoder; return false; }
-		pjg_use_crosscomp_now = ( format_version_read == format_version_current );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			if ( !pjg_decode_zstscan  ( decoder, cmp ) ) { delete decoder; return false; }
 			if ( !pjg_decode_zdst_high( decoder, cmp ) ) { delete decoder; return false; }
@@ -5808,7 +5842,7 @@ INTERN bool pjg_encode_zdst_low( ArithmeticEncoder* enc, int cmp )
 INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 {
 	unsigned char* segm_tab;
-	
+
 	model_s* mod_len;
 	model_b* mod_sgn;
 	model_b* mod_res;
@@ -5857,6 +5891,8 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 	{
 		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
 		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 );
+		// v4.0b: 4 diag-variance buckets multiply the context space
+		if ( pjg_use_diag_dc_now ) mod_len_maxc <<= 2;
 		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
 	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
@@ -5903,11 +5939,28 @@ INTERN bool pjg_encode_dc( ArithmeticEncoder* enc, int cmp )
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		int ctx_shift = ctx_len;
+		int ctx_dim   = max_len + 1;
 		if ( use_cc ) {
 			int y_abs = ABS( y_coeffs[ dpos ] );
 			int y_clen = BITLEN1024P( y_abs );
 			if ( y_clen > 7 ) y_clen = 7;
 			ctx_shift = ( ctx_len << 3 ) | y_clen;
+			ctx_dim   = ( max_len + 1 ) << 3;
+		}
+		// v4.0b: diagonal/anti-diagonal absv variance from already-encoded
+		// neighbors. |L - T| captures main-diagonal slope; |T - TR| captures
+		// anti-diagonal slope at the top edge.
+		if ( pjg_use_diag_dc_now ) {
+			int diag_var = 0;
+			if ( p_y > 0 ) {
+				int top_v = (int) c_absc[2][dpos];
+				if ( p_x > 0 ) diag_var += ABS( (int) c_absc[5][dpos] - top_v );
+				if ( r_x > 0 ) diag_var += ABS( top_v - (int) c_absc[3][dpos] );
+			}
+			int diag_ctx = ( diag_var < 2 ) ? 0
+			             : ( diag_var < 8 ) ? 1
+			             : ( diag_var < 32 ) ? 2 : 3;
+			ctx_shift += diag_ctx * ctx_dim;
 		}
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_shift, snum );
@@ -6592,6 +6645,10 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 	{
 		int mod_len_maxc = ( segm_cnt[cmp] > max_len ) ? segm_cnt[cmp] : max_len + 1;
 		if ( use_cc ) mod_len_maxc = ( ( max_len + 1 ) << 3 );
+		// v4.0b: 4 diag-variance buckets multiply the context space (only when
+		// flag set — mirrors encoder gating so v4.0a files decode with same
+		// model dims as v4.0a encoder used)
+		if ( pjg_use_diag_dc_now ) mod_len_maxc <<= 2;
 		mod_len = INIT_MODEL_S( max_len + 1, mod_len_maxc, 2 );
 	}
 	mod_res = INIT_MODEL_B( ( segm_cnt[cmp] < 16 ) ? 1 << 4 : segm_cnt[cmp], 2 );
@@ -6638,11 +6695,26 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		int ctx_shift = ctx_len;
+		int ctx_dim   = max_len + 1;
 		if ( use_cc ) {
 			int y_abs = ABS( y_coeffs[ dpos ] );
 			int y_clen = BITLEN1024P( y_abs );
 			if ( y_clen > 7 ) y_clen = 7;
 			ctx_shift = ( ctx_len << 3 ) | y_clen;
+			ctx_dim   = ( max_len + 1 ) << 3;
+		}
+		// v4.0b: mirror of encoder — diagonal/anti-diagonal absv variance.
+		if ( pjg_use_diag_dc_now ) {
+			int diag_var = 0;
+			if ( p_y > 0 ) {
+				int top_v = (int) c_absc[2][dpos];
+				if ( p_x > 0 ) diag_var += ABS( (int) c_absc[5][dpos] - top_v );
+				if ( r_x > 0 ) diag_var += ABS( top_v - (int) c_absc[3][dpos] );
+			}
+			int diag_ctx = ( diag_var < 2 ) ? 0
+			             : ( diag_var < 8 ) ? 1
+			             : ( diag_var < 32 ) ? 2 : 3;
+			ctx_shift += diag_ctx * ctx_dim;
 		}
 		// shift context / do context modelling (segmentation is done per context)
 		shift_model( mod_len, ctx_shift, snum );

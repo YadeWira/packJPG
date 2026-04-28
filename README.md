@@ -49,7 +49,7 @@ Starting at v4.0b, packJPG separates **target** from **format**:
 | Directory | Target platforms | Maintained by | Format |
 |---|---|---|---|
 | `source/` | Windows 10+, Linux, macOS | upstream | byte `0x28` + sub-marker `0x02` (v4.0b features) |
-| `sourcelegacy/` | Windows XP SP2+, Windows 7, Windows 8 | community best-effort, no SLA | byte `0x28` (v4.0a-compatible) |
+| `sourcelegacy/` | Windows XP SP2+, Windows 7, Windows 8 (x86 + x64) | community best-effort, no SLA | byte `0x28` + sub-marker `0x02` (v4.0b features, ported) |
 
 **Why the split.** `source/` uses C++17 `std::filesystem`, which has known
 correctness issues on Windows XP and Windows 7 (intermittent `0.00 %` ratio
@@ -94,17 +94,23 @@ consistent ratio win without speed regression:
 
 Δ: −0.043 % bytes, 0.994× wall time, all round-trips byte-exact.
 
-### Windows XP / Win7 / Win8 build (community-maintained)
+### Windows XP / Vista / 7 / 8 build (community-maintained)
 
-The `sourcelegacy/` directory contains the legacy-Windows port. Single-threaded
-build (no `-th`), compiled with C++14 and Win32 API in place of
-`std::filesystem`. Single-file parallel compression (`-sfth`) is supported
-via Win32 `CreateThread`.
+The `sourcelegacy/` directory contains the legacy-Windows port for both
+x86 and x64. Single-threaded only (no `-th`), compiled with C++14 and
+Win32 API in place of `std::filesystem` — `xp_compat.h` provides the
+shim layer. Single-file parallel compression (`-sfth`) is supported
+via Win32 `CreateThread`. As of v4.0b the legacy code is at full feature
+parity with `source/` (diagonal DC neighbor context, `0x02` sub-marker,
+single accepted format byte).
 
-> **WARNING:** This build is community-maintained best-effort. It may produce
-> incorrect results or fail on certain files. Use it at your own risk. The
-> upstream maintainer does not actively test on legacy Windows; bug reports
-> with self-contained reproduction steps are welcome.
+> **WARNING:** This build is community-maintained best-effort. The
+> upstream maintainer does not own legacy-Windows test hardware and
+> validates the build only via Wine cross-runs against `source/`. Real
+> XP / Vista / 7 / 8 hardware testing is not in the upstream loop, so
+> regressions specific to those platforms may slip through. Bug reports
+> with self-contained reproduction steps on real hardware are welcome
+> and can be opened as issues on GitHub.
 
 To build it, from `sourcelegacy/`:
 
@@ -116,6 +122,28 @@ make dev    # -> bin/packJPG_win_legacy_x86_dev.exe (with developer functions)
 ```
 
 Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package).
+
+#### Maintainers wanted
+
+The legacy build needs a maintainer who runs Windows XP, Vista, 7, or 8
+(real hardware or VM) and is willing to:
+
+- **Test releases** on actual legacy Windows before they go out — at
+  minimum, a self round-trip on a few JPEGs and a sanity check that the
+  binary launches without missing-DLL errors.
+- **Triage legacy-only bugs** filed against `sourcelegacy/` (issues
+  upstream cannot reproduce because they don't have the platform).
+- **Port new features** from `source/` to `sourcelegacy/` when they
+  land — typically format changes, new flags, or algorithm tweaks. Each
+  port is a few discrete blocks (encoder, decoder, CLI) plus rebuilding
+  the `xp_compat.h` shims if a `source/` change pulled in new C++17
+  facilities.
+
+If interested, open an issue titled `legacy-maintainer: <handle>` with
+which Windows version(s) you can cover and which scope you're up for
+(release testing only / bug triage / feature ports). Maintainers get
+direct credit in CHANGELOG.md and the README, and can flag legacy-only
+PRs for fast-track review.
 
 
 ## License
