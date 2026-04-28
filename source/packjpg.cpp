@@ -818,7 +818,8 @@ THREAD_LOCAL std::unique_ptr<Writer> str_out;	// output stream
 #if !defined(BUILD_LIB)
 THREAD_LOCAL std::unique_ptr<Reader> str_str;	// storage stream
 
-INTERN char** filelist = NULL;		// list of files to process 
+INTERN char** filelist = NULL;		// list of files to process
+INTERN char** filelist_srcroot = NULL; // [i] = src dir arg that yielded filelist[i] via -r (for -fs); NULL otherwise
 INTERN int    file_cnt = 0;			// count of files in list
 INTERN int    file_proc_cnt = 0;		// count of processable files (JPG/PJG)
 INTERN int    file_proc_no  = 0;		// current processable file number (live)
@@ -898,6 +899,7 @@ INTERN bool disc_meta  = false;	// discard meta-info yes / no
 
 INTERN bool developer  = false;	// allow developers functions yes/no
 INTERN bool recursive  = false;	// recurse into subdirectories yes/no
+INTERN bool fs_mode    = false;	// -fs: preserve source folder structure under -od when -r expands a dir
 THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
 THREAD_LOCAL int  action = A_COMPRESS;// what to do with JPEG/PJG files
 
@@ -1716,13 +1718,14 @@ static bool is_jpg_or_pjg( const std::filesystem::path& p )
 }
 
 static void collect_files_recursive( const std::filesystem::path& dir,
-                                     std::vector<std::string>& out )
+                                     std::vector<std::pair<std::string,std::string>>& out )
 {
 	std::error_code ec;
+	std::string src_root = dir.string();
 	for ( auto& entry : std::filesystem::recursive_directory_iterator( dir,
 	        std::filesystem::directory_options::skip_permission_denied, ec ) ) {
 		if ( entry.is_regular_file( ec ) && is_jpg_or_pjg( entry.path() ) )
-			out.push_back( entry.path().string() );
+			out.push_back( { entry.path().string(), src_root } );
 	}
 }
 
@@ -1738,8 +1741,11 @@ INTERN void initialize_options( int argc, char** argv )
 	// files than argc. 65536 entries covers any realistic batch.
 	const int FILELIST_MAX = 65536;
 	filelist = (char**) calloc( FILELIST_MAX, sizeof( char* ) );
-	for ( i = 0; i < FILELIST_MAX; i++ )
+	filelist_srcroot = (char**) calloc( FILELIST_MAX, sizeof( char* ) );
+	for ( i = 0; i < FILELIST_MAX; i++ ) {
 		filelist[ i ] = NULL;
+		filelist_srcroot[ i ] = NULL;
+	}
 	
 	// preset temporary filelist pointer
 	tmp_flp = filelist;
@@ -1806,6 +1812,9 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 		else if ( strcmp((*argv), "-r" ) == 0 ) {
 			recursive = true;
+		}
+		else if ( strcmp((*argv), "-fs" ) == 0 ) {
+			fs_mode = true;
 		}
 		else if ( strcmp((*argv), "-dry" ) == 0 ) {
 			dry_run = true;
@@ -2002,7 +2011,7 @@ INTERN void initialize_options( int argc, char** argv )
 
 	// if -r is set, expand any directories in the filelist
 	if ( recursive ) {
-		std::vector<std::string> extra_files;
+		std::vector<std::pair<std::string,std::string>> extra_files; // (path, src_root)
 		for ( int fi = 0; filelist[ fi ] != NULL; fi++ ) {
 			std::error_code ec;
 			std::filesystem::path p;
@@ -2016,22 +2025,32 @@ INTERN void initialize_options( int argc, char** argv )
 			// count existing entries
 			int existing = 0;
 			for ( ; filelist[ existing ] != NULL; existing++ );
-			// realloc filelist to fit extra files
+			// realloc both filelist and filelist_srcroot to fit extra files
 			filelist = (char**) realloc( filelist,
+				( existing + extra_files.size() + 1 ) * sizeof( char* ) );
+			filelist_srcroot = (char**) realloc( filelist_srcroot,
 				( existing + extra_files.size() + 1 ) * sizeof( char* ) );
 			// compact (remove NULLs from directory entries)
 			int wi = 0;
 			for ( int fi = 0; fi < existing + (int)extra_files.size(); fi++ ) {
-				if ( fi < existing && filelist[ fi ] != NULL )
-					filelist[ wi++ ] = filelist[ fi ];
+				if ( fi < existing && filelist[ fi ] != NULL ) {
+					filelist[ wi ] = filelist[ fi ];
+					filelist_srcroot[ wi ] = NULL;  // direct args have no src_root
+					wi++;
+				}
 			}
-			// append extra files
-			for ( auto& s : extra_files ) {
-				char* fn = (char*) malloc( s.size() + 1 );
-				strcpy( fn, s.c_str() );
-				filelist[ wi++ ] = fn;
+			// append extra files with their src_root
+			for ( auto& pr : extra_files ) {
+				char* fn = (char*) malloc( pr.first.size() + 1 );
+				strcpy( fn, pr.first.c_str() );
+				filelist[ wi ] = fn;
+				char* sr = (char*) malloc( pr.second.size() + 1 );
+				strcpy( sr, pr.second.c_str() );
+				filelist_srcroot[ wi ] = sr;
+				wi++;
 			}
 			filelist[ wi ] = NULL;
+			filelist_srcroot[ wi ] = NULL;
 		}
 	}
 	
@@ -2466,6 +2485,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
 	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
 	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
+	fprintf( msgout, " [-fs]    preserve source folder structure under -od (use with -r)\n" );
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
@@ -8055,7 +8075,10 @@ INTERN inline void progress_bar( int current, int last )
 INTERN inline char* create_filename( const char* base, const char* extension )
 {
 	// Feature #37: if outdir is set, put the output file there instead of next to the input.
+	// -fs: when -r expanded a dir AND outdir is set, mirror the path's relative
+	// subdir from src_root under outdir (caesium-clt -RS semantics).
 	const char* basename_only = base;
+	std::string fs_subdir; // set only when -fs applies
 	if ( outdir != NULL ) {
 		// Find last path separator to get just the filename part
 		const char* sep = strrchr( base, '/' );
@@ -8064,21 +8087,41 @@ INTERN inline char* create_filename( const char* base, const char* extension )
 		if ( sep2 > sep ) sep = sep2;
 	#endif
 		if ( sep != NULL ) basename_only = sep + 1;
+
+		if ( fs_mode && filelist_srcroot != NULL
+		     && file_no >= 0 && filelist_srcroot[ file_no ] != NULL ) {
+			std::error_code ec;
+			std::filesystem::path full_p( base );
+			std::filesystem::path root_p( filelist_srcroot[ file_no ] );
+			std::filesystem::path rel = std::filesystem::relative(
+				full_p.parent_path(), root_p, ec );
+			if ( !ec && !rel.empty() && rel.string() != "." ) {
+				fs_subdir = rel.string();
+			}
+		}
 	}
 
-	int dirlen  = ( outdir != NULL ) ? strlen( outdir ) + 1 : 0; // +1 for separator
-	int len = dirlen + strlen( basename_only ) + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;
+	int dirlen  = ( outdir != NULL ) ? strlen( outdir ) + 1 : 0;
+	int sublen  = fs_subdir.empty() ? 0 : (int)fs_subdir.size() + 1;
+	int len = dirlen + sublen + strlen( basename_only )
+	          + ( ( extension == NULL ) ? 0 : strlen( extension ) + 1 ) + 1;
 	char* filename = (char*) calloc( len, sizeof( char ) );
 
 	if ( outdir != NULL ) {
 		strcpy( filename, outdir );
-		// ensure trailing separator
 		int dl = strlen( outdir );
 		if ( dl > 0 && outdir[ dl-1 ] != '/'
 	#if defined(_WIN32) || defined(WIN32)
 			&& outdir[ dl-1 ] != '\\'
 	#endif
 		) strcat( filename, "/" );
+		if ( !fs_subdir.empty() ) {
+			strcat( filename, fs_subdir.c_str() );
+			strcat( filename, "/" );
+			std::error_code ec;
+			std::filesystem::create_directories(
+				std::filesystem::path( filename ), ec );
+		}
 		strcat( filename, basename_only );
 	} else {
 		strcpy( filename, base );
