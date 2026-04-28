@@ -448,5 +448,6 @@ Logo and icon designed by Michael Kaufmann.
 
 * **Repository:** https://github.com/YadeWira/packJPG
 * **Issues:** https://github.com/YadeWira/packJPG/issues
+* **Discussion thread (encode.su):** https://encode.su/threads/4482-packJPG-Multi-threaded
 * **Support:** https://www.patreon.com/YadeWira
 * **Original developer blog:** http://packjpg.encode.ru/
