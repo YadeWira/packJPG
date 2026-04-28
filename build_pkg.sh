@@ -19,8 +19,12 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ─── Version (keep in sync with packjpg.cpp appversion/subversion) ───────────
-VERSION="4.0a"
+# ─── Version (auto-derived from source/packjpg.cpp) ─────────────────────────
+# Reads `appversion` (e.g. 40) and `subversion` (e.g. "b") and assembles
+# "4.0b". Keeps packages in lock-step with the binary without manual bumps.
+APP=$(grep -oP 'appversion\s*=\s*\K\d+' source/packjpg.cpp | head -1)
+SUB=$(grep -oP 'subversion\s*=\s*"\K[^"]*' source/packjpg.cpp | head -1)
+VERSION="${APP:0:1}.${APP:1}${SUB}"
 PKG="packjpg"
 
 SRC_DIR="source"
