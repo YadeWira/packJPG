@@ -442,8 +442,9 @@ int model_s::convert_int_to_symbol( int c, symbol *s )
 	// finding the scale is easy
 	s->scale = totals[ 0 ];
 	
-	// check if that symbol exists in the current table. send escape otherwise
-	if ( context->counts[ c ] > 0 ) {
+	// check if that symbol exists in the current table. send escape otherwise.
+	// v4.0d: non-escape dominates after context warms up.
+	if ( PJG_LIKELY( context->counts[ c ] > 0 ) ) {
 		// return high and low count for the current symbol
 		s->low_count  = totals[ c + 2 ];
 		s->high_count = totals[ c + 1 ];
@@ -495,8 +496,9 @@ int model_s::convert_symbol_to_int(uint32_t count, symbol *s)
 	// set up the current symbol
 	s->low_count = totals[c]; // It is guaranteed that there exists such a symbol.
 	s->high_count = totals[c - 1]; // This is guaranteed to not go out of bounds since the search started at index 1 of totals.
-	// send escape if escape symbol encountered
-	if (c == 1) {
+	// send escape if escape symbol encountered.
+	// v4.0d: c==1 is the escape case; non-escape dominates once contexts warm.
+	if (PJG_UNLIKELY(c == 1)) {
 		// Fix #41: clamp current_order to 0 (null_table) to prevent out-of-bounds
 		// access on contexts[] when processing malformed/fuzzed input files.
 		if ( current_order > 0 ) current_order--;

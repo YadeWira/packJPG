@@ -8,6 +8,16 @@
 #include <memory>
 #include <vector>
 
+// v4.0d: portable likely/unlikely branch hints for hot encode/decode paths.
+// Both gcc and clang support __builtin_expect; MSVC ignores via the fallback.
+#if defined(__GNUC__) || defined(__clang__)
+#  define PJG_LIKELY(x)   __builtin_expect(!!(x), 1)
+#  define PJG_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#  define PJG_LIKELY(x)   (x)
+#  define PJG_UNLIKELY(x) (x)
+#endif
+
 // defines for coder
 constexpr uint32_t CODER_USE_BITS = 31; // Must never be above 31.
 constexpr uint32_t CODER_LIMIT100 = uint32_t(1 << CODER_USE_BITS);
