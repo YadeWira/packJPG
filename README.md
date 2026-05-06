@@ -446,6 +446,16 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 
 ## Acknowledgements
 
+This project would not exist without **Matthias Stirner**
+([@packjpg](https://github.com/packjpg)), the original creator of
+packJPG. He designed the algorithm, wrote the original C/C++
+implementation, and maintained the upstream
+[`packjpg/packJPG`](https://github.com/packjpg/packJPG) repository for
+years. Everything in this fork — the modern C++ port, the multi-threaded
+extensions, the v4.0 LTS line — builds on top of his work. Huge thanks
+to him for releasing packJPG as open source so the project could keep
+moving forward.
+
 packJPG started as Matthias Stirner's final-year project at Hochschule
 Aalen, with extensive support from Prof. Dr. Gerhard Seelmann in the
 field of data compression.
