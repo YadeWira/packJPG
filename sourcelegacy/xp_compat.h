@@ -100,3 +100,67 @@ static void xp_collect_files_recursive( const std::string& dir, std::vector<std:
 
     FindClose( hFind );
 }
+
+// Recursive variant that records the original src_root (the dir argument
+// passed to the top-level call) alongside each emitted path. v4.0c -fs
+// flag uses this to mirror the source folder structure under -od.
+static void xp_collect_files_recursive_with_root( const std::string& dir,
+                                                  const std::string& src_root,
+                                                  std::vector<std::pair<std::string,std::string>>& out ) {
+    std::string pattern = dir;
+    if ( !pattern.empty() && pattern.back() != '\\' && pattern.back() != '/' )
+        pattern += '\\';
+    pattern += '*';
+
+    WIN32_FIND_DATAA fdata;
+    HANDLE hFind = FindFirstFileA( pattern.c_str(), &fdata );
+    if ( hFind == INVALID_HANDLE_VALUE ) return;
+
+    do {
+        if ( strcmp( fdata.cFileName, "." ) == 0 || strcmp( fdata.cFileName, ".." ) == 0 )
+            continue;
+        std::string full = dir;
+        if ( !full.empty() && full.back() != '\\' && full.back() != '/' )
+            full += '\\';
+        full += fdata.cFileName;
+
+        if ( fdata.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ) {
+            xp_collect_files_recursive_with_root( full, src_root, out );
+        } else if ( xp_is_jpg_or_pjg( full ) ) {
+            out.push_back( std::make_pair( full, src_root ) );
+        }
+    } while ( FindNextFileA( hFind, &fdata ) );
+
+    FindClose( hFind );
+}
+
+// Computes the relative path from `parent` to `child` (mirrors the
+// std::filesystem::relative semantics used by the modern source tree).
+// Returns:
+//   - the relative path with backslash separators on success
+//   - "." when child equals parent
+//   - empty string when there is no common prefix (i.e., child is not under parent)
+// Both paths are compared case-insensitively (Windows convention).
+// Trailing separators are tolerated; mixed `/` and `\` are normalised.
+static inline std::string xp_relative_path( const std::string& child,
+                                            const std::string& parent ) {
+    if ( child.empty() || parent.empty() ) return std::string();
+    // Normalise: use backslash, strip trailing separator
+    auto norm = []( std::string s ) {
+        for ( auto& c : s ) if ( c == '/' ) c = '\\';
+        while ( !s.empty() && s.back() == '\\' ) s.pop_back();
+        return s;
+    };
+    std::string c_n = norm( child );
+    std::string p_n = norm( parent );
+    if ( c_n.size() < p_n.size() ) return std::string();
+    // Case-insensitive prefix compare
+    for ( size_t i = 0; i < p_n.size(); ++i ) {
+        char a = (char)tolower( (unsigned char)c_n[ i ] );
+        char b = (char)tolower( (unsigned char)p_n[ i ] );
+        if ( a != b ) return std::string();
+    }
+    if ( c_n.size() == p_n.size() ) return std::string( "." );
+    if ( c_n[ p_n.size() ] != '\\' ) return std::string(); // partial-name match, not a child
+    return c_n.substr( p_n.size() + 1 );
+}

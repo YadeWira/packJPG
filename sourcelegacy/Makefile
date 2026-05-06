@@ -14,12 +14,13 @@ CXX_X64  = x86_64-w64-mingw32-g++
 # C++14: avoids std::filesystem while keeping modern C++ features.
 # _WIN32_WINNT=0x0501: targets Windows XP SP2+ (works for both x86 and x64
 # legacy editions; Vista/Win7/Win8 also satisfied).
+# v4.0d: -flto enables link-time optimization (mingw-w64 GCC supports it).
 CXXFLAGS = -I. -I../source -O2 -Wall -funroll-loops -ffast-math \
-           -fomit-frame-pointer -std=c++14 \
+           -fomit-frame-pointer -flto -std=c++14 \
            -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 \
            -D_WIN32_IE=0x0501
 
-LDFLAGS  = -static -static-libgcc -static-libstdc++
+LDFLAGS  = -static -static-libgcc -static-libstdc++ -flto
 
 SRC      = ../source/aricoder.cpp bitops.cpp packjpg.cpp
 BIN      = bin
