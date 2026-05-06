@@ -6,6 +6,8 @@ reconstruction. Typical file size reduction: ~20%.
 
 **Supported platforms:** Linux x64, Windows 10/11 x64, Windows XP / Vista / 7 / 8 (x86 + x64, community-maintained).
 
+**📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
+
 
 ## Installation
 
