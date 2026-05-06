@@ -48,9 +48,25 @@ before the version byte:
 |---|---|
 | `0x00` | custom compression settings block follows (8 bytes) |
 | `0x01` | parallel format: file was compressed with `-sfth` (v3.0+) |
+| `0x02` | v4.0b features (diagonal DC neighbor context, cross-component DC) |
 
 Files with the `0x01` marker require packJPG v3.0 or later to decompress.
-Files without it are decompressible by any build of the same main version.
+Files with the `0x02` marker require packJPG v4.0b or later to decompress;
+v4.0/v4.0a binaries reading them produce a clean `unknown header code`
+error. Files without `0x02` decode under any v4.0+ build with the v4.0b
+features off. v4.0c and v4.0d did not introduce new markers — their
+`.pjg` output is byte-exact with v4.0b's.
+
+
+## LTS / feature line distinction
+
+Subversion releases of the same main version (`4.0a`, `4.0b`, `4.0c`,
+`4.0d`, …) form an **LTS** line: format-stable, binary filename
+`packJPG`. Bug-fix and small additive changes only after the initial
+drop. The current LTS is **v4.0**, with v4.0d as its latest update.
+
+A new main version (`4.1`, `5.0`, …) is reserved for feature-bearing
+releases that may break format. None is currently in roadmap.
 
 ---
-packJPG by Yade Bravo, 03/31/2026
+packJPG by Yade Bravo, 05/06/2026

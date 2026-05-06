@@ -104,11 +104,11 @@ Output examples:
 
 ```
 photos/lena.pjg
-  version : v4.0b
+  version : v4.0d
   packed  : 288.1 KB
 
 photos/lena_fast.pjg         (compressed with -sfth)
-  version : v4.0b (parallel)
+  version : v4.0d (parallel)
   packed  : 288.2 KB
 ```
 
@@ -252,29 +252,36 @@ format**:
 | `sourcelegacy/` | Windows XP / Vista / 7 / 8 (x86 + x64) | byte `0x28` + sub-marker `0x02` (full v4.0b parity) |
 
 Both trees produce the same `.pjg` format — files are interchangeable
-between them.
+between them. v4.0c and v4.0d did not change the on-disk format —
+their `.pjg` output is byte-exact with v4.0b's.
 
 **Version numbering:**
 
-* **N.0x releases** (`4.0`, `4.0a`, `4.0b`, …) are LTS-style. Binary
-  filename `packJPG`. Bug-fix only after the initial drop.
+* **N.0x releases** (`4.0`, `4.0a`, `4.0b`, `4.0c`, `4.0d`, …) are
+  LTS-style. Binary filename `packJPG`. The v4.0 line is the current
+  LTS; v4.0d is its latest update and the last with feature work.
+  Future v4.0e/v4.0f/… releases of this same LTS line are bug-fix only.
 * **N.Mx releases** (`4.1`, `4.1a`, `4.2`, …) are feature-bearing.
-  Binary filename `packJPG-N.Mx`. Format breaks land here.
+  Binary filename `packJPG-N.Mx`. Format breaks land here. There is
+  no v4.1 in the current roadmap.
 
-v4.0b is a one-time exception — it carries the diagonal-DC change
+v4.0b was a one-time exception — it carried the diagonal-DC change
 originally tagged as the unreleased v4.1, rebranded so the v4.1 slot
 stays available for a real feature drop.
 
 **Compatibility matrix:**
 
-| File version | Decoded by v4.0b | Decoded by v4.0/v4.0a | Decoded by v3.1d |
-|---|---|---|---|
-| v4.0b | ✅ | ❌ (clean error) | ❌ |
-| v4.0/v4.0a | ✅ (transparent) | ✅ | ❌ |
-| v3.1d | ❌ | ❌ | ✅ |
+| File version | Decoded by v4.0d | Decoded by v4.0b/c | Decoded by v4.0/v4.0a | Decoded by v3.1d |
+|---|---|---|---|---|
+| v4.0d | ✅ | ✅ (byte-exact) | ❌ (clean error) | ❌ |
+| v4.0b/v4.0c | ✅ | ✅ | ❌ (clean error) | ❌ |
+| v4.0/v4.0a | ✅ (transparent) | ✅ (transparent) | ✅ | ❌ |
+| v3.1d | ❌ | ❌ | ❌ | ✅ |
 
-v4.0b decoders read v4.0/v4.0a files transparently. v3.1d files are
-no longer decoded — keep an old binary on hand if you have v3.1d
+v4.0d decoders read v4.0/v4.0a/v4.0b/v4.0c files transparently. v4.0c
+and v4.0d are byte-exact equivalents of v4.0b at the format level —
+they share the same `0x02` sub-marker and version byte. v3.1d files
+are no longer decoded — keep an old binary on hand if you have v3.1d
 archives.
 
 
