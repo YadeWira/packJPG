@@ -4,6 +4,10 @@
 *.o
 *.obj
 
+# Profile-guided optimization data (produced by `make pgo`)
+*.gcda
+*.gcno
+
 # Precompiled Headers
 *.gch
 *.pch
