@@ -1,5 +1,61 @@
 # packJPG Changelog
 
+## v4.0d (2026-05-06) — LTS speed-polish release
+
+> v4.0d is the final feature release of the v4.0.x line. After this,
+> packJPG enters long-term support: bug fixes only, no new features.
+> Format is identical to v4.0c — `.pjg` output is byte-exact, full
+> backward compatibility with all v4.0/4.0a/4.0b/4.0c streams.
+>
+> Three speed wins, all ratio-neutral:
+>
+> 1. **Link-Time Optimization** — `-flto` added to default build flags.
+>    Cross-translation-unit inlining of small accessors. ~3% encode
+>    and decode speedup with no source changes.
+>
+> 2. **Branch hints** on the arithmetic-coder hot path. New `PJG_LIKELY`
+>    / `PJG_UNLIKELY` macros (gcc/clang `__builtin_expect`, MSVC fallback)
+>    annotate the non-escape branch in `convert_int_to_symbol` and the
+>    escape branch in `convert_symbol_to_int`. ~2-3% additional speedup.
+>
+> 3. **New `make pgo` target** — two-phase profile-guided build:
+>    Phase 1 compiles with `-fprofile-generate`, runs an encode + decode
+>    workload, and emits `.gcda` profile data. Phase 2 rebuilds with
+>    `-fprofile-use` linking the profile. Override `PGO_WORKLOAD` to
+>    point at a richer corpus. Default workload is `../test-files`.
+>
+> 4. **New `make native` target** — adds `-march=native -mtune=native`
+>    for max-performance binaries built from source. Distribution
+>    releases stay portable.
+>
+> Benchmark on a 8.59 MB / 20-file JPEG corpus (mean of 5 runs each):
+>
+> | Build                              | Encode    | Decode    | Ratio Δ |
+> |------------------------------------|-----------|-----------|---------|
+> | v4.0c (baseline)                   |  5.26 s   |  5.04 s   |  0 (ref)|
+> | v4.0d default (LTO + branch hints) |  4.93 s   |  4.83 s   |  0 ✓    |
+> | v4.0d `make pgo` (balanced)        |  4.50 s   |  4.44 s   |  0 ✓    |
+>
+> Default: -6.3% encode / -4.2% decode, no rebuild ceremony required.
+> PGO: -14.4% encode / -11.9% decode, two-phase make.
+>
+> All variants roundtrip-verified bit-exact 20/20 vs v4.0c.
+>
+> **Why packJPG is now in LTS / maintenance mode:** ratio plateau
+> confirmed empirically by five measurements — SITX-style 2-way DC
+> ensemble, SITX-style 2-way AC bpos ensemble (4 weight variants),
+> pre-trained PPM priors (3 strength variants). All lost ratio vs v4.0c.
+> External comparisons confirm packJPG sits on the Pareto frontier:
+> Brunsli is faster but loses 1-2% ratio; Lepton matches packJPG
+> (NSDI '17); JXL `--lossless_jpeg` trails packJPG by 4.3% on tested
+> corpora. Future releases will be bug fixes and platform support only.
+
+## v4.0c (2026-04-27) — `-fs` flag for folder structure preservation
+
+> Adds the `-fs` flag, which when combined with `-r` and `-od` mirrors
+> the source directory structure under the output directory (caesium-clt
+> `-RS` semantics). Format unchanged from v4.0b.
+
 ## v4.0b (2026-04-27) — format simplification + diagonal DC neighbor context
 
 > v4.0b is the new starting point of the post-v4.0 lineage. It collapses
