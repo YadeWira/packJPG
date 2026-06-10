@@ -1,5 +1,223 @@
 # packJPG Changelog
 
+## v4.0e (2026-06-03) — library MT defaults + batch API
+
+> Adds a multithreading-friendly C API for embedding packJPG in
+> archivers, image tools, and other FFI hosts. **No change to the
+> on-disk `.pjg` format** — output is byte-exact equivalent to v4.0d
+> (and v4.0b/v4.0c) on the same input.
+
+### Bug fixes (release QA)
+
+Two defects in the new batch path, found by a QA pass over a 153-file
+real-world JPEG corpus plus ASan/UBSan/TSan runs:
+
+- **`pjglib_convert_batch` file→file with `out_dest == NULL` wrote the
+  wrong extension on decompress.** The sibling-output path always
+  appended `.pjg`, so decompressing `foo.pjg` reconstructed the JPEG
+  straight back onto `foo.pjg` — silently destroying the compressed
+  source. The output extension now follows the input's actual type
+  (peek the magic: `FF D8` JPEG → `.pjg`, `'J''S'` PJG → `.jpg`).
+  Compression was unaffected; only the decompress sibling path was wrong.
+  Regression-covered by the new `lib_filemode_test`.
+- **Per-thread memory leak of the `jpgfilename`/`pjgfilename` buffers.**
+  These THREAD_LOCAL buffers were freed only at the *next*
+  `pjglib_init_streams` call, but a batch worker thread exits after its
+  last op without ever making that call — leaking its final pair per
+  worker (caught by LeakSanitizer). They are now freed at the end of
+  every `pjglib_convert_stream2mem`. Matters for long-running hosts that
+  issue many batches.
+
+### Security / hardening
+
+- **New `pjglib_set_max_output_size(n)` / `pjglib_get_max_output_size()`**
+  — decompression-bomb guard. A fuzz pass over the decoder surfaced that
+  a tiny malformed `.pjg` can reconstruct into a much larger JPEG (e.g.
+  a 7.7 KB input expanding to a 6.25 MB output via a crafted
+  trailing-garbage blob) — the decode terminates and is memory-safe
+  (ASan/UBSan clean), but it is a time/memory amplification vector for a
+  host decoding untrusted `.pjg`. The new cap (bytes; `0` = unlimited,
+  the default — no behavior change) makes the decoder fail cleanly when
+  the reconstructed JPEG would exceed it. Enforced in two layers: an
+  early per-field limit in `pjg_decode_generic` (bounds peak memory
+  during the garbage/header decode) and an exact check on the produced
+  output in `merge_jpeg`. Pre-existing decode behavior, not a v4.0e
+  regression. Covered by `lib_maxoutput_test`.
+- **Also exposed on the CLI as `-maxout<MB>`** (both `source/` and
+  `sourcelegacy/` builds) — same guard, in megabytes, for command-line
+  use: `packjpg x -maxout64 file.pjg`. Sets the same
+  `pjg_max_output_size` global; default off (`0` = unlimited) in CLI and
+  API alike.
+
+### Legacy build (Windows XP/Vista/7/8)
+
+- **`sourcelegacy/` brought to v4.0e.** The on-disk `.pjg` format is
+  unchanged, so the legacy CLI already produced v4.0e-compatible output;
+  this bumps its version string and ports the decompression-bomb guard.
+- **New `-maxout<MB>` CLI switch** — the legacy build has no library API,
+  so the guard is exposed as a command-line flag instead of
+  `pjglib_set_max_output_size`. `packjpg x -maxout64 file.pjg` refuses to
+  reconstruct a JPEG larger than 64 MB (decode fails cleanly, no partial
+  output). Default off (unlimited). Same two-layer enforcement as the
+  library (per-field cap in `pjg_decode_generic` + exact check in
+  `merge_jpeg`).
+- Uses a plain process-global for the cap (no `thread_local` needed): the
+  XP build's `-th` multi-file batch is disabled, so decoding is
+  single-threaded. The v4.0e *library* MT API was **not** ported to
+  legacy — it relies on `thread_local` for thread-safe concurrent calls,
+  which the XP toolchain does not provide.
+- Verified on real Windows 7 (x64 + x86): round-trip byte-exact (MD5
+  match), guard aborts an oversized decode and leaves no partial file,
+  and does not affect legitimate files under the cap.
+
+### Library API additions
+
+- **New `pjglib_convert_batch(ops, n_ops, msg)`** — convert N
+  (in,out) pairs in parallel over a worker pool. Each worker calls
+  `pjglib_init_streams` + `pjglib_convert_stream2mem` internally, so
+  every per-op output goes through the standard stream I/O path. Job
+  stealing: workers grab the next unprocessed op from an atomic
+  counter, no fixed partitioning. On the first failure, `msg` is
+  filled with the failing op's index and error; remaining workers
+  are allowed to finish (their results are discarded). Returns true
+  iff all ops succeeded.
+- **New `pjglib_set_intra_file_threads(int n)` /
+  `pjglib_get_intra_file_threads(void)`** — controls SFTH (3-thread
+  Y/Cb/Cr parallelism within a single file). `n=0` (default) means
+  *auto*: ON if the host has ≥3 logical cores, OFF otherwise. `n=1`
+  forces OFF. `n≥3` forces ON.
+- **New `pjglib_set_inter_file_threads(int n)` /
+  `pjglib_get_inter_file_threads(void)`** — controls batch
+  parallelism across files in `pjglib_convert_batch`. `n=0` (default)
+  means 1 worker (sequential batch). `n≥1` means N concurrent
+  workers.
+- **New `pjglib_suggest_batch_threads(void)`** — returns
+  `max(1, cores/3)`, the canonical packing that keeps total thread
+  budget (inter × intra) close to the host's core count. Useful as a
+  archiver's startup default.
+- **New `pjglib_batch_io` struct** — one input/output pair for
+  `pjglib_convert_batch`. Same stream-type semantics as
+  `pjglib_init_streams` (`in_type`/`out_type`: 0=file, 1=memory,
+  2=stream).
+
+### Threading behavior change
+
+> **The library's single-file convert path is now multithreaded by
+> default** when the host has ≥3 cores. Each call to
+> `pjglib_convert_stream2mem` (and the related single-file entry
+> points) now uses 3 worker threads internally via the same SFTH
+> path as the CLI's `-sfth` flag.
+
+- **Effect on existing FFI consumers:** each `pjglib_convert_*` call
+  uses up to 3 cores instead of 1. **No code change required** in
+  the host application.
+- **Output bytes:** byte-exact equivalent to v4.0d's SFTH path on
+  the same input. Round-trip is verified byte-exact by
+  `lib_batch_test` across a 6-cell grid
+  (`inter ∈ {1,2,4}` × `intra ∈ {off,on}`).
+- **Opt-out:** call `pjglib_set_intra_file_threads(1)` once at
+  startup to restore the pre-v4.0e single-threaded behavior for
+  every subsequent convert call.
+- **No MT lockouts:** the setters are INTERN process-wide
+  configuration. They are NOT thread-safe to set; call them once
+  during single-threaded init, before spawning workers.
+
+### Implementation notes
+
+- The two configuration values (`pjg_inter_file_threads`,
+  `pjg_intra_file_threads`) are INTERN globals, not THREAD_LOCAL.
+  This is required so workers spawned by `pjglib_convert_batch` see
+  the same configuration as the calling thread (a worker that
+  inherits a default TL value of 0 would auto-resolve to SFTH=ON
+  and produce different .pjg bytes than the caller expected).
+  Setting them is documented to be single-threaded, so no
+  synchronization is needed.
+- Each call to `pjglib_convert_stream2mem` resolves
+  `pjg_intra_file_threads` once at entry and copies the resulting
+  boolean into the THREAD_LOCAL `sfth_mode` flag that the existing
+  `par_pre_pack()` machinery already reads. Zero changes to the
+  intra-file parallelism code path.
+- `pjglib_convert_batch` uses a `std::thread` pool, not `std::async`
+  + `std::future`, because the per-op result map is keyed by the
+  original op index (workers steal jobs out of order).
+
+### Tests
+
+- **New `source/test/lib_batch_test.cpp`** — sweeps
+  `inter ∈ {1,2,4}` × `intra ∈ {off,on}` against two baselines
+  (one per intra setting) and asserts each `.pjg` is byte-exact
+  with its single-file counterpart. Also asserts round-trip back
+  to the original JPEG. Total run time ~80 ms on a 4-core host.
+- `lib_concurrent_test` re-run with the new auto-SFTH-on default:
+  4 host threads × 50 iters × 5 JPEGs = 200 ops, 0 mismatches.
+- `lib_roundtrip_test` unchanged, still byte-exact on the test
+  corpus.
+- **New `source/test/lib_filemode_test.cpp`** — regression test for the
+  file→file batch path with `out_dest == NULL`: compresses to sibling
+  `.pjg`, decompresses back, and asserts the `.pjg` is left intact and
+  the reconstructed `.jpg` is byte-exact. Locks in the extension-
+  direction fix above.
+
+### Windows DLL
+
+- **`source/Makefile` `dll` target now produces a self-contained DLL.**
+  libgcc / libstdc++ / winpthread are statically linked, so the shipped
+  `packJPG.dll` depends only on `KERNEL32.dll` + `msvcrt.dll` and can be
+  dropped next to a host `.exe` on a clean Win7/Win10 box.
+- **The DLL must be cross-compiled with the MinGW *posix* thread model**
+  (`make dll CXX=x86_64-w64-mingw32-g++-posix`). The codec's
+  `thread_local` objects with non-trivial destructors crash
+  (`0xC0000005`) at process exit under the win32 thread model — the
+  conversion succeeds, then the host faults on teardown. The `dll`
+  target now hard-fails if a win32-model compiler is passed.
+- `packjpgdll.h` (the `__declspec(dllimport)` header for MSVC consumers)
+  updated to declare the full v4.0e API — the threading setters,
+  `pjglib_suggest_batch_threads`, `pjglib_convert_batch` and the
+  `pjglib_batch_io` struct — plus a `<stdbool.h>` shim and `extern "C"`
+  guard. A `packJPG.def` is shipped so MSVC users can generate a native
+  import lib (`lib /def:packJPG.def`).
+- Verified on real VMs (Win10 x64, Win7 x64, Win7 x86): batch compress +
+  per-file round-trip 5/5 byte-exact, exit 0; forced MT (4 batch
+  workers × 3 intra threads) stable across repeated runs.
+
+### Unix shared library (.so)
+
+- **New `source/Makefile` `so` target** → `libpackJPG.so`, the native
+  Linux/macOS shared object exposing the same C-linkage API as the
+  Windows DLL. Built with `-fPIC -fvisibility=hidden` and a new
+  `BUILD_SO` define that tags the `pjglib_*` entry points with default
+  ELF visibility, so the `.so` exports exactly the 12 public symbols and
+  nothing else. Verified by both direct linking and `dlopen`/`dlsym`
+  (plugin-style) loading; round-trip 5/5 byte-exact.
+
+### Build / CI
+
+- `source/Makefile`: new `lib-tests` target builds all three
+  lib harnesses.
+- `.github/workflows/cross-platform.yml`: builds and runs
+  `lib_batch_test` and `lib_concurrent_test` on every push
+  (macOS Intel, macOS ARM, Linux x64, Linux ARM64).
+- `.github/workflows/ci.yml`: adds a `lib_batch_test` smoke step
+  on the Ubuntu CI matrix.
+- Docs: `README.md` gains a "Library / DLL API" section with
+  embedding example and threading contract.
+
+### Migration notes
+
+- **Existing v4.0d lib consumers:** your code keeps working
+  unchanged. Calls now use 3 cores per convert instead of 1 (no
+  behavioral change beyond speed). If you need to keep the old
+  single-threaded behavior, call
+  `pjglib_set_intra_file_threads(1)` once during init.
+- **Format compatibility:** unchanged. v4.0e reads and writes the
+  same `.pjg` format as v4.0b/c/d. Existing v4.0-line binaries
+  decode v4.0e output transparently.
+- **v3.1d callers:** unchanged from v4.0b — v3.1d binaries cannot
+  decode v4.0e output. Keep an old v3.1d binary on hand for
+  legacy archives.
+
+---
+
 ## v4.0d (2026-05-06) — speed update for the v4.0 LTS
 
 > Speed update for the v4.0 LTS line. Format unchanged from v4.0c —

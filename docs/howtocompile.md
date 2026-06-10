@@ -45,8 +45,9 @@ Individual targets are available via the Makefile:
 | `make native` | Linux x64 with `-march=native -mtune=native` (max-perf, non-portable) |
 | `make pgo` | two-phase profile-guided build (see below) |
 | `make dev` | Linux x64 with developer functions (`DEV_BUILD`) |
-| `make lib` | static library (`BUILD_LIB`) |
-| `make dll` | shared library / DLL (`BUILD_LIB` + `BUILD_DLL`) |
+| `make lib` | static library `packJPGlib.a` (`BUILD_LIB`) |
+| `make so` | Unix shared object `libpackJPG.so` (`BUILD_LIB` + `BUILD_SO`, `-fPIC`) |
+| `make dll` | Windows DLL `packJPG.dll` (`BUILD_DLL`; MinGW posix model required) |
 
 The default compiler is clang++, with automatic fallback to g++. The
 default build now includes `-flto` (link-time optimization) and branch
@@ -84,12 +85,38 @@ Define `BUILD_LIB` when compiling to produce a library instead of an
 executable. Define `BUILD_DLL` in addition for a shared library (DLL).
 
 ```
-make lib    # static library (.a)
-make dll    # shared library (.dll / .so)
+make lib    # static library (packJPGlib.a) — Linux/macOS/Windows
+make so     # Unix shared object (libpackJPG.so) — Linux/macOS
+make dll    # Windows shared library (packJPG.dll) — MinGW cross-compile
 ```
 
-- `packjpglib.h` declares the public API for static library use.
-- `packjpgdll.h` declares the public API for shared library use.
+- `packjpglib.h` declares the public API for static-lib and `.so` use
+  (works from C and C++; the `.so` exports only the `pjglib_*` symbols).
+- `packjpgdll.h` declares the public API (`__declspec(dllimport)`) for
+  MSVC consumers of the Windows DLL.
+- The same C-linkage API is exposed by all three: the static `.a`, the
+  Unix `.so`, and the Windows `.dll`.
+
+### Cross-compiling the Windows DLL — use the posix thread model
+
+When building `packJPG.dll` with MinGW-w64, you **must** use the *posix*
+thread-model compiler, not the win32 one:
+
+```
+make dll CXX=x86_64-w64-mingw32-g++-posix   # x64
+make dll CXX=i686-w64-mingw32-g++-posix     # x86
+```
+
+The codec keeps per-thread state in `thread_local` objects with
+non-trivial destructors (`std::unique_ptr`, `std::string`). Under the
+MinGW **win32** thread model these destructors are torn down through a
+broken `__cxa_thread_atexit` path inside a DLL, so the process faults
+(`0xC0000005`) at exit *after* the first conversion — the conversion
+succeeds, then the host crashes on teardown. The **posix** model
+(winpthread-backed) tears them down cleanly. The `dll` target refuses to
+build with the win32 model. The produced DLL is self-contained (libgcc /
+libstdc++ / winpthread are statically linked; it depends only on
+`KERNEL32.dll` + `msvcrt.dll`).
 
 
 ## Compiling with developer functions
@@ -109,7 +136,8 @@ See [developer.md](developer.md) for a description of the available developer sw
 | Define | Description |
 |---|---|
 | `BUILD_LIB` | required for static or shared library builds |
-| `BUILD_DLL` | required additionally for shared library (DLL) builds |
+| `BUILD_DLL` | required additionally for Windows DLL builds (`__declspec(dllexport)`) |
+| `BUILD_SO` | required additionally for Unix `.so` builds (default-visibility export attribute) |
 | `DEV_BUILD` | includes developer/debug functions in the executable |
 | `UNIX` | defined automatically by the Makefile for Linux builds |
 

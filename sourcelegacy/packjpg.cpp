@@ -1126,13 +1126,26 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "d";
+INTERN const char*  subversion   = "e";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "05/06/2026";
-// On-disk PJG format version. v4.0b is a clean break — only one accepted
-// format. Legacy v3.1d (31) and v4.0/v4.0a (40 without diag DC) files are
-// no longer decoded by this build. See README "Format policy" section.
+[[maybe_unused]] INTERN const char*  versiondate  = "06/10/2026";
+
+// Optional decode-output cap (decompression-bomb guard), ported from v4.0e.
+// 0 = unlimited (only the built-in 64 MB per-field limit in pjg_decode_generic
+// applies). Set via the CLI -maxout<MB> switch. A malformed .pjg can expand a
+// tiny input into a huge JPEG (e.g. a low-entropy trailing-garbage blob); with
+// a cap set, the decoder fails cleanly instead of producing the oversized
+// output. Plain INTERN (no thread_local needed: the XP build's -th batch is
+// disabled, so decoding is single-threaded).
+INTERN unsigned int pjg_max_output_size = 0;
+// On-disk PJG format version. The only accepted version byte is 40 (0x28),
+// covering the ENTIRE v4.0 line: v4.0/v4.0a (no 0x02 sub-marker → diagonal DC
+// stays off, decoded transparently) and v4.0b+ (0x02 marker → diagonal DC on).
+// The marker gates features, not format acceptance (see the decode header loop
+// in unpack_pjg). NOT decoded: legacy v3.1d (31) and the unreleased v4.1 (41) —
+// a different version byte yields a clean "incompatible file" error. Format is
+// identical to the source/ build. See README "Format and versioning policy".
 INTERN const unsigned char format_version_current = 40;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
@@ -1817,6 +1830,14 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
 			sfth_mode = true;
 		}
+		else if ( sscanf( (*argv), "-maxout%i", &tmp_val ) == 1 ) {
+			// v4.0e decompression-bomb guard: cap reconstructed-JPEG size, in MB.
+			// A malformed .pjg can expand a tiny input into a huge JPEG; with
+			// this set, such a decode fails cleanly instead of producing it.
+			if ( tmp_val < 1 )    tmp_val = 1;
+			if ( tmp_val > 4095 ) tmp_val = 4095; // keep MB*1MB within unsigned int
+			pjg_max_output_size = (unsigned int) tmp_val * 1024u * 1024u;
+		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
 			outdir = (*argv) + 3;
@@ -2439,6 +2460,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
+	fprintf( msgout, " [-maxout<MB>] cap reconstructed-JPEG size when decoding (bomb guard)\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
 	#if defined(DEV_BUILD)
@@ -3353,8 +3375,21 @@ INTERN bool merge_jpeg( void )
 	// get filesize: merge_jpeg writes the reconstructed JPG, so set jpgfilesize.
 	// pjgfilesize is already set by read_pjg() (input PJG size) and must not be overwritten.
 	jpgfilesize = str_out->num_bytes_written();
-	
-	
+
+	// Decompression-bomb guard (v4.0e): if the user set -maxout, refuse a
+	// reconstructed JPEG larger than that. The per-field cap in
+	// pjg_decode_generic already bounds peak memory; this is the exact check
+	// on the bytes actually produced.
+	if ( pjg_max_output_size > 0 &&
+	     (unsigned int) jpgfilesize > pjg_max_output_size ) {
+		snprintf( errormessage, MSG_SIZE,
+			"output size limit exceeded: reconstructed JPEG is %i bytes (limit %u)",
+			(int) jpgfilesize, pjg_max_output_size );
+		errorlevel = 2;
+		return false;
+	}
+
+
 	return true;
 }
 
@@ -7307,7 +7342,11 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	// decode header, ending with 256 symbol
 	// 64 MB limit guards against corrupt streams where the end symbol (256) never appears.
 	// Must be large enough for JPEGs with embedded thumbnails / large APP segments (~2 MB headers seen).
-	const int decode_limit = 64 * 1024 * 1024;
+	// A user-set -maxout (decompression-bomb guard, v4.0e) tightens this so no
+	// single generic field can exceed the total output cap.
+	size_t decode_limit = 64 * 1024 * 1024;
+	if ( pjg_max_output_size > 0 && (size_t) pjg_max_output_size < decode_limit )
+		decode_limit = (size_t) pjg_max_output_size;
 	model = INIT_MODEL_S( 256 + 1, 256, 1 );
 	while ( true ) {
 		c = decode_ari( dec, model );

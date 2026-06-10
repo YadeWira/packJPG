@@ -52,6 +52,9 @@
 *.zdst?
 *.dist
 /source/test/lib_concurrent_test
+/source/test/lib_batch_test
+/source/test/lib_filemode_test
+/source/test/lib_maxoutput_test
 /source/test/lib_roundtrip_test_san
 /source/test/lib_concurrent_test_tsan
 /source/packJPG
@@ -68,3 +71,7 @@ pjg_decode_fuzzer
 SITX.zip
 packJPG_v4.0a_untested_WinXP.7z
 packjpg.txt
+
+# Private infra notes — contain VM credentials / SSH key paths, never publish
+CONEXION-IA.md
+CONEXION-IA-W7.md

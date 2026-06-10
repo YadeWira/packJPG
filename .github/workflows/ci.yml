@@ -38,6 +38,13 @@ jobs:
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
+      - name: Lib batch API smoke (v4.0e)
+        run: |
+          ( cd source && \
+            make lib CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -DBUILD_LIB -std=c++17" -j$(nproc) && \
+            c++ -I. -O2 -std=c++17 test/lib_batch_test.cpp packJPGlib.a -lpthread -o test/lib_batch_test && \
+            ./test/lib_batch_test ../test-files/*.jpg )
+
       - name: Upload release binaries
         uses: actions/upload-artifact@v4
         with:

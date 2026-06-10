@@ -1,0 +1,14 @@
+LIBRARY packJPG
+EXPORTS
+    pjglib_convert_batch
+    pjglib_convert_file2file
+    pjglib_convert_stream2mem
+    pjglib_convert_stream2stream
+    pjglib_get_inter_file_threads
+    pjglib_get_intra_file_threads
+    pjglib_init_streams
+    pjglib_set_inter_file_threads
+    pjglib_set_intra_file_threads
+    pjglib_short_name
+    pjglib_suggest_batch_threads
+    pjglib_version_info

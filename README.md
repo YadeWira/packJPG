@@ -131,6 +131,7 @@ photos/lena_fast.pjg         (compressed with -sfth)
 | `-r` | recurse into subdirectories |
 | `-dry` | dry run: simulate without writing output files |
 | `-module` | machine-friendly output: OK/ERROR + elapsed seconds |
+| `-maxout<MB>` | when decoding, refuse to reconstruct a JPEG larger than `<MB>` megabytes (decompression-bomb guard; default off) |
 | `-p` | proceed on warnings |
 | `-d` | discard meta-info |
 
@@ -176,11 +177,13 @@ packJPG a -th$((N/3)) -sfth -o -np *.jpg
 This fills all N cores: `N/3` files in parallel, each using 3 threads.
 On an 18-core box: `-th6 -sfth` = 6 × 3 = 18 threads.
 
-**Ctrl+C behavior.** On `source/` builds (Linux + Windows 10/11 x64),
-Ctrl+C in MT batch stops workers cleanly and removes any partial output
-files. On `sourcelegacy/` builds (Windows XP/Vista/7/8), Ctrl+C
-terminates the process abruptly — partial output files may be left
-behind. Clean up manually if interrupted.
+`-th<n>` is a `source/`-build feature (Linux + Windows 10/11 x64). The
+`sourcelegacy/` XP build ignores it and runs single-threaded — see the
+[Legacy Windows build](#legacy-windows-build-community-maintained)
+section for why.
+
+**Ctrl+C behavior.** On `source/` builds, Ctrl+C in MT batch stops
+workers cleanly and removes any partial output files.
 
 ### `-sfth` (single-file parallel)
 
@@ -237,10 +240,129 @@ solid = 0
 ```
 
 Then:
-
 ```
 arc a -m"jpg" archive.arc *.jpg
 ```
+
+
+## Library / DLL API
+
+v4.0e adds a C-linkage library API for embedding packJPG into other
+applications (archivers, image tools, webservers, etc.). Same `.pjg`
+format as the CLI, with **multithreading enabled by default**.
+
+### Building
+
+```bash
+cd source
+make lib        # → packJPGlib.a   static lib (Linux/macOS/Windows)
+make so         # → libpackJPG.so  Unix shared object (Linux/macOS)
+make dll        # → packJPG.dll + libpackJPG.a (Windows; MinGW posix model)
+
+# Static lib + tests
+make lib-tests  # → test/lib_roundtrip_test, lib_concurrent_test, lib_batch_test
+```
+
+> **Windows DLL:** cross-compile with the MinGW **posix** thread model
+> (`make dll CXX=x86_64-w64-mingw32-g++-posix`). The win32 model
+> miscompiles the codec's `thread_local` destructors and the DLL faults
+> at process exit; the `dll` target refuses to build with it. The
+> produced DLL is self-contained (no external runtime DLLs).
+
+Header: `source/packjpglib.h`. Consumers `#include "packjpglib.h"` and
+link against the static lib, the `.so`, or the DLL — the C-linkage API is
+identical across all three. MSVC consumers can instead include
+`packjpgdll.h` and generate an import lib from the shipped `packJPG.def`.
+
+### Functions
+
+| Function | Purpose |
+|---|---|
+| `pjglib_convert_stream2mem(in_buf, in_size, **out, *out_size, msg)` | Single-file convert (mem→mem) |
+| `pjglib_convert_stream2stream(msg)` | Single-file convert (stdin→stdout) |
+| `pjglib_convert_file2file(in, out, msg)` | Single-file convert (file→file) |
+| `pjglib_init_streams(in_src, in_type, in_size, out_dest, out_type)` | Bind I/O streams for the next convert call |
+| `pjglib_set_intra_file_threads(n)` | SFTH per-file parallelism (`0`=auto, `1`=off, `≥3`=on) |
+| `pjglib_set_inter_file_threads(n)` | Batch parallelism across files (`0`=default 1, `≥1`=N workers) |
+| `pjglib_suggest_batch_threads()` | Helper: returns `max(1, cores/3)` |
+| `pjglib_set_max_output_size(n)` | Decompression-bomb guard: cap reconstructed-JPEG size (`0`=unlimited) |
+| `pjglib_convert_batch(ops, n_ops, msg)` | Convert N (in,out) pairs in parallel |
+| `pjglib_version_info()`, `pjglib_short_name()` | Version metadata |
+
+### Threading defaults (v4.0e)
+
+- **Intra-file (SFTH)**: `auto` is **ON** if the host has ≥3 logical
+  cores, OFF otherwise. To force OFF, call
+  `pjglib_set_intra_file_threads(1)` once at startup. To force ON,
+  call with `3` or higher.
+- **Inter-file (batch)**: default is 1 worker. Use
+  `pjglib_set_inter_file_threads(N)` to enable N workers for
+  `pjglib_convert_batch`. `pjglib_suggest_batch_threads()` is a
+  good default for filling all cores (`cores/3` so each worker can
+  use 3 SFTH threads).
+- **Setters are NOT thread-safe** — call them during single-threaded
+  init, before spawning any workers.
+
+### Example: archiver use case
+
+```c
+#include "packjpglib.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char** argv) {
+    pjglib_set_inter_file_threads(pjglib_suggest_batch_threads());
+    pjglib_set_intra_file_threads(0);  // 0 = auto SFTH
+
+    pjglib_batch_io ops[argc-1];
+    for (int i = 1; i < argc; i++) {
+        ops[i-1].in_src   = argv[i];
+        ops[i-1].in_type  = 0;  // file
+        ops[i-1].in_size  = 0;
+        ops[i-1].out_dest = NULL;  // lib writes sibling .pjg
+        ops[i-1].out_type = 0;
+    }
+    char msg[PJG_MSG_SIZE] = {0};
+    if (!pjglib_convert_batch(ops, argc-1, msg)) {
+        fprintf(stderr, "batch failed: %s\n", msg);
+        return 1;
+    }
+    return 0;
+}
+```
+
+### Thread-safety contract
+
+- Multiple host threads may call `pjglib_convert_stream2mem` etc.
+  concurrently — the codec is THREAD_LOCAL-clean (validated by
+  `lib_concurrent_test`).
+- `pjglib_convert_batch` is the recommended path for parallelism
+  across files; it manages worker threads internally.
+- Memory outputs returned via `**out_file` are allocated with
+  `malloc()` — free with `free()`, not `delete[]`.
+
+### Decoding untrusted `.pjg` input
+
+The decoder reconstructs whatever a `.pjg` describes, and a crafted/malformed
+`.pjg` can expand a tiny input into a much larger JPEG (a "decompression bomb",
+e.g. via a large trailing-garbage blob). The decode is memory-safe and always
+terminates, but it is a resource-amplification vector. Hosts that decode
+`.pjg` from untrusted sources should set a ceiling once at startup:
+
+```c
+pjglib_set_max_output_size(64u * 1024 * 1024);  // refuse >64 MB reconstructions
+```
+
+With a cap set, decoding a `.pjg` whose output would exceed it fails cleanly
+(returns false, fills `msg`) instead of producing the oversized output. Default
+is `0` (unlimited) — no change for trusted workflows.
+
+### v3.1d callers
+
+The v4.0 line emits format `0x28 0x02` which is incompatible with
+the v3.1d binary's `-legacy` path (which is gone since v4.0a). If
+your downstream consumers have v3.1d-only decoders, hold off on
+v4.0e until they're upgraded.
 
 
 ## Format and versioning policy
@@ -291,14 +413,22 @@ archives.
 
 The `sourcelegacy/` directory contains the legacy-Windows port for both
 x86 and x64. Compiled with C++14 and Win32 API in place of
-`std::filesystem` (`xp_compat.h` provides the shim layer). Both
-single-file parallel compression (`-sfth`) and multi-file batch threading
-(`-thN`) work natively via `CreateThread` + `CRITICAL_SECTION` +
-`InterlockedIncrement` — no C++17 `<thread>`/`<future>` needed.
+`std::filesystem` (`xp_compat.h` provides the shim layer), using
+`CreateThread` instead of C++17 `<thread>`/`<future>`.
 
-As of v4.0b, `sourcelegacy/` is at full feature parity with `source/`
-(diagonal DC neighbor context, `0x02` sub-marker, single accepted
-format byte, MT batch with auto-verify).
+**Threading on the legacy build:** single-file parallel compression
+(`-sfth`, Y/Cb/Cr on three Win32 threads) is supported — each thread
+works on a separate component, so there is no shared mutable state.
+Multi-file batch threading (`-thN`) is **not** active on the legacy
+build: the XP toolchain has no working `thread_local`, so the codec's
+per-file state is a single process-global, and running several files
+concurrently would race on it. The legacy CLI therefore ignores `-thN`
+and processes files single-threaded. (The `source/` build, which has
+real `thread_local`, runs `-thN` MT batch with auto-verify.)
+
+The on-disk `.pjg` format matches `source/` exactly (diagonal DC
+neighbor context, `0x02` sub-marker, single accepted format byte), so
+files are fully interchangeable between the two builds.
 
 > **Warning:** The upstream maintainer does not own legacy-Windows test
 > hardware — `sourcelegacy/` is validated only via Wine cross-runs
