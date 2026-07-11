@@ -37,6 +37,10 @@
 /source/bin/
 /source4xp/bin/
 
+# Pre-release dev tree (v4.1+ staging) — never published, source/ and
+# sourcelegacy/ get the finalized changes ported over instead.
+/sourcePre/
+
 # Compiled test harnesses (keep sources, ignore binaries)
 /source/test/lib_roundtrip_test
 

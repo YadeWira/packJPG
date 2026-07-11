@@ -713,6 +713,21 @@ THREAD_LOCAL int            grbs             =    0  ;   // size of garbage
 
 THREAD_LOCAL unsigned int*  rstp             =   NULL;   // restart markers positions in huffdata
 THREAD_LOCAL unsigned int*  scnp             =   NULL;   // scan start positions in huffdata
+// v4.0f: native arithmetic coding (SOF C9/CA). Arithmetic scans are captured
+// VERBATIM into huffdata (FF00 stuffing and FF-Dn restart markers intact),
+// unlike Huffman scans which get destuffed/marker-stripped. This is required:
+// the QM-coder's renormalization reads ahead by up to a couple of bytes, so
+// per-restart/per-scan byte consumption isn't exactly bit-for-bit deterministic
+// the way Huffman's is — only real marker bytes in the stream let the decoder
+// resync exactly, matching real jdarith.c's "unread_marker" convention. rstp[]/
+// scnp[] (repurposed here for the ORIGINAL-read direction, since decode_jpeg's
+// Huffman path never uses them) record exact byte offsets so no marker-scanning
+// is needed at decode time.
+THREAD_LOCAL bool           jpg_arith_coded  = false;  // true if SOF was C9/CA/CB
+// Arithmetic conditioning tables (from DAC segments; T.81 defaults if absent).
+THREAD_LOCAL int            arith_dc_L[4]    = {0,0,0,0};
+THREAD_LOCAL int            arith_dc_U[4]    = {1,1,1,1};
+THREAD_LOCAL int            arith_ac_K[4]    = {5,5,5,5};
 THREAD_LOCAL int            rstc             =    0  ;   // count of restart markers
 THREAD_LOCAL int            scnc             =    0  ;   // count of scans
 THREAD_LOCAL int            rsti             =    0  ;   // restart interval
@@ -1126,10 +1141,16 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "e";
+INTERN const char*  subversion   = "f";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "06/10/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "07/11/2026";
+// v4.0f LTS parity port: native arithmetic-coded JPEG support (SOF C9/CA),
+// ported from source/packjpg.cpp. Purely additive — format_version_current
+// stays 40, Huffman .pjg output stays byte-compatible with v4.0e. VM-tested
+// on real Windows 7 (this build's target) and Windows 10 via SSH/Wine; also
+// fuzzed clean (ASan+UBSan, 851s/4904 execs after fixing 2 bugs shared with
+// source/packjpg.cpp).
 
 // Optional decode-output cap (decompression-bomb guard), ported from v4.0e.
 // 0 = unlimited (only the built-in 64 MB per-field limit in pjg_decode_generic
@@ -2973,6 +2994,9 @@ INTERN bool reset_buffers( void )
 	rst_err   = NULL;
 	rstp      = NULL;
 	scnp      = NULL;
+	rstc      = 0;
+	jpg_arith_coded = false;
+	for ( i = 0; i < 4; i++ ) { arith_dc_L[i] = 0; arith_dc_U[i] = 1; arith_ac_K[i] = 5; }
 	
 	// free image arrays
 	for ( cmp = 0; cmp < 4; cmp++ )	{
@@ -3092,7 +3116,62 @@ INTERN bool read_jpeg( void )
 	
 	// JPEG reader loop
 	while ( true ) {
-		if ( type == 0xDA ) { // if last marker was sos
+		if ( type == 0xDA && jpg_arith_coded ) { // arithmetic scan: capture VERBATIM
+			// (re)alloc scan position array — reused here for the ORIGINAL-read
+			// direction; recode_jpeg repopulates it fresh for the re-encode
+			// direction later, so there's no lifetime conflict (see comment at
+			// jpg_arith_coded's declaration).
+			scnp = ( unsigned int* ) frealloc( scnp, ( scnc + 2 ) * sizeof( int ) );
+			if ( scnp == NULL ) {
+				snprintf( errormessage, MSG_SIZE, MEM_ERRMSG );
+				errorlevel = 2;
+				delete ( hdrw ); delete ( huffw ); free ( segment );
+				return false;
+			}
+			scnp[ scnc ] = huffw->num_bytes_written();
+			while ( true ) {
+				if ( str_in->read_byte(&tmp) == 0 ) break;
+				if ( tmp != 0xFF ) {
+					huffw->write_byte( tmp );
+					continue;
+				}
+				// tmp == 0xFF: peek next byte BEFORE writing anything — if this
+				// turns out to be a real terminating marker, neither byte
+				// belongs to this scan's payload (bug fixed 2026-07-10: writing
+				// the leading 0xFF unconditionally here leaked 1 byte into the
+				// scan per real marker hit, corrupting every scan after the
+				// first by an accumulating +1 offset).
+				if ( str_in->read_byte(&tmp) == 0 ) { huffw->write_byte( 0xFF ); break; }
+				if ( tmp == 0x00 ) {
+					// stuffing — keep both bytes verbatim, the QM-coder destuffs itself
+					huffw->write_byte( 0xFF );
+					huffw->write_byte( 0x00 );
+				}
+				else if ( ( tmp >= 0xD0 ) && ( tmp <= 0xD7 ) ) {
+					// restart marker — keep verbatim, record its exact byte
+					// offset so decode doesn't need to scan for it later
+					huffw->write_byte( 0xFF );
+					huffw->write_byte( tmp );
+					rstp = ( unsigned int* ) frealloc( rstp, ( rstc + 1 ) * sizeof( int ) );
+					if ( rstp == NULL ) {
+						snprintf( errormessage, MSG_SIZE, MEM_ERRMSG );
+						errorlevel = 2;
+						delete ( hdrw ); delete ( huffw ); free ( segment );
+						return false;
+					}
+					rstp[ rstc++ ] = huffw->num_bytes_written();
+				}
+				else {
+					// real marker: this FF + tmp did NOT get written — they
+					// belong to the next header segment
+					scnc++;
+					segment[ 0 ] = 0xFF;
+					segment[ 1 ] = tmp;
+					break;
+				}
+			}
+		}
+		else if ( type == 0xDA ) { // if last marker was sos (Huffman)
 			// switch to huffman data reading mode
 			cpos = 0;
 			crst = 0;
@@ -3100,7 +3179,7 @@ INTERN bool read_jpeg( void )
 				// read byte from imagedata
 				if ( str_in->read_byte(&tmp) == 0 )
 					break;
-					
+
 				// non-0xFF loop
 				if ( tmp != 0xFF ) {
 					crst = 0;
@@ -3110,7 +3189,7 @@ INTERN bool read_jpeg( void )
 							break;
 					}
 				}
-				
+
 				// treatment of 0xFF
 				if ( tmp == 0xFF ) {
 					if ( str_in->read_byte(&tmp) == 0 )
@@ -3158,7 +3237,7 @@ INTERN bool read_jpeg( void )
 								errorlevel = 1;
 								crst = 255;
 							}
-							rst_err[ scnc ] = crst;							
+							rst_err[ scnc ] = crst;
 						}
 						// end of current scan
 						scnc++;
@@ -3196,7 +3275,12 @@ INTERN bool read_jpeg( void )
 		
 		// read segment type
 		type = segment[ 1 ];
-		
+
+		// SOF always precedes the first SOS, so this flag is set before the
+		// scan-reading branch above ever needs it.
+		if ( ( type == 0xC9 ) || ( type == 0xCA ) || ( type == 0xCB ) )
+			jpg_arith_coded = true;
+
 		// if EOI is encountered make a quick exit
 		if ( type == 0xD9 ) {
 			// get pointer for header data & size
@@ -3205,6 +3289,8 @@ INTERN bool read_jpeg( void )
 			// get pointer for huffman data & size
 			huffdata = huffw->get_c_data();
 			hufs     = huffw->num_bytes_written();
+			// final bound for arithmetic scan positions
+			if ( jpg_arith_coded && scnp != NULL ) scnp[ scnc ] = hufs;
 			// everything is done here now
 			break;			
 		}
@@ -3324,33 +3410,41 @@ INTERN bool merge_jpeg( void )
 		if ( type != 0xDA ) break;
 		
 		
-		// (re)set corrected rst pos
-		cpos = 0;
-		
-		// write & expand huffman coded image data
-		for ( ipos = scnp[ scan - 1 ]; ipos < scnp[ scan ]; ipos++ ) {
-			// write current byte
-			str_out->write_byte(huffdata[ipos]);
-			// check current byte, stuff if needed
-			if ( huffdata[ ipos ] == 0xFF )
-				str_out->write_byte(stv);
-			// insert restart markers if needed
-			if ( rstp != NULL ) {
-				if ( ipos == rstp[ rpos ] ) {
+		if ( jpg_arith_coded ) {
+			// arithmetic scans already have real FF-Dn restart markers and
+			// FF00 stuffing embedded verbatim (see arith_encode_block_seq et
+			// al. / recode_jpeg) — no re-stuffing, no rstp-based reinsertion.
+			str_out->write( huffdata + scnp[ scan - 1 ], scnp[ scan ] - scnp[ scan - 1 ] );
+		}
+		else {
+			// (re)set corrected rst pos
+			cpos = 0;
+
+			// write & expand huffman coded image data
+			for ( ipos = scnp[ scan - 1 ]; ipos < scnp[ scan ]; ipos++ ) {
+				// write current byte
+				str_out->write_byte(huffdata[ipos]);
+				// check current byte, stuff if needed
+				if ( huffdata[ ipos ] == 0xFF )
+					str_out->write_byte(stv);
+				// insert restart markers if needed
+				if ( rstp != NULL ) {
+					if ( ipos == rstp[ rpos ] ) {
+						rst = 0xD0 + ( cpos % 8 );
+						str_out->write_byte(mrk);
+						str_out->write_byte(rst);
+						rpos++; cpos++;
+					}
+				}
+			}
+			// insert false rst markers at end if needed
+			if ( rst_err != NULL ) {
+				while ( rst_err[ scan - 1 ] > 0 ) {
 					rst = 0xD0 + ( cpos % 8 );
 					str_out->write_byte(mrk);
 					str_out->write_byte(rst);
-					rpos++; cpos++;
+					cpos++;	rst_err[ scan - 1 ]--;
 				}
-			}
-		}
-		// insert false rst markers at end if needed
-		if ( rst_err != NULL ) {
-			while ( rst_err[ scan - 1 ] > 0 ) {
-				rst = 0xD0 + ( cpos % 8 );
-				str_out->write_byte(mrk);
-				str_out->write_byte(rst);
-				cpos++;	rst_err[ scan - 1 ]--;
 			}
 		}
 
@@ -3395,34 +3489,482 @@ INTERN bool merge_jpeg( void )
 
 
 /* -----------------------------------------------
+	arithmetic (QM-coder) coding — T.81 Annex D/F/G
+	native support for SOF C9 (sequential) / CA (progressive), v4.0f
+	----------------------------------------------- */
+
+typedef int64_t AJLONG; // libjpeg's JLONG is `long` (64-bit on LP64); matches its range
+
+#define AV(i,a,b,c,d) (((AJLONG)a<<16)|((AJLONG)c<<8)|((AJLONG)d<<7)|b)
+// Qe probability table (T.81 Table D.3), verbatim from libjpeg-turbo jaricom.c.
+static const AJLONG arith_qe_tab[114] = {
+AV(0,0x5a1d,1,1,1),AV(1,0x2586,14,2,0),AV(2,0x1114,16,3,0),AV(3,0x080b,18,4,0),AV(4,0x03d8,20,5,0),
+AV(5,0x01da,23,6,0),AV(6,0x00e5,25,7,0),AV(7,0x006f,28,8,0),AV(8,0x0036,30,9,0),AV(9,0x001a,33,10,0),
+AV(10,0x000d,35,11,0),AV(11,0x0006,9,12,0),AV(12,0x0003,10,13,0),AV(13,0x0001,12,13,0),AV(14,0x5a7f,15,15,1),
+AV(15,0x3f25,36,16,0),AV(16,0x2cf2,38,17,0),AV(17,0x207c,39,18,0),AV(18,0x17b9,40,19,0),AV(19,0x1182,42,20,0),
+AV(20,0x0cef,43,21,0),AV(21,0x09a1,45,22,0),AV(22,0x072f,46,23,0),AV(23,0x055c,48,24,0),AV(24,0x0406,49,25,0),
+AV(25,0x0303,51,26,0),AV(26,0x0240,52,27,0),AV(27,0x01b1,54,28,0),AV(28,0x0144,56,29,0),AV(29,0x00f5,57,30,0),
+AV(30,0x00b7,59,31,0),AV(31,0x008a,60,32,0),AV(32,0x0068,62,33,0),AV(33,0x004e,63,34,0),AV(34,0x003b,32,35,0),
+AV(35,0x002c,33,9,0),AV(36,0x5ae1,37,37,1),AV(37,0x484c,64,38,0),AV(38,0x3a0d,65,39,0),AV(39,0x2ef1,67,40,0),
+AV(40,0x261f,68,41,0),AV(41,0x1f33,69,42,0),AV(42,0x19a8,70,43,0),AV(43,0x1518,72,44,0),AV(44,0x1177,73,45,0),
+AV(45,0x0e74,74,46,0),AV(46,0x0bfb,75,47,0),AV(47,0x09f8,77,48,0),AV(48,0x0861,78,49,0),AV(49,0x0706,79,50,0),
+AV(50,0x05cd,48,51,0),AV(51,0x04de,50,52,0),AV(52,0x040f,50,53,0),AV(53,0x0363,51,54,0),AV(54,0x02d4,52,55,0),
+AV(55,0x025c,53,56,0),AV(56,0x01f8,54,57,0),AV(57,0x01a4,55,58,0),AV(58,0x0160,56,59,0),AV(59,0x0125,57,60,0),
+AV(60,0x00f6,58,61,0),AV(61,0x00cb,59,62,0),AV(62,0x00ab,61,63,0),AV(63,0x008f,61,32,0),AV(64,0x5b12,65,65,1),
+AV(65,0x4d04,80,66,0),AV(66,0x412c,81,67,0),AV(67,0x37d8,82,68,0),AV(68,0x2fe8,83,69,0),AV(69,0x293c,84,70,0),
+AV(70,0x2379,86,71,0),AV(71,0x1edf,87,72,0),AV(72,0x1aa9,87,73,0),AV(73,0x174e,72,74,0),AV(74,0x1424,72,75,0),
+AV(75,0x119c,74,76,0),AV(76,0x0f6b,74,77,0),AV(77,0x0d51,75,78,0),AV(78,0x0bb6,77,79,0),AV(79,0x0a40,77,48,0),
+AV(80,0x5832,80,81,1),AV(81,0x4d1c,88,82,0),AV(82,0x438e,89,83,0),AV(83,0x3bdd,90,84,0),AV(84,0x34ee,91,85,0),
+AV(85,0x2eae,92,86,0),AV(86,0x299a,93,87,0),AV(87,0x2516,86,71,0),AV(88,0x5570,88,89,1),AV(89,0x4ca9,95,90,0),
+AV(90,0x44d9,96,91,0),AV(91,0x3e22,97,92,0),AV(92,0x3824,99,93,0),AV(93,0x32b4,99,94,0),AV(94,0x2e17,93,86,0),
+AV(95,0x56a8,95,96,1),AV(96,0x4f46,101,97,0),AV(97,0x47e5,102,98,0),AV(98,0x41cf,103,99,0),AV(99,0x3c3d,104,100,0),
+AV(100,0x375e,99,93,0),AV(101,0x5231,105,102,0),AV(102,0x4c0f,106,103,0),AV(103,0x4639,107,104,0),AV(104,0x415e,103,99,0),
+AV(105,0x5627,105,106,1),AV(106,0x50e7,108,107,0),AV(107,0x4b85,109,103,0),AV(108,0x5597,110,109,0),AV(109,0x504f,111,107,0),
+AV(110,0x5a10,110,111,1),AV(111,0x5522,112,109,0),AV(112,0x59eb,112,111,1),AV(113,0x5a1d,113,113,0)
+};
+
+// QM-coder decoder — reads directly from the verbatim-captured huffdata
+// (FF00 stuffing / FF-Dn restart markers intact, see jpg_arith_coded).
+struct QMDecoder {
+	AJLONG c, a; int ct;
+	const unsigned char* p;
+	const unsigned char* end;
+	int unread; // set once a real marker is hit; keeps feeding zero data (T.81 D.2.6)
+	void init( const unsigned char* buf, const unsigned char* bufend ) {
+		p = buf; end = bufend; c = 0; a = 0; ct = -16; unread = 0;
+	}
+	inline int gb() { return ( p < end ) ? *p++ : 0; }
+	int decode( unsigned char* st ) {
+		unsigned char nl, nm; AJLONG qe, temp; int sv, data;
+		while ( a < 0x8000L ) {
+			if ( --ct < 0 ) {
+				if ( unread ) data = 0;
+				else {
+					data = gb();
+					if ( data == 0xFF ) {
+						do data = gb(); while ( data == 0xFF );
+						if ( data == 0 ) data = 0xFF;
+						else { unread = data; data = 0; }
+					}
+				}
+				c = ( c << 8 ) | data;
+				if ( ( ct += 8 ) < 0 ) { if ( ++ct == 0 ) a = 0x8000L; }
+			}
+			a <<= 1;
+		}
+		sv = *st; qe = arith_qe_tab[ sv & 0x7F ];
+		nl = qe & 0xFF; qe >>= 8; nm = qe & 0xFF; qe >>= 8;
+		temp = a - qe; a = temp; temp <<= ct;
+		if ( c >= temp ) {
+			c -= temp;
+			if ( a < qe ) { a = qe; *st = ( sv & 0x80 ) ^ nm; }
+			else { a = qe; *st = ( sv & 0x80 ) ^ nl; sv ^= 0x80; }
+		} else if ( a < 0x8000L ) {
+			if ( a < qe ) { *st = ( sv & 0x80 ) ^ nl; sv ^= 0x80; }
+			else { *st = ( sv & 0x80 ) ^ nm; }
+		}
+		return sv >> 7;
+	}
+};
+
+// per-table statistics + per-component conditioning state (reset at every
+// scan start AND at every restart interval, per T.81 start_pass/process_restart).
+THREAD_LOCAL unsigned char arith_dc_stats[4][64];
+THREAD_LOCAL unsigned char arith_ac_stats[4][256];
+THREAD_LOCAL unsigned char arith_fixed_bin[4]; // index 0 = 113: self-looping, never adapts
+THREAD_LOCAL int           arith_dc_context[4];
+
+INTERN void arith_reset_stats( bool reset_dc, bool reset_ac )
+{
+	int cmp, tbl;
+	if ( reset_dc ) {
+		for ( cmp = 0; cmp < cs_cmpc; cmp++ ) {
+			tbl = cmpnfo[ cs_cmp[ cmp ] ].huffdc;
+			memset( arith_dc_stats[ tbl ], 0, 64 );
+			arith_dc_context[ cs_cmp[ cmp ] ] = 0;
+		}
+	}
+	if ( reset_ac ) {
+		for ( cmp = 0; cmp < cs_cmpc; cmp++ ) {
+			tbl = cmpnfo[ cs_cmp[ cmp ] ].huffac;
+			memset( arith_ac_stats[ tbl ], 0, 256 );
+		}
+	}
+	memset( arith_fixed_bin, 0, 4 );
+	arith_fixed_bin[ 0 ] = 113; // fixed 0.5 probability bin, never adapts (see memory note)
+}
+
+// ---- sequential (SOF C9): DC + AC in one pass, block[] in zigzag/scan order ----
+INTERN void arith_decode_block_seq( QMDecoder& dd, int cmp, int* lastdc, short* block )
+{
+	unsigned char* st; unsigned char* dcst; unsigned char* acst;
+	int sign, k, v, m;
+	int dctbl = cmpnfo[ cmp ].huffdc, actbl = cmpnfo[ cmp ].huffac;
+	dcst = arith_dc_stats[ dctbl ]; acst = arith_ac_stats[ actbl ];
+	memset( block, 0, 64 * sizeof( short ) );
+
+	st = dcst + arith_dc_context[ cmp ];
+	if ( dd.decode( st ) == 0 ) arith_dc_context[ cmp ] = 0;
+	else {
+		sign = dd.decode( st + 1 ); st += 2; st += sign;
+		if ( ( m = dd.decode( st ) ) != 0 ) {
+			st = dcst + 20;
+			while ( dd.decode( st ) ) { m <<= 1; st += 1; }
+		}
+		if ( m < ( ( 1 << arith_dc_L[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 0;
+		else if ( m > ( ( 1 << arith_dc_U[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 12 + ( sign * 4 );
+		else arith_dc_context[ cmp ] = 4 + ( sign * 4 );
+		v = m; st += 14;
+		while ( m >>= 1 ) if ( dd.decode( st ) ) v |= m;
+		v += 1; if ( sign ) v = -v;
+		*lastdc = ( *lastdc + v ) & 0xffff;
+	}
+	block[ 0 ] = (short) *lastdc;
+
+	for ( k = 1; k <= 63; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		if ( dd.decode( st ) ) break;
+		while ( dd.decode( st + 1 ) == 0 ) { st += 3; k++; if ( k > 63 ) return; }
+		sign = dd.decode( arith_fixed_bin ); st += 2;
+		if ( ( m = dd.decode( st ) ) != 0 ) {
+			if ( dd.decode( st ) ) {
+				m <<= 1;
+				st = acst + ( k <= arith_ac_K[ actbl ] ? 189 : 217 );
+				while ( dd.decode( st ) ) { m <<= 1; st += 1; }
+			}
+		}
+		v = m; st += 14;
+		while ( m >>= 1 ) if ( dd.decode( st ) ) v |= m;
+		v += 1; if ( sign ) v = -v;
+		block[ k ] = (short) v;
+	}
+}
+
+// ---- progressive (SOF CA): DC first/refine, AC first/refine ----
+INTERN void arith_decode_DC_first( QMDecoder& dd, int cmp, int* lastdc, short* block, int Al )
+{
+	unsigned char* st; int dctbl = cmpnfo[ cmp ].huffdc;
+	unsigned char* dcst = arith_dc_stats[ dctbl ];
+	int sign, m, v;
+	st = dcst + arith_dc_context[ cmp ];
+	if ( dd.decode( st ) == 0 ) arith_dc_context[ cmp ] = 0;
+	else {
+		sign = dd.decode( st + 1 ); st += 2; st += sign;
+		if ( ( m = dd.decode( st ) ) != 0 ) {
+			st = dcst + 20;
+			while ( dd.decode( st ) ) { m <<= 1; st += 1; }
+		}
+		if ( m < ( ( 1 << arith_dc_L[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 0;
+		else if ( m > ( ( 1 << arith_dc_U[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 12 + ( sign * 4 );
+		else arith_dc_context[ cmp ] = 4 + ( sign * 4 );
+		v = m; st += 14;
+		while ( m >>= 1 ) if ( dd.decode( st ) ) v |= m;
+		v += 1; if ( sign ) v = -v;
+		*lastdc = ( *lastdc + v ) & 0xffff;
+	}
+	block[ 0 ] = (short) ( (unsigned) *lastdc << Al );
+}
+INTERN void arith_decode_DC_refine( QMDecoder& dd, short* block, int Al )
+{
+	int p1 = 1 << Al;
+	if ( dd.decode( arith_fixed_bin ) ) block[ 0 ] |= p1;
+}
+INTERN void arith_decode_AC_first( QMDecoder& dd, int cmp, short* block, int Ss, int Se, int Al )
+{
+	int actbl = cmpnfo[ cmp ].huffac;
+	unsigned char* acst = arith_ac_stats[ actbl ];
+	unsigned char* st; int sign, k, v, m;
+	for ( k = Ss; k <= Se; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		if ( dd.decode( st ) ) break;
+		while ( dd.decode( st + 1 ) == 0 ) { st += 3; k++; if ( k > Se ) return; }
+		sign = dd.decode( arith_fixed_bin ); st += 2;
+		if ( ( m = dd.decode( st ) ) != 0 ) {
+			if ( dd.decode( st ) ) {
+				m <<= 1;
+				st = acst + ( k <= arith_ac_K[ actbl ] ? 189 : 217 );
+				while ( dd.decode( st ) ) { m <<= 1; st += 1; }
+			}
+		}
+		v = m; st += 14;
+		while ( m >>= 1 ) if ( dd.decode( st ) ) v |= m;
+		v += 1; if ( sign ) v = -v;
+		block[ k ] = (short) ( (unsigned) v << Al );
+	}
+}
+INTERN void arith_decode_AC_refine( QMDecoder& dd, int cmp, short* block, int Ss, int Se, int Al )
+{
+	int actbl = cmpnfo[ cmp ].huffac;
+	unsigned char* acst = arith_ac_stats[ actbl ];
+	// m1 = -(1<<Al), written to avoid left-shifting a negative value (UB;
+	// found by UBSan fuzzing 2026-07-11) — numerically identical to (-1)<<Al.
+	int p1 = 1 << Al, m1 = -( 1 << Al ), k, kex; unsigned char* st;
+	for ( kex = Se; kex > 0; kex-- ) if ( block[ kex ] ) break;
+	for ( k = Ss; k <= Se; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		if ( k > kex ) { if ( dd.decode( st ) ) break; }
+		for ( ;; ) {
+			short* tc = &block[ k ];
+			if ( *tc ) {
+				if ( dd.decode( st + 2 ) ) { if ( *tc < 0 ) *tc += (short) m1; else *tc += (short) p1; }
+				break;
+			}
+			if ( dd.decode( st + 1 ) ) { *tc = dd.decode( arith_fixed_bin ) ? (short) m1 : (short) p1; break; }
+			st += 3; k++; if ( k > Se ) return;
+		}
+	}
+}
+
+// QM-coder encoder — accumulates bytes (with real FF-Dn restart markers and
+// FF00 stuffing embedded) directly into `out`; a single instance's `out`
+// spans an entire scan (possibly with several restart segments).
+struct QMEncoder {
+	AJLONG c, a; int ct, buffer, sc, zc;
+	std::vector<unsigned char> out;
+	void init() { c = 0; a = 0x10000L; ct = 11; buffer = -1; sc = 0; zc = 0; out.clear(); }
+	void reinit_regs() { c = 0; a = 0x10000L; ct = 11; buffer = -1; sc = 0; zc = 0; } // restart: keep out
+	inline void emit( int v ) { out.push_back( (unsigned char) v ); }
+	void encode( unsigned char* st, int val ) {
+		unsigned char nl, nm; AJLONG qe, temp; int sv = *st;
+		qe = arith_qe_tab[ sv & 0x7F ]; nl = qe & 0xFF; qe >>= 8; nm = qe & 0xFF; qe >>= 8;
+		a -= qe;
+		if ( val != ( sv >> 7 ) ) {
+			if ( a >= qe ) { c += a; a = qe; }
+			*st = ( sv & 0x80 ) ^ nl;
+		} else {
+			if ( a >= 0x8000L ) return;
+			if ( a < qe ) { c += a; a = qe; }
+			*st = ( sv & 0x80 ) ^ nm;
+		}
+		do {
+			a <<= 1; c <<= 1;
+			if ( --ct == 0 ) {
+				temp = c >> 19;
+				if ( temp > 0xFF ) {
+					if ( buffer >= 0 ) {
+						if ( zc ) do emit( 0x00 ); while ( --zc );
+						emit( buffer + 1 ); if ( buffer + 1 == 0xFF ) emit( 0x00 );
+					}
+					zc += sc; sc = 0; buffer = temp & 0xFF;
+				} else if ( temp == 0xFF ) { ++sc; }
+				else {
+					if ( buffer == 0 ) ++zc;
+					else if ( buffer >= 0 ) { if ( zc ) do emit( 0x00 ); while ( --zc ); emit( buffer ); }
+					if ( sc ) { if ( zc ) do emit( 0x00 ); while ( --zc ); do { emit( 0xFF ); emit( 0x00 ); } while ( --sc ); }
+					buffer = temp & 0xFF;
+				}
+				c &= 0x7FFFFL; ct += 8;
+			}
+		} while ( a < 0x8000L );
+	}
+	void finish() {
+		AJLONG temp;
+		if ( ( temp = ( a - 1 + c ) & 0xFFFF0000UL ) < c ) c = temp + 0x8000L; else c = temp;
+		c <<= ct;
+		if ( c & 0xF8000000UL ) {
+			if ( buffer >= 0 ) {
+				if ( zc ) do emit( 0x00 ); while ( --zc );
+				emit( buffer + 1 ); if ( buffer + 1 == 0xFF ) emit( 0x00 );
+			}
+			zc += sc; sc = 0;
+		} else {
+			if ( buffer == 0 ) ++zc;
+			else if ( buffer >= 0 ) { if ( zc ) do emit( 0x00 ); while ( --zc ); emit( buffer ); }
+			if ( sc ) { if ( zc ) do emit( 0x00 ); while ( --zc ); do { emit( 0xFF ); emit( 0x00 ); } while ( --sc ); }
+		}
+		if ( c & 0x7FFF800L ) {
+			if ( zc ) do emit( 0x00 ); while ( --zc );
+			emit( (int)( ( c >> 19 ) & 0xFF ) ); if ( ( ( c >> 19 ) & 0xFF ) == 0xFF ) emit( 0x00 );
+			if ( c & 0x7F800L ) {
+				emit( (int)( ( c >> 11 ) & 0xFF ) ); if ( ( ( c >> 11 ) & 0xFF ) == 0xFF ) emit( 0x00 );
+			}
+		}
+	}
+};
+
+// ---- sequential (SOF C9): DC + AC in one pass, block[] already in colldata's
+// zigzag/scan order (full precision — no external DC diffing needed, this
+// function reads colldata directly and does the diff internally like decode) ----
+INTERN void arith_encode_block_seq( QMEncoder& en, int cmp, int* lastdc, const short* block )
+{
+	unsigned char* st; unsigned char* dcst; unsigned char* acst;
+	int v, v2, m, k, ke;
+	int dctbl = cmpnfo[ cmp ].huffdc, actbl = cmpnfo[ cmp ].huffac;
+	dcst = arith_dc_stats[ dctbl ]; acst = arith_ac_stats[ actbl ];
+
+	st = dcst + arith_dc_context[ cmp ];
+	if ( ( v = block[ 0 ] - *lastdc ) == 0 ) { en.encode( st, 0 ); arith_dc_context[ cmp ] = 0; }
+	else {
+		*lastdc = block[ 0 ]; en.encode( st, 1 );
+		if ( v > 0 ) { en.encode( st + 1, 0 ); st += 2; arith_dc_context[ cmp ] = 4; }
+		else { v = -v; en.encode( st + 1, 1 ); st += 3; arith_dc_context[ cmp ] = 8; }
+		m = 0;
+		if ( v -= 1 ) {
+			en.encode( st, 1 ); m = 1; v2 = v; st = dcst + 20;
+			while ( v2 >>= 1 ) { en.encode( st, 1 ); m <<= 1; st += 1; }
+		}
+		en.encode( st, 0 );
+		if ( m < ( ( 1 << arith_dc_L[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 0;
+		else if ( m > ( ( 1 << arith_dc_U[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] += 8;
+		st += 14;
+		while ( m >>= 1 ) en.encode( st, ( m & v ) ? 1 : 0 );
+	}
+
+	for ( ke = 63; ke > 0; ke-- ) if ( block[ ke ] ) break;
+	for ( k = 1; k <= ke; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		en.encode( st, 0 );
+		while ( ( v = block[ k ] ) == 0 ) { en.encode( st + 1, 0 ); st += 3; k++; }
+		en.encode( st + 1, 1 );
+		if ( v > 0 ) en.encode( arith_fixed_bin, 0 ); else { v = -v; en.encode( arith_fixed_bin, 1 ); }
+		st += 2; m = 0;
+		if ( v -= 1 ) {
+			en.encode( st, 1 ); m = 1; v2 = v;
+			if ( v2 >>= 1 ) {
+				en.encode( st, 1 ); m <<= 1;
+				st = acst + ( k <= arith_ac_K[ actbl ] ? 189 : 217 );
+				while ( v2 >>= 1 ) { en.encode( st, 1 ); m <<= 1; st += 1; }
+			}
+		}
+		en.encode( st, 0 ); st += 14;
+		while ( m >>= 1 ) en.encode( st, ( m & v ) ? 1 : 0 );
+	}
+	if ( k <= 63 ) { st = acst + 3 * ( k - 1 ); en.encode( st, 1 ); }
+}
+
+// ---- progressive (SOF CA): DC first/refine, AC first/refine ----
+INTERN void arith_encode_DC_first( QMEncoder& en, int cmp, int* lastdc, int dcval, int Al )
+{
+	unsigned char* st; int dctbl = cmpnfo[ cmp ].huffdc;
+	unsigned char* dcst = arith_dc_stats[ dctbl ];
+	int v, v2, m;
+	int mval = dcval >> Al; // arithmetic right shift, matches Huffman's own `>> cs_sal`
+	st = dcst + arith_dc_context[ cmp ];
+	if ( ( v = mval - *lastdc ) == 0 ) { en.encode( st, 0 ); arith_dc_context[ cmp ] = 0; }
+	else {
+		*lastdc = mval; en.encode( st, 1 );
+		if ( v > 0 ) { en.encode( st + 1, 0 ); st += 2; arith_dc_context[ cmp ] = 4; }
+		else { v = -v; en.encode( st + 1, 1 ); st += 3; arith_dc_context[ cmp ] = 8; }
+		m = 0;
+		if ( v -= 1 ) {
+			en.encode( st, 1 ); m = 1; v2 = v; st = dcst + 20;
+			while ( v2 >>= 1 ) { en.encode( st, 1 ); m <<= 1; st += 1; }
+		}
+		en.encode( st, 0 );
+		if ( m < ( ( 1 << arith_dc_L[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] = 0;
+		else if ( m > ( ( 1 << arith_dc_U[ dctbl ] ) >> 1 ) ) arith_dc_context[ cmp ] += 8;
+		st += 14;
+		while ( m >>= 1 ) en.encode( st, ( m & v ) ? 1 : 0 );
+	}
+}
+INTERN void arith_encode_DC_refine( QMEncoder& en, int dcval, int Al )
+{
+	en.encode( arith_fixed_bin, ( dcval >> Al ) & 1 );
+}
+INTERN void arith_encode_AC_first( QMEncoder& en, int cmp, const short* block, int Ss, int Se, int Al )
+{
+	int actbl = cmpnfo[ cmp ].huffac;
+	unsigned char* acst = arith_ac_stats[ actbl ];
+	unsigned char* st; int v, v2, m, k, ke;
+	for ( ke = Se; ke > 0; ke-- ) {
+		int vv = block[ ke ];
+		if ( vv >= 0 ) { if ( vv >>= Al ) break; } else { vv = -vv; if ( vv >>= Al ) break; }
+	}
+	for ( k = Ss; k <= ke; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		en.encode( st, 0 );
+		for ( ;; ) {
+			int vv = block[ k ];
+			if ( vv >= 0 ) { if ( ( v = vv >> Al ) ) { en.encode( st + 1, 1 ); en.encode( arith_fixed_bin, 0 ); break; } }
+			else { vv = -vv; if ( ( v = vv >> Al ) ) { en.encode( st + 1, 1 ); en.encode( arith_fixed_bin, 1 ); break; } }
+			en.encode( st + 1, 0 ); st += 3; k++;
+		}
+		st += 2; m = 0;
+		if ( v -= 1 ) {
+			en.encode( st, 1 ); m = 1; v2 = v;
+			if ( v2 >>= 1 ) {
+				en.encode( st, 1 ); m <<= 1;
+				st = acst + ( k <= arith_ac_K[ actbl ] ? 189 : 217 );
+				while ( v2 >>= 1 ) { en.encode( st, 1 ); m <<= 1; st += 1; }
+			}
+		}
+		en.encode( st, 0 ); st += 14;
+		while ( m >>= 1 ) en.encode( st, ( m & v ) ? 1 : 0 );
+	}
+	if ( k <= Se ) { st = acst + 3 * ( k - 1 ); en.encode( st, 1 ); }
+}
+INTERN void arith_encode_AC_refine( QMEncoder& en, int cmp, const short* block, int Ss, int Se, int Ah, int Al )
+{
+	int actbl = cmpnfo[ cmp ].huffac;
+	unsigned char* acst = arith_ac_stats[ actbl ];
+	int k, ke, kex, v; unsigned char* st;
+	for ( ke = Se; ke > 0; ke-- ) {
+		int vv = block[ ke ];
+		if ( vv >= 0 ) { if ( vv >> Al ) break; } else { vv = -vv; if ( vv >> Al ) break; }
+	}
+	for ( kex = ke; kex > 0; kex-- ) {
+		int vv = block[ kex ];
+		if ( vv >= 0 ) { if ( vv >> Ah ) break; } else { vv = -vv; if ( vv >> Ah ) break; }
+	}
+	for ( k = Ss; k <= ke; k++ ) {
+		st = acst + 3 * ( k - 1 );
+		if ( k > kex ) en.encode( st, 0 );
+		for ( ;; ) {
+			int vv = block[ k ];
+			if ( vv >= 0 ) {
+				if ( ( v = vv >> Al ) ) {
+					if ( v >> 1 ) en.encode( st + 2, v & 1 );
+					else { en.encode( st + 1, 1 ); en.encode( arith_fixed_bin, 0 ); }
+					break;
+				}
+			} else {
+				vv = -vv;
+				if ( ( v = vv >> Al ) ) {
+					if ( v >> 1 ) en.encode( st + 2, v & 1 );
+					else { en.encode( st + 1, 1 ); en.encode( arith_fixed_bin, 1 ); }
+					break;
+				}
+			}
+			en.encode( st + 1, 0 ); st += 3; k++;
+		}
+	}
+	if ( k <= Se ) { st = acst + 3 * ( k - 1 ); en.encode( st, 1 ); }
+}
+
+
+/* -----------------------------------------------
 	JPEG decoding routine
 	----------------------------------------------- */
 
 INTERN bool decode_jpeg( void )
 {
-	BitReader* huffr; // bitwise reader for image data
-	
+	BitReader* huffr = NULL; // bitwise reader for image data (Huffman only)
+	QMDecoder qmd; // arithmetic decoder state (arithmetic only)
+	int arst_idx = 0; // next unconsumed entry in rstp[] (monotonic across the whole file)
+	bool arith_first_seg = true; // true until the first segment of the CURRENT scan has been inited
+
 	unsigned char  type = 0x00; // type of current marker segment
 	unsigned int   len  = 0; // length of current marker segment
 	unsigned int   hpos = 0; // current position in header
-	
+
 	int lastdc[ 4 ]; // last dc for each component
 	short block[ 64 ]; // store block for coeffs
 	int peobrun; // previous eobrun
 	int eobrun; // run of eobs
 	int rstw; // restart wait counter
-	
+
 	int cmp, bpos, dpos;
 	int mcu, sub, csc;
 	int eob, sta;
-	
-	
-	// open huffman coded image data for input in BitReader
-	huffr = new BitReader( huffdata, hufs );
-	
+
+
+	// open huffman coded image data for input in BitReader (Huffman path only —
+	// arithmetic uses QMDecoder directly against huffdata, see jpg_arith_coded)
+	if ( !jpg_arith_coded ) huffr = new BitReader( huffdata, hufs );
+
 	// preset count of scans
 	scnc = 0;
-	
+
 	// JPEG decompression loop
 	while ( true )
 	{
@@ -3441,15 +3983,18 @@ INTERN bool decode_jpeg( void )
 		
 		// get out if last marker segment type was not SOS
 		if ( type != 0xDA ) break;
-		
-		// check if huffman tables are available
-		for ( csc = 0; csc < cs_cmpc; csc++ ) {
+
+		arith_first_seg = true;
+
+		// check if huffman tables are available (not applicable to arithmetic —
+		// conditioning tables always have T.81 defaults, see arith_dc_L/U/K)
+		for ( csc = 0; csc < cs_cmpc && !jpg_arith_coded; csc++ ) {
 			cmp = cs_cmp[ csc ];
-			if ( ( ( jpegtype == 1 || ( ( cs_cmpc > 1 || cs_to == 0 ) && cs_sah == 0 ) ) && htset[ 0 ][ cmpnfo[cmp].huffdc ] == 0 ) || 
+			if ( ( ( jpegtype == 1 || ( ( cs_cmpc > 1 || cs_to == 0 ) && cs_sah == 0 ) ) && htset[ 0 ][ cmpnfo[cmp].huffdc ] == 0 ) ||
 			   ( jpegtype == 1 && htset[ 1 ][ cmpnfo[cmp].huffdc ] == 0 ) ||
 			   ( cs_cmpc == 1 && cs_to > 0 && cs_sah == 0 && htset[ 1 ][ cmpnfo[cmp].huffac ] == 0 ) ) {
 				snprintf( errormessage, MSG_SIZE, "huffman table missing in scan%i", scnc );
-				delete huffr;
+				if ( huffr ) delete huffr;
 				errorlevel = 2;
 				return false;
 			}
@@ -3484,8 +4029,105 @@ INTERN bool decode_jpeg( void )
 			rstw = rsti;
 			
 			// decoding for interleaved data
-			if ( cs_cmpc > 1 )
-			{				
+			if ( jpg_arith_coded ) {
+				// ---> native arithmetic decoding (v4.0f, SOF C9/CA) <---
+				{
+					// Malformed/adversarial input can make jpg_next_mcupos/mcuposn
+					// (driven by the header's DRI value) fire more restarts than
+					// read_jpeg actually captured FF-Dn markers for — bounds-check
+					// before indexing rstp[] (found by fuzzing 2026-07-11).
+					if ( !arith_first_seg && ( rstp == NULL || arst_idx >= (int) rstc ) ) {
+						snprintf( errormessage, MSG_SIZE, "malformed restart interval in scan%i", scnc );
+						if ( huffr ) delete huffr;
+						errorlevel = 2;
+						return false;
+					}
+					unsigned int seg_start = arith_first_seg ? scnp[ scnc ] : rstp[ arst_idx ];
+					if ( !arith_first_seg ) arst_idx++;
+					qmd.init( huffdata + seg_start, huffdata + scnp[ scnc + 1 ] );
+					arith_first_seg = false;
+					bool reset_dc = ( jpegtype == 1 ) || ( cs_to == 0 && cs_sah == 0 );
+					bool reset_ac = ( jpegtype == 1 ) || ( cs_to > 0 );
+					arith_reset_stats( reset_dc, reset_ac );
+				}
+
+				if ( cs_cmpc > 1 ) {
+					// interleaved: only DC scans can be interleaved (T.81 Annex G)
+					if ( jpegtype == 1 ) {
+						while ( sta == 0 ) {
+							arith_decode_block_seq( qmd, cmp, &lastdc[ cmp ], block );
+							for ( bpos = 0; bpos < 64; bpos++ )
+								colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+					else if ( cs_sah == 0 ) {
+						while ( sta == 0 ) {
+							arith_decode_DC_first( qmd, cmp, &lastdc[ cmp ], block, cs_sal );
+							colldata[ cmp ][ 0 ][ dpos ] = block[ 0 ];
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+					else {
+						while ( sta == 0 ) {
+							block[ 0 ] = colldata[ cmp ][ 0 ][ dpos ];
+							arith_decode_DC_refine( qmd, block, cs_sal );
+							colldata[ cmp ][ 0 ][ dpos ] = block[ 0 ];
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+				}
+				else {
+					if ( jpegtype == 1 ) {
+						while ( sta == 0 ) {
+							arith_decode_block_seq( qmd, cmp, &lastdc[ cmp ], block );
+							for ( bpos = 0; bpos < 64; bpos++ )
+								colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
+							sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+						}
+					}
+					else if ( cs_to == 0 ) {
+						if ( cs_sah == 0 ) {
+							while ( sta == 0 ) {
+								arith_decode_DC_first( qmd, cmp, &lastdc[ cmp ], block, cs_sal );
+								colldata[ cmp ][ 0 ][ dpos ] = block[ 0 ];
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+						else {
+							while ( sta == 0 ) {
+								block[ 0 ] = colldata[ cmp ][ 0 ][ dpos ];
+								arith_decode_DC_refine( qmd, block, cs_sal );
+								colldata[ cmp ][ 0 ][ dpos ] = block[ 0 ];
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+					}
+					else {
+						if ( cs_sah == 0 ) {
+							while ( sta == 0 ) {
+								memset( block, 0, 64 * sizeof( short ) );
+								arith_decode_AC_first( qmd, cmp, block, cs_from, cs_to, cs_sal );
+								for ( bpos = cs_from; bpos <= cs_to; bpos++ )
+									colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+						else {
+							while ( sta == 0 ) {
+								for ( bpos = cs_from; bpos <= cs_to; bpos++ )
+									block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
+								arith_decode_AC_refine( qmd, cmp, block, cs_from, cs_to, cs_sal );
+								for ( bpos = cs_from; bpos <= cs_to; bpos++ )
+									colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+					}
+				}
+			}
+			else if ( cs_cmpc > 1 )
+			{
 				if ( jpegtype == 1 ) {
 					// ---> sequential interleaved decoding <---
 					while ( sta == 0 ) {
@@ -3494,21 +4136,21 @@ INTERN bool decode_jpeg( void )
 							&(htrees[ 0 ][ cmpnfo[cmp].huffdc ]),
 							&(htrees[ 1 ][ cmpnfo[cmp].huffdc ]),
 							block );
-						
+
 						// check for non optimal coding
 						if ( ( eob > 1 ) && ( block[ eob - 1 ] == 0 ) ) {
 							snprintf( errormessage, MSG_SIZE, "reconstruction of inefficient coding not supported" );
 							errorlevel = 1;
 						}
-						
+
 						// fix dc
 						block[ 0 ] += lastdc[ cmp ];
 						lastdc[ cmp ] = block[ 0 ];
-						
+
 						// copy to colldata
 						for ( bpos = 0; bpos < eob; bpos++ )
 							colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
-						
+
 						// check for errors, proceed if no error encountered
 						if ( eob < 0 ) sta = -1;
 						else sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
@@ -3561,27 +4203,27 @@ INTERN bool decode_jpeg( void )
 							&(htrees[ 0 ][ cmpnfo[cmp].huffdc ]),
 							&(htrees[ 1 ][ cmpnfo[cmp].huffdc ]),
 							block );
-						
+
 						// check for non optimal coding
 						if ( ( eob > 1 ) && ( block[ eob - 1 ] == 0 ) ) {
 							snprintf( errormessage, MSG_SIZE, "reconstruction of inefficient coding not supported" );
 							errorlevel = 1;
 						}
-						
+
 						// fix dc
 						block[ 0 ] += lastdc[ cmp ];
 						lastdc[ cmp ] = block[ 0 ];
-						
+
 						// copy to colldata
 						for ( bpos = 0; bpos < eob; bpos++ )
 							colldata[ cmp ][ bpos ][ dpos ] = block[ bpos ];
-						
+
 						// check for errors, proceed if no error encountered
 						if ( eob < 0 ) sta = -1;
 						else sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
 					}
 				}
-				else if ( cs_to == 0 ) {					
+				else if ( cs_to == 0 ) {
 					if ( cs_sah == 0 ) {
 						// ---> progressive non interleaved DC decoding <---
 						// ---> succesive approximation first stage <---
@@ -3589,7 +4231,7 @@ INTERN bool decode_jpeg( void )
 							sta = jpg_decode_dc_prg_fs( huffr,
 								&(htrees[ 0 ][ cmpnfo[cmp].huffdc ]),
 								block );
-								
+
 							// fix dc for diff coding
 							colldata[cmp][0][dpos] = block[0] + lastdc[ cmp ];
 							lastdc[ cmp ] = colldata[cmp][0][dpos];
@@ -3629,7 +4271,7 @@ INTERN bool decode_jpeg( void )
 								eob = jpg_decode_ac_prg_fs( huffr,
 									&(htrees[ 1 ][ cmpnfo[cmp].huffac ]),
 									block, &eobrun, cs_from, cs_to );
-								
+
 								if ( eobrun > 0 ) {
 									// check for non optimal coding
 									if ( ( eob == cs_from )  && ( peobrun > 0 ) &&
@@ -3641,16 +4283,16 @@ INTERN bool decode_jpeg( void )
 									peobrun = eobrun;
 									eobrun--;
 								} else peobrun = 0;
-							
+
 								// copy to colldata (UB-safe cast for negative coeffs)
 								for ( bpos = cs_from; bpos < eob; bpos++ )
 									colldata[ cmp ][ bpos ][ dpos ] = (short)( (unsigned int)block[ bpos ] << cs_sal );
 							} else eobrun--;
-							
+
 							// check for errors
 							if ( eob < 0 ) sta = -1;
 							else sta = jpg_skip_eobrun( &cmp, &dpos, &rstw, &eobrun );
-							
+
 							// proceed only if no error encountered
 							if ( sta == 0 )
 								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
@@ -3663,13 +4305,13 @@ INTERN bool decode_jpeg( void )
 							// copy from colldata
 							for ( bpos = cs_from; bpos <= cs_to; bpos++ )
 								block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
-							
+
 							if ( eobrun == 0 ) {
 								// decode block (long routine)
 								eob = jpg_decode_ac_prg_sa( huffr,
 									&(htrees[ 1 ][ cmpnfo[cmp].huffac ]),
 									block, &eobrun, cs_from, cs_to );
-								
+
 								if ( eobrun > 0 ) {
 									// check for non optimal coding
 									if ( ( eob == cs_from ) && ( peobrun > 0 ) &&
@@ -3678,7 +4320,7 @@ INTERN bool decode_jpeg( void )
 											"reconstruction of inefficient coding not supported" );
 										errorlevel = 1;
 									}
-									
+
 									// store eobrun
 									peobrun = eobrun;
 									eobrun--;
@@ -3690,31 +4332,34 @@ INTERN bool decode_jpeg( void )
 									block, &eobrun, cs_from, cs_to );
 								eobrun--;
 							}
-								
+
 							// copy back to colldata (UB-safe cast for negative coeffs)
 							for ( bpos = cs_from; bpos <= cs_to; bpos++ )
 								colldata[ cmp ][ bpos ][ dpos ] += (short)( (unsigned int)block[ bpos ] << cs_sal );
-							
+
 							// proceed only if no error encountered
 							if ( eob < 0 ) sta = -1;
 							else sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
 						}
 					}
 				}
-			}			
-			
-			// unpad huffman reader / check padbit
-			if ( padbit != -1 ) {
-				if ( padbit != huffr->unpad( padbit ) ) {
-					snprintf( errormessage, MSG_SIZE, "inconsistent use of padbits" );
-					padbit = 1;
-					errorlevel = 1;
+			}
+
+			// unpad huffman reader / check padbit (Huffman only — arithmetic
+			// has no byte-padding concept, restart resync uses rstp[] instead)
+			if ( !jpg_arith_coded ) {
+				if ( padbit != -1 ) {
+					if ( padbit != huffr->unpad( padbit ) ) {
+						snprintf( errormessage, MSG_SIZE, "inconsistent use of padbits" );
+						padbit = 1;
+						errorlevel = 1;
+					}
+				}
+				else {
+					padbit = huffr->unpad( padbit );
 				}
 			}
-			else {
-				padbit = huffr->unpad( padbit );
-			}
-			
+
 			// evaluate status
 			if ( sta == -1 ) { // status -1 means error
 				// Entropy decode errors (errorlevel=2) indicate a malformed Huffman
@@ -3725,7 +4370,7 @@ INTERN bool decode_jpeg( void )
 				snprintf( errormessage, MSG_SIZE,
 					"decode error in scan%i / mcu%i -- malformed JPEG bitstream (verify with: djpeg -strict)",
 					scnc, ( cs_cmpc > 1 ) ? mcu : dpos );
-				delete huffr;
+				if ( huffr ) delete huffr;
 				errorlevel = 2;
 				return false;
 			}
@@ -3737,22 +4382,23 @@ INTERN bool decode_jpeg( void )
 		}
 	}
 	
-	// check for missing data
-	if ( huffr->peof() > 0 ) {
-		snprintf( errormessage, MSG_SIZE, "coded image data truncated / too short" );
-		errorlevel = 1;
+	if ( !jpg_arith_coded ) {
+		// check for missing data
+		if ( huffr->peof() > 0 ) {
+			snprintf( errormessage, MSG_SIZE, "coded image data truncated / too short" );
+			errorlevel = 1;
+		}
+
+		// check for surplus data
+		if ( !huffr->eof()) {
+			snprintf( errormessage, MSG_SIZE, "surplus data found after coded image data" );
+			errorlevel = 1;
+		}
+
+		// clean up
+		delete( huffr );
 	}
-	
-	// check for surplus data
-	if ( !huffr->eof()) {
-		snprintf( errormessage, MSG_SIZE, "surplus data found after coded image data" );
-		errorlevel = 1;
-	}
-	
-	// clean up
-	delete( huffr );
-	
-	
+
 	return true;
 }
 
@@ -3763,34 +4409,39 @@ INTERN bool decode_jpeg( void )
 
 INTERN bool recode_jpeg( void )
 {
-	BitWriter*  huffw; // bitwise writer for image data
-	
+	BitWriter*  huffw = NULL; // bitwise writer for image data (Huffman only)
+	QMEncoder qme; // arithmetic encoder state (arithmetic only) — one instance,
+	               // `out` accumulates the WHOLE file's scans + restart markers
+	int restart_num = 0; // cycles 0-7 within the current scan (arithmetic only)
+
 	unsigned char  type = 0x00; // type of current marker segment
 	unsigned int   len  = 0; // length of current marker segment
 	unsigned int   hpos = 0; // current position in header
-		
+
 	int lastdc[ 4 ]; // last dc for each component0
 	short block[ 64 ]; // store block for coeffs
 	int eobrun; // run of eobs
 	int rstw; // restart wait counter
-	
+
 	int cmp, bpos, dpos;
 	int mcu, sub, csc;
 	int eob, sta;
 	int tmp;
-	
-	
-	// open huffman coded image data in BitWriter
+
+
+	// open huffman coded image data in BitWriter (Huffman only — arithmetic
+	// uses QMEncoder directly, see jpg_arith_coded)
 	// Opt: pre-reserve hufs bytes to avoid reallocs — output will be close to input size.
-	huffw = new BitWriter(padbit, hufs);
-	
+	if ( jpg_arith_coded ) qme.init();
+	else huffw = new BitWriter(padbit, hufs);
+
 	// init storage writer
 	std::vector<std::uint8_t> storw; // Storage for correction bits.
-	
+
 	// preset count of scans and restarts
 	scnc = 0;
 	rstc = 0;
-	
+
 	// JPEG decompression loop
 	while ( true )
 	{
@@ -3808,13 +4459,13 @@ INTERN bool recode_jpeg( void )
 			else {
 				hpos += len;
 				continue;
-			}			
+			}
 		}
-		
+
 		// get out if last marker segment type was not SOS
 		if ( type != 0xDA ) break;
-		
-		
+
+
 		// (re)alloc scan positons array
 		if ( scnp == NULL ) scnp = ( unsigned int* ) calloc( scnc + 2, sizeof( int ) );
 		else scnp = ( unsigned int* ) frealloc( scnp, ( scnc + 2 ) * sizeof( int ) );
@@ -3823,9 +4474,11 @@ INTERN bool recode_jpeg( void )
 			errorlevel = 2;
 			return false;
 		}
-		
-		// (re)alloc restart marker positons array if needed
-		if ( rsti > 0 ) {
+
+		// (re)alloc restart marker positons array if needed (Huffman only —
+		// arithmetic's markers are embedded directly in qme.out, no separate
+		// position table needed; merge_jpeg copies it verbatim)
+		if ( !jpg_arith_coded && rsti > 0 ) {
 			tmp = rstc + ( ( cs_cmpc > 1 ) ?
 				( mcuc / rsti ) : ( cmpnfo[ cs_cmp[ 0 ] ].bc / rsti ) );
 			if ( rstp == NULL ) rstp = ( unsigned int* ) calloc( tmp + 1, sizeof( int ) );
@@ -3835,18 +4488,19 @@ INTERN bool recode_jpeg( void )
 				errorlevel = 2;
 				return false;
 			}
-		}		
-		
+		}
+
 		// intial variables set for encoding
 		cmp  = cs_cmp[ 0 ];
 		csc  = 0;
 		mcu  = 0;
 		sub  = 0;
 		dpos = 0;
-		
+		restart_num = 0;
+
 		// store scan position
-		scnp[ scnc ] = huffw->num_bytes_written();
-		
+		scnp[ scnc ] = jpg_arith_coded ? (unsigned int) qme.out.size() : huffw->num_bytes_written();
+
 		// JPEG imagedata encoding routines
 		while ( true )
 		{
@@ -3855,26 +4509,121 @@ INTERN bool recode_jpeg( void )
 			lastdc[ 1 ] = 0;
 			lastdc[ 2 ] = 0;
 			lastdc[ 3 ] = 0;
-			
+
 			// (re)set status
 			sta = 0;
-			
+
 			// (re)set eobrun
 			eobrun = 0;
+
+			// arithmetic: fresh registers + conditioning-table resets every
+			// restart interval, mirroring decode_jpeg exactly (T.81 start_pass /
+			// process_restart both do this — see arith_reset_stats)
+			if ( jpg_arith_coded ) {
+				qme.reinit_regs();
+				bool reset_dc = ( jpegtype == 1 ) || ( cs_to == 0 && cs_sah == 0 );
+				bool reset_ac = ( jpegtype == 1 ) || ( cs_to > 0 );
+				arith_reset_stats( reset_dc, reset_ac );
+			}
 			
 			// (re)set rst wait counter
 			rstw = rsti;
-			
+
 			// encoding for interleaved data
+			if ( jpg_arith_coded ) {
+				// ---> native arithmetic encoding (v4.0f, SOF C9/CA) <---
+				if ( cs_cmpc > 1 ) {
+					// interleaved: only DC scans can be interleaved (T.81 Annex G)
+					if ( jpegtype == 1 ) {
+						while ( sta == 0 ) {
+							for ( bpos = 0; bpos < 64; bpos++ ) block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
+							arith_encode_block_seq( qme, cmp, &lastdc[ cmp ], block );
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+					else if ( cs_sah == 0 ) {
+						while ( sta == 0 ) {
+							arith_encode_DC_first( qme, cmp, &lastdc[ cmp ], colldata[ cmp ][ 0 ][ dpos ], cs_sal );
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+					else {
+						while ( sta == 0 ) {
+							arith_encode_DC_refine( qme, colldata[ cmp ][ 0 ][ dpos ], cs_sal );
+							sta = jpg_next_mcupos( &mcu, &cmp, &csc, &sub, &dpos, &rstw );
+						}
+					}
+				}
+				else {
+					if ( jpegtype == 1 ) {
+						while ( sta == 0 ) {
+							for ( bpos = 0; bpos < 64; bpos++ ) block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
+							arith_encode_block_seq( qme, cmp, &lastdc[ cmp ], block );
+							sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+						}
+					}
+					else if ( cs_to == 0 ) {
+						if ( cs_sah == 0 ) {
+							while ( sta == 0 ) {
+								arith_encode_DC_first( qme, cmp, &lastdc[ cmp ], colldata[ cmp ][ 0 ][ dpos ], cs_sal );
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+						else {
+							while ( sta == 0 ) {
+								arith_encode_DC_refine( qme, colldata[ cmp ][ 0 ][ dpos ], cs_sal );
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+					}
+					else {
+						if ( cs_sah == 0 ) {
+							while ( sta == 0 ) {
+								for ( bpos = cs_from; bpos <= cs_to; bpos++ ) block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
+								arith_encode_AC_first( qme, cmp, block, cs_from, cs_to, cs_sal );
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+						else {
+							while ( sta == 0 ) {
+								for ( bpos = cs_from; bpos <= cs_to; bpos++ ) block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
+								arith_encode_AC_refine( qme, cmp, block, cs_from, cs_to, cs_sah, cs_sal );
+								sta = jpg_next_mcuposn( &cmp, &dpos, &rstw );
+							}
+						}
+					}
+				}
+
+				// pad — no-op for arithmetic (see below); handle restart/status directly
+				if ( sta == -1 ) {
+					snprintf( errormessage, MSG_SIZE, "encode error in scan%i / mcu%i",
+						scnc, ( cs_cmpc > 1 ) ? mcu : dpos );
+					errorlevel = 2;
+					return false;
+				}
+				else if ( sta == 2 ) {
+					qme.finish();
+					scnc++;
+					break;
+				}
+				else if ( sta == 1 ) {
+					qme.finish();
+					qme.out.push_back( 0xFF );
+					qme.out.push_back( (unsigned char)( 0xD0 + ( restart_num & 7 ) ) );
+					restart_num++;
+				}
+				continue; // skip the Huffman pad/status block below entirely
+			}
+
 			if ( cs_cmpc > 1 )
-			{				
+			{
 				if ( jpegtype == 1 ) {
 					// ---> sequential interleaved encoding <---
 					while ( sta == 0 ) {
 						// copy from colldata
 						for ( bpos = 0; bpos < 64; bpos++ )
 							block[ bpos ] = colldata[ cmp ][ bpos ][ dpos ];
-						
+
 						// diff coding for dc
 						block[ 0 ] -= lastdc[ cmp ];
 						lastdc[ cmp ] = colldata[ cmp ][ 0 ][ dpos ];
@@ -4063,13 +4812,27 @@ INTERN bool recode_jpeg( void )
 	}
 	
 	// get data into huffdata
-	huffdata = huffw->get_c_bytes();
-	hufs = huffw->num_bytes_written();	
-	delete huffw;
-	
+	if ( jpg_arith_coded ) {
+		// arithmetic scans already have real FF-Dn restart markers embedded in
+		// qme.out (see arith_encode_block_seq et al.) — no rstp[] needed, unlike
+		// Huffman's marker-stripped convention; merge_jpeg copies this verbatim.
+		hufs = (int) qme.out.size();
+		huffdata = (unsigned char*) malloc( hufs > 0 ? hufs : 1 );
+		if ( huffdata == NULL ) {
+			snprintf( errormessage, MSG_SIZE, MEM_ERRMSG );
+			errorlevel = 2;
+			return false;
+		}
+		memcpy( huffdata, qme.out.data(), hufs );
+	} else {
+		huffdata = huffw->get_c_bytes();
+		hufs = huffw->num_bytes_written();
+		delete huffw;
+	}
+
 	// store last scan & restart positions
 	scnp[ scnc ] = hufs;
-	if ( rstp != NULL )
+	if ( !jpg_arith_coded && rstp != NULL )
 		rstp[ rstc ] = hufs;
 	
 	
@@ -4916,18 +5679,29 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 		
 		case 0xC0: // SOF0 segment
 			// coding process: baseline DCT
-			
+
 		case 0xC1: // SOF1 segment
 			// coding process: extended sequential DCT
-		
+
 		case 0xC2: // SOF2 segment
 			// coding process: progressive DCT
-			
+
+		case 0xC9: // SOF9 segment
+			// coding process: arithmetic extended sequential DCT (v4.0f)
+
+		case 0xCA: // SOF10 segment
+			// coding process: arithmetic progressive DCT (v4.0f)
+
 			// set JPEG coding type
-			if ( type == 0xC2 )
+			if ( ( type == 0xC2 ) || ( type == 0xCA ) )
 				jpegtype = 2;
 			else
 				jpegtype = 1;
+			// v4.0f: re-derived here (not just in read_jpeg) so unpack_pjg's call
+			// to jpg_setup_imginfo (over the reconstructed hdrdata) also recovers
+			// it — hdrdata already round-trips the original SOF byte losslessly,
+			// so no separate .pjg sub-marker is needed for this.
+			if ( ( type == 0xC9 ) || ( type == 0xCA ) ) jpg_arith_coded = true;
 				
 			// need precision(1) + height(2) + width(2) + cmpc(1) = 6 bytes
 			if ( hpos + 6 > len ) {
@@ -5009,24 +5783,33 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 			errorlevel = 2;
 			return false;
 			
-		case 0xC9: // SOF9 segment
-			// coding process: arithmetic extended sequential DCT
-			snprintf( errormessage, MSG_SIZE, "sof9 marker found, image is coded arithm. sequential" );
-			errorlevel = 2;
-			return false;
-			
-		case 0xCA: // SOF10 segment
-			// coding process: arithmetic extended sequential DCT
-			snprintf( errormessage, MSG_SIZE, "sof10 marker found, image is coded arithm. progressive" );
-			errorlevel = 2;
-			return false;
-			
 		case 0xCB: // SOF11 segment
-			// coding process: arithmetic extended sequential DCT
+			// coding process: arithmetic lossless — out of scope, same as SOF3
 			snprintf( errormessage, MSG_SIZE, "sof11 marker found, image is coded arithm. lossless" );
 			errorlevel = 2;
 			return false;
-			
+
+		case 0xCC: { // DAC segment (arithmetic conditioning tables)
+			unsigned int p = hpos;
+			while ( p + 2 <= len ) {
+				int tc = LBITS( segment[ p ], 4 );
+				int tb = RBITS( segment[ p ], 4 );
+				if ( tb >= 4 ) {
+					snprintf( errormessage, MSG_SIZE, "invalid arithmetic table id %i in dac segment", tb );
+					errorlevel = 2;
+					return false;
+				}
+				if ( tc == 0 ) { // DC table: Cs = (U<<4)|L
+					arith_dc_L[ tb ] = RBITS( segment[ p + 1 ], 4 );
+					arith_dc_U[ tb ] = LBITS( segment[ p + 1 ], 4 );
+				} else { // AC table: Cs = Kx directly
+					arith_ac_K[ tb ] = segment[ p + 1 ];
+				}
+				p += 2;
+			}
+			return true;
+		}
+
 		case 0xCD: // SOF13 segment
 			// coding process: arithmetic differntial sequential DCT
 			snprintf( errormessage, MSG_SIZE, "sof13 marker found, image is coded arithm. diff. sequential" );

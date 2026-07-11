@@ -7,6 +7,10 @@ on:
 jobs:
   apt-repo:
     name: Publish to GitHub Pages apt repo
+    # Pre-releases (e.g. the v4.1 pre-release line toward 5.0 LTS) must NOT reach
+    # the apt repo — apt users get stable releases only. GitHub fires the
+    # `published` event for prereleases too, so guard explicitly.
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
 
     permissions:
