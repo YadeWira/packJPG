@@ -135,6 +135,8 @@ photos/lena_fast.pjg         (compressed with -sfth)
 | `-p` | proceed on warnings |
 | `-d` | discard meta-info |
 
+Most of these switches — subcommands `a`/`x`/`list`, `-od`/`-r`/`-fs`/`-dry`/`-ver`/`-np`/`-o`/`-module`/`-th<n>`/`-v<n>` — follow a shared CLI convention coordinated with the sibling lossless-recompressor projects [packMP3](https://github.com/YadeWira/packMP3) and [packPNG](https://github.com/YadeWira/packPNG). Release binaries also share the `<name>_<platform>_<arch>[.exe]` naming pattern across all three.
+
 ### `-p` / `-d` / `-ver` — what they trade off
 
 By default packJPG cancels on warnings to guarantee bit-exact round-trip.
