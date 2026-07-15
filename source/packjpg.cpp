@@ -1078,15 +1078,20 @@ INTERN const char*  jpg_ext      = "jpg";
 #endif
 INTERN const char   pjg_magic[] = { 'J', 'S' };
 
-// Optional decode-output cap (decompression-bomb guard). 0 = unlimited
+// Decode-output cap (decompression-bomb guard). 256 MB default
 // (only the built-in 64 MB per-field limit in pjg_decode_generic applies).
 // When > 0, the decoder refuses to reconstruct a JPEG larger than this many
 // bytes — a malformed .pjg can otherwise expand a tiny input into a huge
-// output (e.g. a multi-MB trailing-garbage blob). Declared unconditionally
-// because merge_jpeg / pjg_decode_generic are core functions present in every
+// compression and is present in upstream packJPG too. Set to 0 to disable
+// (only the built-in 64 MB per-field limit in pjg_decode_generic applies).
 // build; only the public setter/getter below are library-only. Process-wide,
 // set during single-threaded init (same contract as the thread-config knobs).
-INTERN unsigned int pjg_max_output_size = 0;
+INTERN unsigned int pjg_max_output_size = 256 * 1024 * 1024;
+// Blowup-ratio bomb guard: output must not exceed input * 500 + 1 MB.
+// Always active â the amplification vector is inherent to lossless
+// compression and is present in upstream packJPG too.
+#define PJG_MAX_BLOWUP_RATIO  500
+#define PJG_BLOWUP_FLOOR_BYTES 1048576
 
 
 /* -----------------------------------------------
@@ -1817,11 +1822,13 @@ EXPORT int pjglib_get_inter_file_threads( void )
 	----------------------------------------------- */
 
 /* Cap the size (in bytes) of a JPEG the decoder will reconstruct from a .pjg.
-   0 = unlimited (default). When set, decoding a .pjg whose output would
+   256 MB default, 0 = unlimited. When set, decoding a .pjg whose output would
    exceed n bytes fails cleanly (returns false, fills msg) instead of
    producing the oversized output — defends hosts that decode untrusted
    .pjg input against a tiny file expanding into a huge JPEG (e.g. a
-   multi-MB trailing-garbage blob). Process-wide; set during init. */
+   multi-MB trailing-garbage blob). This amplification vector is inherent
+   to lossless compression and is present in upstream packJPG too.
+   Process-wide; set during init. */
 EXPORT void pjglib_set_max_output_size( unsigned int n )
 {
 	pjg_max_output_size = n;
@@ -2044,7 +2051,7 @@ INTERN void initialize_options( int argc, char** argv )
 		if ( strcmp(argv[pi], "-") == 0 ) { subcmd_given = true; break; }
 	}
 
-	// First argument can be a subcommand: c, x, mix, list
+	// First argument can be a subcommand: a, x, mix, list, stats
 	if ( argc > 1 ) {
 		const char* subcmd = argv[1];
 		if ( strcmp(subcmd, "a") == 0 ) {
@@ -2140,11 +2147,14 @@ INTERN void initialize_options( int argc, char** argv )
 		else if ( sscanf( (*argv), "-maxout%i", &tmp_val ) == 1 ) {
 			// v4.0e decompression-bomb guard: cap reconstructed-JPEG size, in MB.
 			// Sets the same pjg_max_output_size global as the library's
-			// pjglib_set_max_output_size(); decoding a .pjg whose output would
-			// exceed it then fails cleanly. Default off (0 = unlimited).
-			if ( tmp_val < 1 )    tmp_val = 1;
-			if ( tmp_val > 4095 ) tmp_val = 4095; // keep MB*1MB within unsigned int
-			pjg_max_output_size = (unsigned int) tmp_val * 1024u * 1024u;
+			// pjglib_set_max_output_size(). Default is 256 MB; 0 = unlimited.
+			// Decoding a .pjg whose output would exceed the cap fails cleanly.
+			if ( tmp_val < 0 )    tmp_val = 0;
+			if ( tmp_val > 4095 ) tmp_val = 4095;
+			if ( tmp_val == 0 )
+				pjg_max_output_size = 0;
+			else
+				pjg_max_output_size = (unsigned int) tmp_val * 1024u * 1024u;
 		}
 		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
 			// Feature #37: -od<path> sets output directory
@@ -2785,7 +2795,7 @@ INTERN void show_help( void )
 	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
 	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
 	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
-	fprintf( msgout, " [-maxout<MB>] cap reconstructed-JPEG size when decoding (bomb guard)\n" );
+	fprintf( msgout, " [-maxout<MB>] cap reconstructed-JPEG size when decoding (def: 256 MB, 0=unlimited)\n" );
 	fprintf( msgout, " [-p]     proceed on warnings\n" );
 	fprintf( msgout, " [-d]     discard meta-info\n" );
 	#if defined(DEV_BUILD)
@@ -3691,19 +3701,28 @@ INTERN bool merge_jpeg( void )
 	unsigned int   tmp; // temporary storage variable
 
 
-	// Decompression-bomb guard: if the caller set a max output size, refuse to
-	// reconstruct a JPEG larger than that. The estimate (SOI+headers+huffman+
-	// garbage+EOI) is a lower bound — 0xFF stuffing and restart markers only
-	// add to it — so anything caught here genuinely exceeds the cap. Aborts
-	// before the write loop, so no oversized output is produced.
-	if ( pjg_max_output_size > 0 ) {
-		int64_t est = (int64_t) 4 + hdrs + hufs + grbs; // 4 = SOI + EOI
-		if ( est > (int64_t) pjg_max_output_size ) {
+	// Decompression-bomb guard (pre-decode): two-tier defense.
+	// Tier 1: absolute cap. Tier 2: blowup ratio. The estimate is a
+	// lower bound â 0xFF stuffing and restart markers only add to it.
+	{
+		int64_t est = (int64_t) 4 + hdrs + hufs + grbs;
+		if ( pjg_max_output_size > 0 && est > (int64_t) pjg_max_output_size ) {
 			snprintf( errormessage, MSG_SIZE,
 				"output size limit exceeded: reconstructed JPEG would be at least "
 				"%lld bytes (limit %u)", (long long) est, pjg_max_output_size );
-			errorlevel = 2;
-			return false;
+			errorlevel = 2; return false;
+		}
+		int64_t ratio_limit;
+		if ( pjgfilesize > (int64_t)( INT64_MAX / PJG_MAX_BLOWUP_RATIO ) )
+			ratio_limit = INT64_MAX;
+		else
+			ratio_limit = (int64_t) pjgfilesize * PJG_MAX_BLOWUP_RATIO
+			           + PJG_BLOWUP_FLOOR_BYTES;
+		if ( est > ratio_limit ) {
+			snprintf( errormessage, MSG_SIZE,
+				"blowup ratio exceeded: est %lld B from %lld B input (limit %lld)",
+				(long long) est, (long long) pjgfilesize, (long long) ratio_limit );
+			errorlevel = 2; return false;
 		}
 	}
 
@@ -3791,18 +3810,29 @@ INTERN bool merge_jpeg( void )
 	// pjgfilesize is already set by read_pjg() (input PJG size) and must not be overwritten.
 	jpgfilesize = str_out->num_bytes_written();
 
-	// Decompression-bomb guard, exact check on the bytes actually produced.
-	// The entry estimate above is a lower bound (it omits 0xFF stuffing and
-	// restart markers), so this catches outputs that slip just past it. The
-	// per-field cap in pjg_decode_generic already bounds peak memory; this
-	// enforces the precise output-size contract before we hand the buffer back.
-	if ( pjg_max_output_size > 0 &&
-	     (uint64_t) jpgfilesize > (uint64_t) pjg_max_output_size ) {
-		snprintf( errormessage, MSG_SIZE,
-			"output size limit exceeded: reconstructed JPEG is %lld bytes (limit %u)",
-			(long long) jpgfilesize, pjg_max_output_size );
-		errorlevel = 2;
-		return false;
+	// Decompression-bomb guard (exact): two-tier defense.
+	// Tier 1: absolute cap. Tier 2: blowup ratio. The entry estimate
+	// is a lower bound; this catches outputs that slip past it.
+	{
+		if ( pjg_max_output_size > 0 &&
+		     (uint64_t) jpgfilesize > (uint64_t) pjg_max_output_size ) {
+			snprintf( errormessage, MSG_SIZE,
+				"output size limit exceeded: reconstructed JPEG is %lld bytes (limit %u)",
+				(long long) jpgfilesize, pjg_max_output_size );
+			errorlevel = 2; return false;
+		}
+		int64_t ratio_limit;
+		if ( pjgfilesize > (int64_t)( INT64_MAX / PJG_MAX_BLOWUP_RATIO ) )
+			ratio_limit = INT64_MAX;
+		else
+			ratio_limit = (int64_t) pjgfilesize * PJG_MAX_BLOWUP_RATIO
+			           + PJG_BLOWUP_FLOOR_BYTES;
+		if ( (uint64_t) jpgfilesize > (uint64_t) ratio_limit ) {
+			snprintf( errormessage, MSG_SIZE,
+				"blowup ratio exceeded: %lld B from %lld B input (limit %lld)",
+				(long long) jpgfilesize, (long long) pjgfilesize, (long long) ratio_limit );
+			errorlevel = 2; return false;
+		}
 	}
 
 
@@ -5640,7 +5670,14 @@ INTERN bool unpack_pjg( void )
 		}
 		std::vector<std::vector<uint8_t>> cbufs( cmpc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
-			cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
+			{
+				unsigned int csiz_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
+				if ( csizes[cmp] > csiz_cap ) {
+					snprintf( errormessage, MSG_SIZE, "sfth component stream too large: %u bytes (limit %u)", csizes[cmp], csiz_cap );
+					errorlevel = 2; return false;
+				}
+			}
+						cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
 		}
 		// v4.0 sfth pipeline: cross-comp reads colldata[0][bpos] during Cb/Cr
 		// decode. AC bands partition is disjoint (ac_high=7×7 inner, ac_low=
@@ -8488,6 +8525,7 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	MemoryWriter* bwrt;
 	model_s* model;
 	int c;
+	size_t exhaust_bytes = 0; // track post-exhaustion output
 	
 	
 	// start byte writer
@@ -8504,6 +8542,21 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	model = INIT_MODEL_S( 256 + 1, 256, 1 );
 	while ( true ) {
 		c = decode_ari( dec, model );
+		// After input exhaustion, tolerate a few more bytes for zero-padding
+		// (legitimate streams need it), but reject sustained output (bombs).
+		if ( dec->is_exhausted() && c != 256 ) {
+			size_t post_exhaust_bytes = bwrt->num_bytes_written() - exhaust_bytes;
+			if ( post_exhaust_bytes > 65536 ) {
+				delete( model );
+				delete bwrt;
+				snprintf( errormessage, MSG_SIZE,
+					"truncated or malicious stream: input exhausted, decoded %zu bytes past end", post_exhaust_bytes );
+				errorlevel = 2;
+				return false;
+			}
+		} else if ( dec->is_exhausted() && exhaust_bytes == 0 ) {
+			exhaust_bytes = bwrt->num_bytes_written(); // first exhaustion point
+		}
 		if ( c == 256 ) break;
 		if ( bwrt->num_bytes_written() >= (size_t) decode_limit ) {
 			delete( model );

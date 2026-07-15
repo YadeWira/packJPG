@@ -213,6 +213,7 @@ class ArithmeticDecoder {
 	~ArithmeticDecoder() {}
 	unsigned int decode_count( symbol* s );
 	void decode( symbol* s );
+	bool is_exhausted() const { return exhausted_; }
 	
 	private:
 	unsigned char read_bit();
@@ -221,6 +222,7 @@ class ArithmeticDecoder {
     Reader& reader_;
 	unsigned char bbyte = 0;
 	unsigned char cbit = 0;
+	bool exhausted_ = false;
 	
 	// arithmetic coding variables
 	unsigned int ccode = 0;

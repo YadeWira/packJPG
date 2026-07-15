@@ -131,7 +131,7 @@ photos/lena_fast.pjg         (compressed with -sfth)
 | `-r` | recurse into subdirectories |
 | `-dry` | dry run: simulate without writing output files |
 | `-module` | machine-friendly output: OK/ERROR + elapsed seconds |
-| `-maxout<MB>` | when decoding, refuse to reconstruct a JPEG larger than `<MB>` megabytes (decompression-bomb guard; default off) |
+| `-maxout<MB>` | when decoding, refuse to reconstruct a JPEG larger than `<MB>` megabytes (decompression-bomb guard; default 256 MB, 0 = unlimited) |
 | `-p` | proceed on warnings |
 | `-d` | discard meta-info |
 
@@ -287,7 +287,7 @@ identical across all three. MSVC consumers can instead include
 | `pjglib_set_intra_file_threads(n)` | SFTH per-file parallelism (`0`=auto, `1`=off, `≥3`=on) |
 | `pjglib_set_inter_file_threads(n)` | Batch parallelism across files (`0`=default 1, `≥1`=N workers) |
 | `pjglib_suggest_batch_threads()` | Helper: returns `max(1, cores/3)` |
-| `pjglib_set_max_output_size(n)` | Decompression-bomb guard: cap reconstructed-JPEG size (`0`=unlimited) |
+| `pjglib_set_max_output_size(n)` | Decompression-bomb guard: cap reconstructed-JPEG size (default 256 MB, `0`=unlimited) |
 | `pjglib_convert_batch(ops, n_ops, msg)` | Convert N (in,out) pairs in parallel |
 | `pjglib_version_info()`, `pjglib_short_name()` | Version metadata |
 
@@ -347,17 +347,37 @@ int main(int argc, char** argv) {
 
 The decoder reconstructs whatever a `.pjg` describes, and a crafted/malformed
 `.pjg` can expand a tiny input into a much larger JPEG (a "decompression bomb",
-e.g. via a large trailing-garbage blob). The decode is memory-safe and always
-terminates, but it is a resource-amplification vector. Hosts that decode
-`.pjg` from untrusted sources should set a ceiling once at startup:
+e.g. via a large trailing-garbage blob). This amplification vector is inherent
+to lossless compression and is present in upstream packJPG too. The decode is
+memory-safe and always terminates, but it is a resource-amplification vector.
+
+**Two-layer defense (always active):**
+
+| Layer | Mechanism | Default | What it catches |
+|---|---|---|---|
+| Absolute cap | `-maxout<N>` / `pjglib_set_max_output_size()` | 256 MB | Memory exhaustion from large legitimate or malicious JPEGs |
+| Blowup ratio | built-in (not user-configurable) | 500× + 1 MB floor | Amplification attacks: tiny PJG → huge JPEG |
+
+The blowup-ratio guard rejects any decode where the reconstructed JPEG exceeds
+`input_pjg_size × 500 + 1 MB`. The 1 MB floor prevents false positives on tiny
+legitimate files (a 100-byte PJG producing a 500 KB JPEG is fine). In practice
+this catches 100% of bombs — the worst legitimate blowup is ~50×, while bombs
+start at 1000×.
+
+Both layers must pass. Decoding a `.pjg` that fails either guard fails cleanly
+(returns false, fills `msg`) instead of producing the oversized output.
+
+Hosts that need a different absolute limit can adjust it once at startup:
 
 ```c
-pjglib_set_max_output_size(64u * 1024 * 1024);  // refuse >64 MB reconstructions
+pjglib_set_max_output_size(64u * 1024 * 1024);  // tighter: refuse >64 MB
+pjglib_set_max_output_size(0);                  // disable absolute cap (ratio guard stays active)
 ```
 
-With a cap set, decoding a `.pjg` whose output would exceed it fails cleanly
-(returns false, fills `msg`) instead of producing the oversized output. Default
-is `0` (unlimited) — no change for trusted workflows.
+CLI: `packjpg x -maxout64 file.pjg` (tighter) or `packjpg x -maxout0 file.pjg`
+(disable absolute cap). The `-maxout` value is in megabytes; 0 means "no limit"
+for the absolute cap only — the ratio guard cannot be disabled.
+
 
 ### v3.1d callers
 

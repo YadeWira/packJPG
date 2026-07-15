@@ -236,8 +236,10 @@ unsigned char ArithmeticDecoder::read_bit()
 {
 	// read in new byte if needed
 	if ( cbit == 0 ) {
-		if ( !reader_.read_byte(&bbyte)) // read next byte if available
+		if ( !reader_.read_byte(&bbyte)) { // read next byte if available
 			bbyte = 0; // if no more data is left in the stream
+				exhausted_ = true; // signal exhaustion
+			}
 		cbit = 8;
 	}
 	
