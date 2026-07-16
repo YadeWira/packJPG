@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm
+        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm libcharls-dev libjxl-dev
 
       - name: Build all targets
         run: bash build_all.sh
@@ -37,6 +37,13 @@ jobs:
             ./dist/packJPG_linux_x64 x -np -o -od/tmp "/tmp/${stem}.pjg"
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $f" || { echo "FAIL: $f"; exit 1; }
           done
+
+      - name: Smoke test (JPEG-LS, Linux binary)
+        run: |
+          f=test-files/grayscale.jls
+          ./dist/packJPG_linux_x64 a -np -o -od/tmp "$f"
+          ./dist/packJPG_linux_x64 x -np -o -od/tmp /tmp/grayscale.pjg
+          cmp "$f" /tmp/grayscale.jls && echo "PASS: $f (JPEG-LS)" || { echo "FAIL: $f (JPEG-LS)"; exit 1; }
 
       - name: Lib batch API smoke (v4.0e)
         run: |
