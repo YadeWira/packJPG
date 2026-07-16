@@ -7,7 +7,7 @@ reconstruction. Typical file size reduction: ~20%.
 Optionally (Linux x64 builds only — see [JPEG-LS support](#jpeg-ls-support)),
 it also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller.
 
-**Supported platforms:** Linux x64, Windows 10/11 x64, Windows XP / Vista / 7 / 8 (x86 + x64, community-maintained).
+**Supported platforms:** Linux x64, Windows 10/11 x64, Windows 7 / 8 (x86 + x64, x64 community-maintained).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
 
@@ -43,8 +43,8 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 | File | Target |
 |---|---|
 | `packJPG_win_x64.exe` | Windows 10/11 64-bit (also runs on Win7/8 x64 without ANSI colors) |
-| `packJPG_win_legacy_x64.exe` | Windows XP x64 / Vista / 7 / 8 — 64-bit (community-maintained) |
-| `packJPG_win_legacy_x86.exe` | Windows XP / Vista / 7 / 8 — 32-bit (community-maintained) |
+| `packJPG_win_legacy_x64.exe` | Windows 7 / 8 — 64-bit (community-maintained) |
+| `packJPG_win_legacy_x86.exe` | Windows 7 / 8 — 32-bit |
 
 
 ## Usage
@@ -190,8 +190,8 @@ This fills all N cores: `N/3` files in parallel, each using 3 threads.
 On an 18-core box: `-th6 -sfth` = 6 × 3 = 18 threads.
 
 `-th<n>` is a `source/`-build feature (Linux + Windows 10/11 x64). The
-`sourcelegacy/` XP build ignores it and runs single-threaded — see the
-[Legacy Windows build](#legacy-windows-build-community-maintained)
+`sourcelegacy/` build ignores it and runs single-threaded — see the
+[Legacy Windows build](#legacy-windows-build)
 section for why.
 
 **Ctrl+C behavior.** On `source/` builds, Ctrl+C in MT batch stops
@@ -405,7 +405,7 @@ format**:
 | Source tree | Target platforms | Format produced |
 |---|---|---|
 | `source/` | Linux, macOS, Windows 10/11 | byte `0x28` + sub-marker `0x02` |
-| `sourcelegacy/` | Windows XP / Vista / 7 / 8 (x86 + x64) | byte `0x28` + sub-marker `0x02` (full v4.0b parity) |
+| `sourcelegacy/` | Windows 7 / 8 (x86 + x64) | byte `0x28` + sub-marker `0x02` (full v4.0b parity) |
 
 Both trees produce the same `.pjg` format — files are interchangeable
 between them. v4.0c and v4.0d did not change the on-disk format —
@@ -441,18 +441,23 @@ are no longer decoded — keep an old binary on hand if you have v3.1d
 archives.
 
 
-## Legacy Windows build (community-maintained)
+## Legacy Windows build
 
 The `sourcelegacy/` directory contains the legacy-Windows port for both
 x86 and x64. Compiled with C++14 and Win32 API in place of
 `std::filesystem` (`xp_compat.h` provides the shim layer), using
 `CreateThread` instead of C++17 `<thread>`/`<future>`.
 
+**x86 (Windows 7 / 8) is officially supported** — tested by the
+maintainer on real hardware/VM before each release. **x64 (Windows
+7 / 8) is community-maintained** (see below): validated only
+via Wine cross-runs against `source/`.
+
 **Threading on the legacy build:** single-file parallel compression
 (`-sfth`, Y/Cb/Cr on three Win32 threads) is supported — each thread
 works on a separate component, so there is no shared mutable state.
 Multi-file batch threading (`-thN`) is **not** active on the legacy
-build: the XP toolchain has no working `thread_local`, so the codec's
+build: the legacy toolchain has no working `thread_local`, so the codec's
 per-file state is a single process-global, and running several files
 concurrently would race on it. The legacy CLI therefore ignores `-thN`
 and processes files single-threaded. (The `source/` build, which has
@@ -465,12 +470,12 @@ JPEG-LS** (see [JPEG-LS support](#jpeg-ls-support)): no MinGW builds of
 CharLS/libjxl exist, so a `.pjg` produced from a `.jls` file on Linux
 cannot be decoded by this build.
 
-> **Warning:** The upstream maintainer does not own legacy-Windows test
-> hardware — `sourcelegacy/` is validated only via Wine cross-runs
-> against `source/`. Real XP / Vista / 7 / 8 hardware testing is not in
-> the upstream loop, so platform-specific regressions may slip through.
-> Bug reports with self-contained reproduction steps on real hardware
-> are welcome.
+> **Warning (x64 only):** the upstream maintainer does not own Windows
+> 7/8 x64 test hardware — `packJPG_win_legacy_x64.exe` is validated
+> only via Wine cross-runs against `source/`. Real hardware testing is
+> not in the upstream loop, so platform-specific regressions may slip
+> through. Bug reports with self-contained reproduction steps on real
+> hardware are welcome. (x86 doesn't have this caveat — see above.)
 
 To build from `sourcelegacy/`:
 
@@ -483,16 +488,19 @@ make dev    # -> bin/packJPG_win_legacy_x86_dev.exe (with developer functions)
 
 Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package).
 
-### Maintainers wanted
+### Maintainer wanted (x64)
 
-The legacy build needs a maintainer who runs Windows XP, Vista, 7, or 8
-(real hardware or VM) and is willing to:
+The x64 legacy build (Windows 7 / 8) needs a maintainer who
+runs one of those on real hardware or VM and is willing to:
 
 * **Test releases** before they go out — at minimum, a self round-trip
   on a few JPEGs and a sanity check that the binary launches without
   missing-DLL errors.
-* **Triage legacy-only bugs** filed against `sourcelegacy/`.
+* **Triage x64-legacy bugs** filed against `sourcelegacy/`.
 * **Port new features** from `source/` when they land.
+
+x86 (Windows 7 / 8) doesn't need this — it's officially tested by the
+upstream maintainer already.
 
 If interested, open an issue titled `legacy-maintainer: <handle>` with
 the Windows version(s) you can cover and the scope you're up for.
@@ -508,8 +516,8 @@ fast-track review on legacy-only PRs.
 |---|---|
 | Linux x64 | `g++` ≥ 13 or `clang++` ≥ 18 (C++17) |
 | Windows x64 | `x86_64-w64-mingw32-g++` |
-| Windows legacy x86 (XP/Vista/7/8) | `i686-w64-mingw32-g++` (C++14 mode) |
-| Windows legacy x64 (XP/Vista/7/8) | `x86_64-w64-mingw32-g++` (C++14 mode) |
+| Windows legacy x86 (7/8) | `i686-w64-mingw32-g++` (C++14 mode) |
+| Windows legacy x64 (7/8) | `x86_64-w64-mingw32-g++` (C++14 mode) |
 
 On Debian/Ubuntu:
 ```
@@ -572,7 +580,7 @@ error rather than silently producing lossy or non-reproducible output.
 **Platform availability:** JPEG-LS is **Linux x64 only**. It requires
 `libcharls-dev` + `libjxl-dev`, and there are no MinGW builds of those
 libraries — so Windows (`packJPG.dll`, `packJPG_win_x64.exe`) and the
-`sourcelegacy/` XP/Vista/7/8 build never get it, regardless of what the
+`sourcelegacy/` build never get it, regardless of what the
 `source/` codebase supports. A `.pjg` produced from JPEG-LS on Linux
 still can't be decoded on those builds.
 
