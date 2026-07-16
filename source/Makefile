@@ -15,7 +15,7 @@ CXXFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math \
            -fomit-frame-pointer -flto -std=c++17
 
 LDFLAGS  = -flto
-LIBS     = -lpthread
+LIBS     = -lpthread -lcharls -ljxl -ljxl_threads
 
 CSRC     = $(wildcard *.c)
 CXXSRC   = $(wildcard *.cpp)

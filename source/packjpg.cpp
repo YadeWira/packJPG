@@ -466,6 +466,7 @@ static std::filesystem::path safe_path( const char* s )
 #include "aricoder.h"
 #include "pjpgtbl.h"
 #include "dct8x8.h"
+#include "jpegls.h"
 
 #if defined BUILD_DLL // define BUILD_LIB from the compiler options if you want to compile a DLL!
 	#define BUILD_LIB
@@ -782,6 +783,16 @@ THREAD_LOCAL bool           jpg_arith_coded  = false;  // true if SOF was C9/CA/
 THREAD_LOCAL int            arith_dc_L[4]    = {0,0,0,0};
 THREAD_LOCAL int            arith_dc_U[4]    = {1,1,1,1};
 THREAD_LOCAL int            arith_ac_K[4]    = {5,5,5,5};
+// JPEG-LS (SOF F7) lossless recompression — stores decoded pixels
+// and container template; JXL compression handled in pack_pjg/unpack_pjg.
+THREAD_LOCAL bool           jpg_jpegls         = false;
+THREAD_LOCAL JlsFileInfo    jpegls_info;
+THREAD_LOCAL uint8_t*       jpegls_template    = nullptr;
+THREAD_LOCAL size_t         jpegls_template_sz = 0;
+THREAD_LOCAL uint8_t*       jpegls_pixels      = nullptr;
+THREAD_LOCAL size_t         jpegls_pixels_sz   = 0;
+
+
 THREAD_LOCAL int            rstc             =    0  ;   // count of restart markers
 THREAD_LOCAL int            scnc             =    0  ;   // count of scans
 THREAD_LOCAL int            rsti             =    0  ;   // restart interval
@@ -2832,11 +2843,13 @@ INTERN void process_file( void )
 		switch ( action ) {
 			case A_COMPRESS:
 				execute( read_jpeg );
-				execute( decode_jpeg );
-				execute( check_value_range );
-				execute( adapt_icos );
-				execute( predict_dc );
-				execute( calc_zdst_lists );
+				if ( !jpg_jpegls ) {
+					execute( decode_jpeg );
+					execute( check_value_range );
+					execute( adapt_icos );
+					execute( predict_dc );
+					execute( calc_zdst_lists );
+				}
 				execute( pack_pjg );
 				#if !defined(BUILD_LIB)	
 				if ( verify_lv > 0 ) { // verifcation
@@ -2846,9 +2859,11 @@ INTERN void process_file( void )
 					execute( reset_buffers );
 					execute( swap_streams );
 					execute( unpack_pjg );
-					execute( adapt_icos );
-					execute( unpredict_dc );
-					execute( recode_jpeg );
+					if ( !jpg_jpegls ) {
+						execute( adapt_icos );
+						execute( unpredict_dc );
+						execute( recode_jpeg );
+					}
 					execute( merge_jpeg );
 					execute( compare_output );
 					// restore original sizes for correct ratio reporting
@@ -2935,9 +2950,11 @@ INTERN void process_file( void )
 		{
 			case A_COMPRESS:
 				execute( unpack_pjg );
-				execute( adapt_icos );
-				execute( unpredict_dc );
-				execute( recode_jpeg );
+				if ( !jpg_jpegls ) {
+					execute( adapt_icos );
+					execute( unpredict_dc );
+					execute( recode_jpeg );
+				}
 				execute( merge_jpeg );
 				#if !defined(BUILD_LIB)
 				if ( verify_lv > 0 ) { // verify
@@ -3311,6 +3328,11 @@ INTERN bool reset_buffers( void )
 	scnp      = NULL;
 	rstc      = 0;
 	jpg_arith_coded = false;
+	jpg_jpegls = false;
+	if ( jpegls_template != nullptr ) { free( jpegls_template ); jpegls_template = nullptr; }
+	if ( jpegls_pixels   != nullptr ) { free( jpegls_pixels   ); jpegls_pixels   = nullptr; }
+	jpegls_template_sz = 0;
+	jpegls_pixels_sz   = 0;
 	for ( i = 0; i < 4; i++ ) { arith_dc_L[i] = 0; arith_dc_U[i] = 1; arith_ac_K[i] = 5; }
 	
 	// free image arrays
@@ -3404,6 +3426,49 @@ INTERN bool read_jpeg( void )
 	MemoryWriter* hdrw;
 	MemoryWriter* grbgw;	
 	
+
+	// --- JPEG-LS detection: check SOF F7 marker ---
+	{
+		auto jls_data = str_in->get_data();
+		if ( jpegls_detect( jls_data.data(), jls_data.size() ) ) {
+			char jls_err[256];
+			uint8_t* tpl = nullptr; size_t tpl_sz = 0;
+			uint8_t* pix = nullptr; size_t pix_sz = 0;
+			JlsFileInfo info;
+			if ( !jpegls_parse( jls_data.data(), jls_data.size(),
+			                    info, tpl, tpl_sz, pix, pix_sz,
+			                    jls_err, sizeof(jls_err) ) ) {
+				snprintf( errormessage, MSG_SIZE, "%s", jls_err );
+				errorlevel = 2; return false;
+			}
+			// Serialize recipe into hdrdata
+			uint8_t* recipe = nullptr; size_t recipe_sz = 0;
+			if ( !jpegls_serialize_recipe( info, tpl, tpl_sz,
+			                               recipe, recipe_sz,
+			                               jls_err, sizeof(jls_err) ) ) {
+				snprintf( errormessage, MSG_SIZE, "%s", jls_err );
+				jpegls_free_buffers( tpl, pix );
+				errorlevel = 2; return false;
+			}
+			// Populate global state
+			jpg_jpegls          = true;
+			jpegls_info         = info;
+			jpegls_template     = tpl;
+			jpegls_template_sz  = tpl_sz;
+			jpegls_pixels       = pix;
+			jpegls_pixels_sz    = pix_sz;
+			// Replace hdrdata with serialized recipe
+			if ( hdrdata ) free( hdrdata );
+			hdrdata = recipe;
+			hdrs    = (int) recipe_sz;
+			// hufs stays 0 — JXL blob written in pack_pjg()
+			if ( huffdata ) { free( huffdata ); huffdata = nullptr; }
+			hufs = 0;
+			grbs  = 0;
+			jpgfilesize = (int64_t) jls_data.size();
+			return true;
+		}
+	}
 	
 	// preset count of scans
 	scnc = 0;
@@ -3685,6 +3750,24 @@ INTERN bool read_jpeg( void )
 	
 INTERN bool merge_jpeg( void )
 {
+
+	// --- JPEG-LS path: splice template + regenerated entropy ---
+	if ( jpg_jpegls ) {
+		char jls_err[256];
+		uint8_t* recon = nullptr; size_t recon_sz = 0;
+		if ( !jpegls_reconstruct( jpegls_info,
+		                          jpegls_template, jpegls_template_sz,
+		                          jpegls_pixels, jpegls_pixels_sz,
+		                          recon, recon_sz,
+		                          jls_err, sizeof(jls_err) ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS reconstruct: %s", jls_err );
+			errorlevel = 2; return false;
+		}
+		str_out->write( recon, recon_sz );
+		jpegls_free_output( recon );
+		return true;
+	}
+
 	unsigned char SOI[ 2 ] = { 0xFF, 0xD8 }; // SOI segment
 	unsigned char EOI[ 2 ] = { 0xFF, 0xD9 }; // EOI segment
 	unsigned char mrk = 0xFF; // marker start
@@ -5349,6 +5432,49 @@ INTERN bool calc_zdst_lists( void )
 	
 INTERN bool pack_pjg( void )
 {
+
+	// --- JPEG-LS path: serialize JXL pixels directly ---
+	if ( jpg_jpegls ) {
+		char jls_err[256];
+		uint8_t* jxl = nullptr; size_t jxl_sz = 0;
+		if ( !jpegls_compress_jxl( jpegls_pixels, jpegls_pixels_sz,
+		                            jpegls_info.width, jpegls_info.height,
+		                            jpegls_info.bits_per_sample,
+		                            jpegls_info.component_count,
+		                            jxl, jxl_sz, jls_err, sizeof(jls_err) ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS JXL encode: %s", jls_err );
+			errorlevel = 2; return false;
+		}
+		// Store JXL blob in huffdata
+		if ( huffdata ) free( huffdata );
+		huffdata = jxl;
+		hufs     = (int) jxl_sz;
+
+		// Write PJG file: magic + markers + version + recipe + JXL
+			// Write PJG file: magic ("JS") + markers + version + recipe + JXL
+			str_out->write( reinterpret_cast<const unsigned char*>(pjg_magic), 2 );
+		str_out->write_byte( 0x02 ); // v4.0b features
+		str_out->write_byte( 0x03 ); // JPEG-LS marker
+		str_out->write_byte( format_version_current );
+
+		// Recipe (hdrdata)
+		uint32_t rsz = (uint32_t) hdrs;
+		uint8_t rle[4] = { (uint8_t)rsz, (uint8_t)(rsz>>8),
+		                   (uint8_t)(rsz>>16), (uint8_t)(rsz>>24) };
+		str_out->write( rle, 4 );
+		str_out->write( hdrdata, hdrs );
+
+		// JXL blob (huffdata)
+		uint32_t jsz = (uint32_t) hufs;
+		uint8_t jle[4] = { (uint8_t)jsz, (uint8_t)(jsz>>8),
+		                   (uint8_t)(jsz>>16), (uint8_t)(jsz>>24) };
+		str_out->write( jle, 4 );
+		str_out->write( huffdata, hufs );
+
+			pjgfilesize = (int64_t) str_out->num_bytes_written();
+		return true;
+	}
+
 	unsigned char hcode;
 	int cmp;
 	#if defined(DEV_INFOS)
@@ -5377,6 +5503,7 @@ INTERN bool pack_pjg( void )
 		// 0x01 = sfth parallel format, 0x02 = v4.0b features (diagonal DC ctx).
 		str_out->write_byte( 0x01 );
 		str_out->write_byte( 0x02 );
+		if ( jpg_jpegls ) str_out->write_byte( 0x03 );
 		hcode = format_version_current;
 		str_out->write_byte( hcode );
 
@@ -5613,6 +5740,13 @@ INTERN bool unpack_pjg( void )
 			parallel_fmt = true;
 			decoded_from_sfth = true;
 		}
+		else if ( hcode == 0x03 ) {
+			// JPEG-LS sub-marker: file stores pixels as JXL + container template.
+			// The recipe is in hdrdata, the JXL blob is in huffdata.
+			// Set a flag for the decode path below; actual JXL decode happens
+			// in the huffdata section (which this flag selects).
+			jpg_jpegls = true;
+		}
 		else if ( hcode == 0x02 ) {
 			// v4.0b sub-marker: file uses diagonal DC ctx (and any future v4.0b
 			// features). Files without this marker (v4.0a or older) decode with
@@ -5641,6 +5775,74 @@ INTERN bool unpack_pjg( void )
 	}
 	
 	
+
+	// --- JPEG-LS path: read raw recipe + JXL blob ---
+	if ( jpg_jpegls ) {
+		// Read recipe size + data -> hdrdata
+		uint8_t rle[4];
+		if ( !str_in->read( rle, 4 ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: truncated recipe size" );
+			errorlevel = 2; return false;
+		}
+		uint32_t rsz = rle[0] | ((uint32_t)rle[1]<<8) | ((uint32_t)rle[2]<<16) | ((uint32_t)rle[3]<<24);
+		if ( hdrdata ) free( hdrdata );
+		hdrdata = (unsigned char*) malloc( rsz );
+		if ( !hdrdata ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: OOM recipe (%u B)", rsz );
+			errorlevel = 2; return false;
+		}
+		if ( !str_in->read( hdrdata, rsz ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: truncated recipe data" );
+			errorlevel = 2; return false;
+		}
+		hdrs = (int) rsz;
+
+		// Read JXL size + data -> huffdata
+		uint8_t jle[4];
+		if ( !str_in->read( jle, 4 ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: truncated JXL size" );
+			errorlevel = 2; return false;
+		}
+		uint32_t jsz = jle[0] | ((uint32_t)jle[1]<<8) | ((uint32_t)jle[2]<<16) | ((uint32_t)jle[3]<<24);
+		if ( huffdata ) free( huffdata );
+		huffdata = (unsigned char*) malloc( jsz );
+		if ( !huffdata ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: OOM JXL (%u B)", jsz );
+			errorlevel = 2; return false;
+		}
+		if ( !str_in->read( huffdata, jsz ) ) {
+			snprintf( errormessage, MSG_SIZE, "JPEG-LS: truncated JXL data" );
+			errorlevel = 2; return false;
+		}
+		hufs = (int) jsz;
+
+		// JXL decode -> pixels
+		{
+			char jls_err[256];
+			uint32_t w, h; uint8_t bps, comps;
+			if ( !jpegls_decompress_jxl( huffdata, hufs,
+			                             jpegls_pixels, jpegls_pixels_sz,
+			                             w, h, bps, comps,
+			                             jls_err, sizeof(jls_err) ) ) {
+				snprintf( errormessage, MSG_SIZE, "JPEG-LS JXL decode: %s", jls_err );
+				errorlevel = 2; return false;
+			}
+		}
+
+		// Deserialize recipe -> template
+		{
+			char jls_err[256];
+			if ( !jpegls_deserialize_recipe( hdrdata, hdrs, jpegls_info,
+			                                 jpegls_template, jpegls_template_sz,
+			                                 jls_err, sizeof(jls_err) ) ) {
+				snprintf( errormessage, MSG_SIZE, "JPEG-LS recipe: %s", jls_err );
+				errorlevel = 2; return false;
+			}
+		}
+
+		return true;
+	}
+
 	if ( parallel_fmt ) {
 		// -sfth format: bounded header blob + parallel component streams
 		uint8_t hle[4] = {}; str_in->read( hle, 4 );
