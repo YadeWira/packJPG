@@ -2015,11 +2015,11 @@ EXPORT bool pjglib_convert_batch( pjglib_batch_io* ops, int n_ops, char* msg )
 /* -----------------------------------------------
 	recursively collect files from a directory
 	----------------------------------------------- */
-static bool is_jpg_or_pjg( const std::filesystem::path& p )
+static bool is_supported_input( const std::filesystem::path& p )
 {
 	auto ext = p.extension().string();
 	for ( auto& ch : ext ) ch = (char)tolower( (unsigned char)ch );
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg";
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg" || ext == ".jls";
 }
 
 static void collect_files_recursive( const std::filesystem::path& dir,
@@ -2029,7 +2029,7 @@ static void collect_files_recursive( const std::filesystem::path& dir,
 	std::string src_root = dir.string();
 	for ( auto& entry : std::filesystem::recursive_directory_iterator( dir,
 	        std::filesystem::directory_options::skip_permission_denied, ec ) ) {
-		if ( entry.is_regular_file( ec ) && is_jpg_or_pjg( entry.path() ) )
+		if ( entry.is_regular_file( ec ) && is_supported_input( entry.path() ) )
 			out.push_back( { entry.path().string(), src_root } );
 	}
 }
