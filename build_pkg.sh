@@ -75,14 +75,28 @@ else
     fail "No C++ compiler found (clang++ or g++ required)"
 fi
 
+# JPEG-LS support (requires libcharls-dev + libjxl-dev): auto-detect via a
+# throwaway link probe, same pattern as source/Makefile and build_all.sh.
+JLS_SRC=""
+JLS_DEFINE=""
+JLS_LIBS=""
+if echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
+    JLS_SRC="jpegls.cpp"
+    JLS_DEFINE="-DHAVE_JPEGLS"
+    JLS_LIBS="-lcharls -ljxl -ljxl_threads"
+    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found)"
+else
+    skip "JPEG-LS support disabled (libcharls-dev/libjxl-dev not found)"
+fi
+
 # ─── Build binary ────────────────────────────────────────────────────────────
 
 echo ""
 echo "==> Compiling packJPG (Linux x64)"
 
-(cd "$SRC_DIR" && $CXX $CFLAGS \
+(cd "$SRC_DIR" && $CXX $CFLAGS $JLS_DEFINE \
     -o "../$BINARY" \
-    $SRC \
+    $SRC $JLS_SRC $JLS_LIBS \
     && strip --strip-unneeded "../$BINARY")
 ok "$BINARY"
 
