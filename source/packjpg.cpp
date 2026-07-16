@@ -786,6 +786,10 @@ THREAD_LOCAL int            arith_ac_K[4]    = {5,5,5,5};
 // JPEG-LS (SOF F7) lossless recompression — stores decoded pixels
 // and container template; JXL compression handled in pack_pjg/unpack_pjg.
 THREAD_LOCAL bool           jpg_jpegls         = false;
+// Survives reset_buffers() (unlike jpg_jpegls above) so process_ui() can still
+// tell, after process_file() returns, whether a .pjg decompressed to JPEG-LS —
+// used to rename the default .jpg output to .jls. Cleared per-file in process_ui().
+THREAD_LOCAL bool           jpg_was_jpegls_out = false;
 THREAD_LOCAL JlsFileInfo    jpegls_info;
 THREAD_LOCAL uint8_t*       jpegls_template    = nullptr;
 THREAD_LOCAL size_t         jpegls_template_sz = 0;
@@ -2441,6 +2445,7 @@ INTERN void process_ui( void )
 	// check inside the module branch skip process_file() and still count as error.
 	errorfunction = NULL;
 	errorlevel    = 0;
+	jpg_was_jpegls_out = false;
 	jpgfilesize   = 0;
 	pjgfilesize   = 0;
 
@@ -2581,7 +2586,23 @@ INTERN void process_ui( void )
 			if ( file_exists( jpgfilename ) ) remove( jpgfilename );
 		}
 	}
-	
+
+	// A reconstructed JPEG-LS file was written under the default .jpg name
+	// (filetype==F_PJG always assumes classic JPEG output); rename it to .jls
+	// so the file on disk matches its actual content.
+	if ( !pipe_on && !dry_run && filetype == F_PJG && action == A_COMPRESS &&
+	     jpg_was_jpegls_out && errorlevel < err_tol ) {
+		char* jls_name = (char*) calloc( strlen( jpgfilename ) + 1, sizeof( char ) );
+		strcpy( jls_name, jpgfilename );
+		set_extension( jls_name, "jls" );
+		if ( rename( jpgfilename, jls_name ) == 0 ) {
+			free( jpgfilename );
+			jpgfilename = jls_name;
+		} else {
+			free( jls_name );
+		}
+	}
+
 	end = clock();	
 	
 	// speed and compression ratio calculation
@@ -5746,6 +5767,7 @@ INTERN bool unpack_pjg( void )
 			// Set a flag for the decode path below; actual JXL decode happens
 			// in the huffdata section (which this flag selects).
 			jpg_jpegls = true;
+			jpg_was_jpegls_out = true;
 		}
 		else if ( hcode == 0x02 ) {
 			// v4.0b sub-marker: file uses diagonal DC ctx (and any future v4.0b
