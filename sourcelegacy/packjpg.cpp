@@ -1140,24 +1140,24 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "f";
+INTERN const unsigned char appversion = 50;
+INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "07/11/2026";
-// v4.0f LTS parity port: native arithmetic-coded JPEG support (SOF C9/CA),
-// ported from source/packjpg.cpp. Purely additive — format_version_current
-// stays 40, Huffman .pjg output stays byte-compatible with v4.0e. VM-tested
-// on real Windows 7 (this build's target) and Windows 10 via SSH/Wine; also
-// fuzzed clean (ASan+UBSan, 851s/4904 execs after fixing 2 bugs shared with
-// source/packjpg.cpp).
+[[maybe_unused]] INTERN const char*  versiondate  = "07/16/2026";
+// v5.0 — new LTS baseline (see source/packjpg.cpp for the full rationale:
+// dropping Windows XP + the bomb-guard + JPEG-LS landing together). This
+// build now targets Windows 7+ x86 / Windows 7+ x64 only (was XP+). JPEG-LS
+// is Linux-only (no MinGW builds of libcharls/libjxl), so this tree is
+// unaffected by that part of the release. format_version_current stays 40 —
+// version/support-policy bump, not a format break.
 
-// Decode-output cap (decompression-bomb guard). 256 MB default â a malformed
+// Decode-output cap (decompression-bomb guard). 256 MB default — a malformed
 // .pjg can otherwise expand a tiny input into a huge output (e.g. a low-entropy
 // trailing-garbage blob). This amplification vector is inherent to lossless
 // compression and is present in upstream packJPG too. Set to 0 to disable
 // (only the built-in 64 MB per-field limit in pjg_decode_generic applies).
-// Plain INTERN (no thread_local needed: the XP build's -th batch is
+// Plain INTERN (no thread_local needed: the legacy build's -th batch is
 // disabled, so decoding is single-threaded).
 INTERN unsigned int pjg_max_output_size = 256 * 1024 * 1024;
 

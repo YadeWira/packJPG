@@ -408,30 +408,43 @@ format**:
 | `sourcelegacy/` | Windows 7 / 8 (x86 + x64) | byte `0x28` + sub-marker `0x02` (full v4.0b parity) |
 
 Both trees produce the same `.pjg` format — files are interchangeable
-between them. v4.0c and v4.0d did not change the on-disk format —
-their `.pjg` output is byte-exact with v4.0b's.
+between them. v4.0c through v5.0 did not change the on-disk format —
+their `.pjg` output is byte-exact/interchangeable with v4.0b's (v5.0
+was verified bidirectionally against v4.0f: each decodes the other's
+output byte-exact for non-JPEG-LS content).
 
 **Version numbering:**
 
-* **N.0x releases** (`4.0`, `4.0a`, `4.0b`, `4.0c`, `4.0d`, …) are
-  LTS-style. Binary filename `packJPG`. The v4.0 line is the current
-  LTS; v4.0d is its latest update and the last with feature work.
-  Future v4.0e/v4.0f/… releases of this same LTS line are bug-fix only.
-* **N.Mx releases** (`4.1`, `4.1a`, `4.2`, …) are feature-bearing.
-  Binary filename `packJPG-N.Mx`. Format breaks land here. There is
-  no v4.1 in the current roadmap.
+* **N.0x releases** (`4.0`, `4.0a`, … `4.0f`) are LTS-style, bug-fix
+  and additive-only (no format break). Binary filename `packJPG`.
+* **N.Mx releases** (`4.1`, `4.1a`, `4.2`, …) are feature-bearing
+  within the same major line. Binary filename `packJPG-N.Mx`. Format
+  breaks land here, if any.
+* **A major bump** (`4.0.x` → `5.0`) happens when several things
+  converge into one release rather than trickling in as `N.Mx`/`N.0x`
+  bumps: v5.0 dropped a previously-supported platform baseline
+  (Windows XP) *and* shipped a security hardening pass *and* added a
+  genuinely new capability (JPEG-LS) at the same time. Still **not**
+  a format break by itself — see the compatibility matrix below. A
+  major bump is a support-policy/scope signal, not a promise about the
+  wire format; check the matrix, not the version number, for decode
+  compatibility.
 
 v4.0b was a one-time exception — it carried the diagonal-DC change
 originally tagged as the unreleased v4.1, rebranded so the v4.1 slot
-stays available for a real feature drop.
+stayed available for a real feature drop. That feature drop ended up
+being folded into v5.0 instead of shipping as v4.1, once the platform
+and security changes above made a major bump the more honest signal.
 
 **Compatibility matrix:**
 
-| File version | Decoded by v4.0d | Decoded by v4.0b/c | Decoded by v4.0/v4.0a | Decoded by v3.1d |
-|---|---|---|---|---|
-| v4.0d | ✅ | ✅ (byte-exact) | ❌ (clean error) | ❌ |
-| v4.0b/v4.0c | ✅ | ✅ | ❌ (clean error) | ❌ |
-| v4.0/v4.0a | ✅ (transparent) | ✅ (transparent) | ✅ | ❌ |
+| File version | Decoded by v5.0 | Decoded by v4.0e/f | Decoded by v4.0b/c/d | Decoded by v4.0/v4.0a | Decoded by v3.1d |
+|---|---|---|---|---|---|
+| v5.0 (non-JPEG-LS) | ✅ | ✅ (byte-exact) | ✅ (byte-exact) | ❌ (clean error) | ❌ |
+| v5.0 (JPEG-LS) | ✅ | ❌ (clean error) | ❌ (clean error) | ❌ (clean error) | ❌ |
+| v4.0e/v4.0f | ✅ (byte-exact) | ✅ | ✅ | ❌ (clean error) | ❌ |
+| v4.0b/c/d | ✅ | ✅ | ✅ | ❌ (clean error) | ❌ |
+| v4.0/v4.0a | ✅ (transparent) | ✅ (transparent) | ✅ (transparent) | ✅ | ❌ |
 | v3.1d | ❌ | ❌ | ❌ | ✅ |
 
 v4.0d decoders read v4.0/v4.0a/v4.0b/v4.0c files transparently. v4.0c

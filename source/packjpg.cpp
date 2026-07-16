@@ -1058,31 +1058,29 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	global variables: info about program
 	----------------------------------------------- */
 
-INTERN const unsigned char appversion = 40;
-INTERN const char*  subversion   = "f";
+INTERN const unsigned char appversion = 50;
+INTERN const char*  subversion   = "";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "07/11/2026";
-// v4.0f LTS (stays in the 4.0.x line: purely additive, so it keeps the "f"
-// letter after v4.0e rather than bumping to a new major/minor). New feature:
-// NATIVE arithmetic-coded JPEG support (SOF C9/CA — sequential + progressive;
-// lossless CB stays out of scope, same as packJPG never having supported
-// lossless Huffman C3). Byte-exact verified: standalone codec tests, full
-// packjpg.cpp integration, real Windows 10/7 VMs, widened corpus (CMYK,
-// 4:4:4/4:2:2, 20 diverse real photos), and a clean ASan+UBSan fuzzing pass
-// (2 bugs found+fixed first, then 851s/4904 execs with zero findings).
-// Huffman .pjg output stays byte-compatible with v4.0e; no new sub-marker was
-// needed for arithmetic — hdrdata already round-trips the original SOF byte
-// losslessly, so jpg_arith_coded is re-derived from it during unpack.
-// On-disk PJG format version. The only accepted version byte is 40 (0x28),
-// which covers the ENTIRE v4.0 line: v4.0/v4.0a (no 0x02 sub-marker → diagonal
-// DC stays off, decoded transparently) and v4.0b+ (0x02 marker → diagonal DC
-// on); v4.0f adds no new sub-marker (arithmetic support is re-derived from
-// hdrdata). Sub-markers gate features, not format acceptance — see the decode header
-// loop in unpack_pjg(). What is NOT decoded: legacy v3.1d (version byte 31) —
-// a different version byte yields a clean "incompatible file" error. Keep an
-// old binary for v3.x/v2.x archives, or re-encode. See README "Format and
-// versioning policy" for rationale.
+[[maybe_unused]] INTERN const char*  versiondate  = "07/16/2026";
+// v5.0 — new LTS baseline, major bump (not a v4.0g bugfix nor a v4.1
+// feature-only release) because three things land together: dropping
+// Windows XP support entirely (sourcelegacy now targets Win7+ x86 /
+// Win7+ x64), the 3-layer decompression-bomb defense (see
+// PJG_MAX_BLOWUP_RATIO / pjg_max_output_size), and JPEG-LS (.jls)
+// recompression support — a genuine new on-disk-adjacent capability,
+// gated behind HAVE_JPEGLS (Linux x64 only; no MinGW builds of
+// libcharls/libjxl exist for Windows/legacy).
+// On-disk PJG format version is UNCHANGED at 40 (0x28) — this is a
+// version/support-policy bump, not a format break. v5.0 files remain
+// byte-compatible with every v4.0b+ decoder for non-JPEG-LS content;
+// JPEG-LS content uses the existing 0x03 sub-marker mechanism (same
+// gate-not-break pattern as the 0x02 diagonal-DC marker introduced in
+// v4.0b). Sub-markers gate features, not format acceptance — see the
+// decode header loop in unpack_pjg(). What is NOT decoded: legacy
+// v3.1d (version byte 31) — a different version byte yields a clean
+// "incompatible file" error. Keep an old binary for v3.x/v2.x
+// archives, or re-encode. See README "Format and versioning policy".
 INTERN const unsigned char format_version_current = 40;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)

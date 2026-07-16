@@ -1,5 +1,147 @@
 # packJPG Changelog
 
+## v5.0 (2026-07-16) — new LTS baseline: bomb-guard, JPEG-LS, drops Windows XP
+
+> Major version bump, not a v4.0g bugfix nor a v4.1 feature-only release —
+> three things land together: Windows XP support is dropped entirely, a
+> 3-layer decompression-bomb defense ships, and JPEG-LS (`.jls`)
+> recompression is added as a genuine new capability. **The on-disk `.pjg`
+> format is unchanged** (`format_version_current` stays `40` / `0x28`) —
+> this is a version/support-policy bump, not a format break. Verified
+> empirically, bidirectionally: v5.0 decodes v4.0f `.pjg` output byte-exact,
+> and v4.0f decodes v5.0 output byte-exact (non-JPEG-LS content) — the
+> whole v4.0.x line remains fully interchangeable with v5.0.
+
+### Platform support changes
+
+- **Windows XP support dropped entirely** (not just frozen at bugfix-only,
+  as the v4.0 entry below had signaled — accelerated to a clean cut).
+- **x86 legacy build (Windows 7/8) is now officially supported** by the
+  upstream maintainer — tested on real hardware/VM before each release,
+  same bar as `source/`. Previously community-maintained like x64.
+- **x64 legacy build minimum moves from Vista to Windows 7** and remains
+  community-maintained (validated via Wine only; a maintainer with real
+  Windows 7/8 x64 hardware is wanted — see README).
+
+### Security / hardening
+
+- **3-layer decompression-bomb defense** for `.pjg` decoding (contributed
+  by the sibling `packJPG-lab` fork, reviewed and independently verified
+  before merge):
+  1. Codec-level exhaustion detection in the range coder (`aricoder.cpp`):
+     `ArithmeticDecoder::is_exhausted()` — a truncated/malicious stream
+     that keeps "generating" symbols past its real end is caught within a
+     64 KB tolerance.
+  2. Always-on blowup-ratio guard in `merge_jpeg()`: reconstructed JPEG
+     must not exceed `input_size × 500 + 1 MB`, checked at both the
+     pre-decode estimate and the exact post-decode size.
+  3. Absolute output-size cap, `pjglib_set_max_output_size()` /
+     `-maxout<MB>` — default 256 MB (was unbounded).
+  Plus a cap on untrusted `csizes[]` length-prefixed allocation in the
+  `-sfth` per-component decode path.
+  Verified against a real fuzzer-found bomb sample (7,738 B → 6.25 MB
+  unpatched, cleanly rejected patched) on `source/` and `sourcelegacy/`
+  (each catches it via a different layer — exhaustion vs. ratio — a
+  live demonstration that the defense-in-depth actually helps), 151/151
+  legitimate-file regression, and a clean ASan+UBSan fuzzing pass.
+- **CharLS decoder/encoder handle leaks in the JPEG-LS path** (found by
+  extending the fuzzer to cover JPEG-LS, which had never been fuzzed
+  before): `JLS_CHECK`'s early return never destroyed the CharLS
+  handle on failure — all 12 call sites leaked. Fixed by adding a
+  `cleanup` argument to the macro.
+- **Unchecked CharLS calls in `jpegls_reconstruct()`** risked a heap
+  buffer overflow: `info.width/height/bits_per_sample` there come from a
+  deserialized recipe — untrusted, attacker-controlled — and a rejected
+  `set_frame_info` would leave the estimated-size variable uninitialized,
+  sizing the destination buffer from garbage before `encode_from_buffer`
+  wrote into it. Now checked the same way as the rest of the JPEG-LS path.
+- **ODR violation in `sourcelegacy/aricoder.h`**: a stale duplicate,
+  missing the bomb-guard's `exhausted_`/`is_exhausted()` fields, that
+  `sourcelegacy/packjpg.cpp`'s quoted `#include` resolved to — while the
+  shared `../source/aricoder.cpp` in the same binary resolved to the
+  current header. Two translation units disagreeing on the same class
+  layout is undefined behavior, not just a warning. Found via LTO
+  type-mismatch warnings once `build_all.sh` built against a synced
+  header. Fixed by deleting the duplicate.
+
+### JPEG-LS support (new, Linux x64 only)
+
+- **Lossless recompression of JPEG-LS (`.jls`, ISO/IEC 14495, SOF F7)
+  files** — same `a`/`x` workflow as classic JPEG, typically ~16%
+  smaller, byte-exact reconstruction. Strategy: decode to pixels,
+  recompress losslessly with JPEG XL (`libjxl`), and on decompression
+  regenerate the *exact* original entropy bytes via CharLS — works
+  because a default-parameter JPEG-LS scan (`ILV=0`, `NEAR=0`) is a pure
+  function of pixels + scan layout, with no encoder-side free choices.
+  Non-default scans (interleaved, near-lossless) are detected and
+  refused with a clear error rather than silently mis-encoding.
+- Requires `libcharls-dev` + `libjxl-dev`; feature-gated behind
+  `-DHAVE_JPEGLS`, auto-detected by `source/Makefile` and `build_all.sh`
+  (override with `JLS=1`/`JLS=0`). Without the flag, `jpegls.cpp` compiles
+  to an empty translation unit and `jpegls.h`'s functions degrade to
+  no-op stubs — zero added dependency for anyone who doesn't need it.
+  Windows (`packJPG.dll`, `packJPG_win_x64.exe`) and `sourcelegacy/`
+  never get it: no MinGW builds of CharLS/libjxl exist.
+- Original commit (`e23bdf9`) shipped without going through the
+  cross-session diff-review protocol used for the bomb-guard; the
+  gaps below were all found and fixed during that review, before this
+  release:
+  - `build_all.sh` and CI never actually got `-DHAVE_JPEGLS` (deps
+    weren't installed / the Linux target didn't request them) — every
+    "official" build would have silently shipped without JPEG-LS.
+  - `linux-x64` Makefile target was missing `$(LIBS)` on its link line
+    entirely (pre-existing, invisible before because `-lpthread` is a
+    no-op on modern glibc — became a hard failure once `-lcharls`/`-ljxl`
+    were sometimes present).
+  - Grayscale (1-channel) JPEG-LS crashed the JXL encode step: the
+    embedded ICC profile is hardcoded 3-channel sRGB, which JXL rejects
+    for any other channel count. Now uses `JxlColorEncodingSetToSRGB`
+    for non-3-channel input.
+  - `-r` directory recursion didn't recognize `.jls` at all (content
+    detection still worked for files named explicitly).
+  - Decompressing a `.pjg` that reconstructs to JPEG-LS wrote the output
+    under the default `.jpg` name; now correctly renamed to `.jls`
+    on success.
+- Verified: grayscale and RGB round-trips byte-exact, 151/151 regular-JPEG
+  regression unaffected, all 7 build target configurations (native,
+  `JLS=0`/`1`, `linux-x64`, `dll`, `win-x64`, `win-x86`, `lib`, `so`) build
+  clean, clean ASan+UBSan fuzzing pass with JPEG-LS-derived seeds included.
+
+### Fixed
+
+- `test-files/*.jpg` were silently excluded from git by a blanket `*.jpg`
+  ignore rule that predates the directory — CI's checkout had no test
+  fixtures. `test-files/grayscale.jls` added as a small JPEG-LS CI fixture
+  (encoded from the existing `grayscale.jpg`, no third-party licensing
+  question).
+- Two comments in `source/packjpg.cpp` / `sourcelegacy/packjpg.cpp` had a
+  double-encoded UTF-8 em-dash (mojibake) — comment-only, no functional
+  change.
+
+### Docs
+
+- README documents JPEG-LS support, the `HAVE_JPEGLS`/`JLS` build flag,
+  and updates every Windows-XP-era platform reference.
+
+---
+
+## v4.0f (2026-07-11) — native arithmetic-coded JPEG support
+
+> New feature: native arithmetic-coded JPEG support (SOF C9/CA —
+> sequential + progressive; lossless arithmetic (C11/CB) stays out of
+> scope, same as packJPG never having supported lossless Huffman (C3)).
+
+- Huffman `.pjg` output stays byte-compatible with v4.0e; no new
+  sub-marker was needed for arithmetic — `hdrdata` already round-trips
+  the original SOF byte losslessly, so `jpg_arith_coded` is re-derived
+  from it during unpack.
+- Verified: standalone codec tests, full `packjpg.cpp` integration, real
+  Windows 10/7 VMs, a widened corpus (CMYK, 4:4:4/4:2:2, 20 diverse real
+  photos), and a clean ASan+UBSan fuzzing pass (2 bugs found and fixed
+  first, then 851s / 4,904 execs with zero further findings).
+
+---
+
 ## v4.0e (2026-06-03) — library MT defaults + batch API
 
 > Adds a multithreading-friendly C API for embedding packJPG in
