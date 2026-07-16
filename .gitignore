@@ -55,6 +55,10 @@
 *.coll?
 *.zdst?
 *.dist
+
+# test-files/ is CI's tracked fixture set (small, deliberate) — the blanket
+# *.jpg rule above would otherwise silently exclude it from checkout.
+!/test-files/*.jpg
 /source/test/lib_concurrent_test
 /source/test/lib_batch_test
 /source/test/lib_filemode_test
