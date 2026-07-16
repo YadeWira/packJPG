@@ -72,7 +72,11 @@ jobs:
       - name: Round-trip (CLI, v4.0 default)
         run: |
           cp rt_in/*.jpg rt_out/
-          ./source/packJPG a -np -o rt_out/*.jpg
+          # `|| true`: packJPG exits non-zero when ANY file in the batch
+          # warned/errored, even if others succeeded — under bash -e (GH
+          # Actions' default) that would abort the script right here,
+          # before the per-file skip-handling below even runs.
+          ./source/packJPG a -np -o rt_out/*.jpg || true
           fail=0
           for f in rt_in/*.jpg; do
             stem=$(basename "${f%.*}")
@@ -84,7 +88,7 @@ jobs:
               echo "SKIP (non-strict input, no -p): $stem"
               continue
             fi
-            ./source/packJPG x -np -o -od/tmp "$pjg"
+            ./source/packJPG x -np -o -od/tmp "$pjg" || true
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $stem" || { echo "FAIL: $stem"; fail=1; }
           done
           exit $fail
