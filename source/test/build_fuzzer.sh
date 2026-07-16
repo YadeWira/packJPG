@@ -29,7 +29,21 @@ SOURCES=(
     "${SRC_DIR}/test/pjg_decode_fuzzer.cpp"
 )
 
+LIBS=(-lpthread)
+
+# JPEG-LS decode path (recipe deserialize + JXL decode + CharLS re-encode)
+# parses untrusted .pjg bytes just like the rest of pjg_decode — fuzz it too
+# when the libraries are available.
+if echo 'int main(){}' | "${CXX}" -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
+    FLAGS+=(-DHAVE_JPEGLS)
+    SOURCES+=("${SRC_DIR}/jpegls.cpp")
+    LIBS+=(-lcharls -ljxl -ljxl_threads)
+    echo "[fuzzer] JPEG-LS path included (libcharls + libjxl found)"
+else
+    echo "[fuzzer] JPEG-LS path NOT included (libcharls-dev/libjxl-dev not found)"
+fi
+
 echo "[fuzzer] building with ${CXX}"
-"${CXX}" "${FLAGS[@]}" "${SOURCES[@]}" -lpthread -o "${OUT_BIN}"
+"${CXX}" "${FLAGS[@]}" "${SOURCES[@]}" "${LIBS[@]}" -o "${OUT_BIN}"
 
 echo "[fuzzer] built ${OUT_BIN}"
