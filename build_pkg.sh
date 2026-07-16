@@ -138,7 +138,18 @@ if $BUILD_DEB; then
 
         INSTALLED_SIZE=$(du -sk "$STAGING/usr" | cut -f1)
 
-        cat > "$STAGING/DEBIAN/control" <<EOF
+        # Runtime deps for JPEG-LS, if the binary was linked against it.
+        # Package names carry the SONAME (libjxl0.11) per Debian convention —
+        # bump these if the build machine's libjxl/libcharls major version
+        # changes upstream.
+        DEB_DEPENDS=""
+        if [ -n "$JLS_LIBS" ]; then
+            DEB_DEPENDS="Depends: libcharls2, libjxl0.11"
+        fi
+
+        # A blank line ends a control-file stanza, so filter it out when
+        # $DEB_DEPENDS is empty (no JPEG-LS) rather than leave a stray line.
+        cat <<EOF | sed '/^$/d' > "$STAGING/DEBIAN/control"
 Package: $PKG
 Version: $VERSION
 Architecture: amd64
@@ -146,6 +157,7 @@ Maintainer: Yade Bravo <https://github.com/YadeWira/packJPG>
 Installed-Size: $INSTALLED_SIZE
 Section: utils
 Priority: optional
+$DEB_DEPENDS
 Description: Lossless JPEG compressor
  packJPG compresses JPEG files to the PJG format for lossless archival,
  achieving better compression than standard JPEG storage. Supports
