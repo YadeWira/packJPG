@@ -82,10 +82,13 @@ jobs:
             stem=$(basename "${f%.*}")
             pjg="rt_out/${stem}.pjg"
             if [ ! -f "$pjg" ]; then
-              # By-design skip: packJPG cancels on non-strict JPEG quirks
-              # (e.g. ImageMagick-synthesized files with inconsistent
-              # padbits) unless -p is passed. Not a regression.
-              echo "SKIP (non-strict input, no -p): $stem"
+              # Was misdiagnosed as an ImageMagick JPEG quirk — it wasn't.
+              # Root cause was padbit declared as bare `char` (signed on
+              # x86_64, unsigned on ARM64), breaking the `padbit == -1`
+              # sentinel check and corrupting the arithmetic coder on
+              # ARM64 (see the padbit fix commit). Fixed now; this branch
+              # is a safety net, not an expected outcome.
+              echo "SKIP (compress warned/errored): $stem"
               continue
             fi
             ./source/packJPG x -np -o -od/tmp "$pjg" || true
