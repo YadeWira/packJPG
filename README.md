@@ -4,6 +4,9 @@ packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical
 reconstruction. Typical file size reduction: ~20%.
 
+Optionally (Linux x64 builds only — see [JPEG-LS support](#jpeg-ls-support)),
+it also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller.
+
 **Supported platforms:** Linux x64, Windows 10/11 x64, Windows XP / Vista / 7 / 8 (x86 + x64, community-maintained).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
@@ -60,10 +63,17 @@ packJPG <subcommand> [switches] [filename(s)]
 | `list` | display info about PJG files without decompressing |
 | `stats` | show JPEG file info (size, dimensions, color mode) without compressing |
 
-packJPG recognizes file types by content, not extension. Files that are
-neither JPEG nor PJG are silently skipped. Wildcards (`*.jpg`, `*.*`)
-and drag-and-drop work; on Windows, wildcard expansion is handled
-internally because `cmd.exe` doesn't expand them.
+packJPG recognizes file types by content, not extension: `.jpg`, `.jls`
+(if built with JPEG-LS support) and `.pjg` are all detected by their
+magic bytes regardless of what they're named. Files that are none of
+these are silently skipped. Wildcards (`*.jpg`, `*.*`) and drag-and-drop
+work; on Windows, wildcard expansion is handled internally because
+`cmd.exe` doesn't expand them.
+
+`-r` (directory recursion) is the one place extension *does* matter —
+it only descends into files named `.jpg`/`.jpeg`/`.pjg`/`.jls`, since
+walking every file in a tree and content-sniffing each one would be
+needlessly slow.
 
 In default mode files are never overwritten — packJPG appends underscores
 to make a fresh name. Pass `-o` to overwrite. Directories are silently
@@ -450,7 +460,10 @@ real `thread_local`, runs `-thN` MT batch with auto-verify.)
 
 The on-disk `.pjg` format matches `source/` exactly (diagonal DC
 neighbor context, `0x02` sub-marker, single accepted format byte), so
-files are fully interchangeable between the two builds.
+files are fully interchangeable between the two builds — **except
+JPEG-LS** (see [JPEG-LS support](#jpeg-ls-support)): no MinGW builds of
+CharLS/libjxl exist, so a `.pjg` produced from a `.jls` file on Linux
+cannot be decoded by this build.
 
 > **Warning:** The upstream maintainer does not own legacy-Windows test
 > hardware — `sourcelegacy/` is validated only via Wine cross-runs
@@ -503,6 +516,11 @@ On Debian/Ubuntu:
 sudo apt install build-essential mingw-w64
 ```
 
+Optional, Linux x64 only — enables [JPEG-LS support](#jpeg-ls-support):
+```
+sudo apt install libcharls-dev libjxl-dev
+```
+
 ### Build scripts
 
 | Script | What it builds |
@@ -532,6 +550,45 @@ dist/packjpg-<ver>-1.x86_64.rpm
 
 `build_pkg.sh` derives `<ver>` from `source/packjpg.cpp` automatically —
 no manual version bump per release.
+
+
+## JPEG-LS support
+
+packJPG can also losslessly recompress **JPEG-LS** (`.jls`, ISO/IEC
+14495, `SOF F7`) files — typically ~16% smaller, same `a`/`x` workflow
+as regular JPEG, byte-for-byte reconstructable.
+
+JPEG-LS's own entropy coding (Golomb-Rice) is already near-optimal, so
+there's little to gain by re-encoding it directly. Instead packJPG
+decodes to raw pixels, recompresses those losslessly with JPEG XL
+(~16% smaller than the original JPEG-LS bytes), and on decompression
+regenerates the *exact* original entropy bytes — this works because a
+default-parameter JPEG-LS scan (`ILV=0`, `NEAR=0`) is fully
+deterministic: the entropy bytes are a pure function of the pixels and
+scan layout, with no encoder-side free choices. Scans that don't meet
+this (interleaved, near-lossless) are detected and refused with a clear
+error rather than silently producing lossy or non-reproducible output.
+
+**Platform availability:** JPEG-LS is **Linux x64 only**. It requires
+`libcharls-dev` + `libjxl-dev`, and there are no MinGW builds of those
+libraries — so Windows (`packJPG.dll`, `packJPG_win_x64.exe`) and the
+`sourcelegacy/` XP/Vista/7/8 build never get it, regardless of what the
+`source/` codebase supports. A `.pjg` produced from JPEG-LS on Linux
+still can't be decoded on those builds.
+
+### Building with JPEG-LS
+
+```bash
+sudo apt install libcharls-dev libjxl-dev   # Debian/Ubuntu
+cd source
+make            # auto-detects the libraries above
+make JLS=1       # force on (fails to build if the libraries are missing)
+make JLS=0       # force off — builds with zero extra dependencies
+```
+
+`build_all.sh` does the same auto-detection for the Linux x64 release
+binary. Without the libraries present, everything still builds — `.jls`
+files are just skipped like any other unsupported file type.
 
 
 ## Known limitations
