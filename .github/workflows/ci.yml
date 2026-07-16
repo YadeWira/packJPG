@@ -29,6 +29,9 @@ jobs:
       - name: Build packages (.tar.gz, .deb, .rpm)
         run: bash build_pkg.sh --tar --deb --rpm
 
+      - name: Build library/SDK archives (linux/win64/win32)
+        run: bash build_lib_pkg.sh
+
       - name: Smoke test (Linux binary)
         run: |
           find test-files -name '*.jpg' ! -name '* *' | head -5 | while read f; do

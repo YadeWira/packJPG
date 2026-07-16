@@ -549,12 +549,14 @@ sudo apt install libcharls-dev libjxl-dev
 | `build_all.sh` | All targets: Linux x64, Windows x64, Windows legacy x86 + x64 |
 | `build_legacy.sh` | Windows legacy x86 + x64 only |
 | `build_pkg.sh` | Linux packages: `.tar.gz`, `.deb`, `.rpm`, `.snap` |
+| `build_lib_pkg.sh` | Library/SDK archives for embedders: Linux x64, win64, win32 |
 
 ```bash
 bash build_all.sh              # all binaries → dist/
 bash build_legacy.sh           # legacy only
 bash build_pkg.sh              # all packages
 bash build_pkg.sh --deb --rpm  # selected formats only
+bash build_lib_pkg.sh          # library/SDK archives
 ```
 
 Outputs in `dist/`:
@@ -567,10 +569,16 @@ dist/packJPG_win_legacy_x64.exe
 dist/packjpg-<ver>-linux-x64.tar.gz
 dist/packjpg_<ver>_amd64.deb
 dist/packjpg-<ver>-1.x86_64.rpm
+dist/packJPG-<ver>-linux-x64-lib.tar.gz
+dist/packJPG-<ver>-win64-lib.zip
+dist/packJPG-<ver>-win32-lib.zip
 ```
 
-`build_pkg.sh` derives `<ver>` from `source/packjpg.cpp` automatically —
-no manual version bump per release.
+`build_pkg.sh`/`build_lib_pkg.sh` derive `<ver>` from `source/packjpg.cpp`
+automatically — no manual version bump per release. The win64/win32
+library archives need mingw's posix-thread-model variant
+(`x86_64-w64-mingw32-g++-posix`/`i686-w64-mingw32-g++-posix`, both part
+of the `mingw-w64` package) — see the DLL thread-model warning above.
 
 
 ## JPEG-LS support
