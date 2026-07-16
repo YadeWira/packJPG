@@ -15,7 +15,17 @@ CXXFLAGS = -I. -O3 -Wall -pedantic -funroll-loops -ffast-math \
            -fomit-frame-pointer -flto -std=c++17
 
 LDFLAGS  = -flto
-LIBS     = -lpthread -lcharls -ljxl -ljxl_threads
+LIBS     = -lpthread
+
+# --- JPEG-LS support (optional, requires libcharls-dev + libjxl-dev) ---------
+# Auto-detect: try compiling a one-liner that includes charls/charls.h.
+# Override with  make JLS=1  (force on)  or  make JLS=0  (force off).
+# Cross-compile targets (dll, win-*) default to JLS=0 — no mingw builds exist.
+JLS ?= $(shell echo 'int main(){}' | $(CXX) $(CXXFLAGS) -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null && echo 1 || echo 0)
+ifeq ($(JLS),1)
+  CXXFLAGS += -DHAVE_JPEGLS
+  LIBS     += -lcharls -ljxl -ljxl_threads
+endif
 
 CSRC     = $(wildcard *.c)
 CXXSRC   = $(wildcard *.cpp)
@@ -110,6 +120,7 @@ lib-tests: lib
 	c++ -I. -O2 -std=c++17 test/lib_maxoutput_test.cpp  packJPGlib.a -lpthread -o test/lib_maxoutput_test
 	@echo "[OK] lib tests: lib_roundtrip_test, lib_concurrent_test, lib_batch_test, lib_filemode_test, lib_maxoutput_test"
 
+dll: JLS=0
 dll: CXXFLAGS += -DBUILD_DLL
 # Self-contained DLL: statically link libgcc / libstdc++ / winpthread so the
 # shipped packJPG.dll has no external runtime DLL dependencies (it can be
@@ -183,13 +194,15 @@ bin:
 	mkdir -p bin
 
 linux-x64: bin
-	$(CXX) $(CXXFLAGS) -DUNIX -o bin/$(TARGET)_linux_x64 $(CXXSRC) -s $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -DUNIX -o bin/$(TARGET)_linux_x64 $(CXXSRC) -s $(LDFLAGS) $(LIBS)
 	@echo "[OK] bin/$(TARGET)_linux_x64"
 
+win-x64: JLS=0
 win-x64: bin
 	$(WIN64) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD)
 	@echo "[OK] bin/$(TARGET)_win_x64.exe"
 
+win-x86: JLS=0
 win-x86: bin
 	$(WIN32) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD)
 	@echo "[OK] bin/$(TARGET)_win_x86.exe"

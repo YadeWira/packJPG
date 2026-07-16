@@ -2,6 +2,7 @@
 //
 // See jpegls.h for high-level design.
 
+#ifdef HAVE_JPEGLS
 #include "jpegls.h"
 
 #include <cstdio>
@@ -624,3 +625,5 @@ bool jpegls_reconstruct(const JlsFileInfo& info,
 void jpegls_free_output(uint8_t* output) {
     free(output);
 }
+
+#endif // HAVE_JPEGLS
