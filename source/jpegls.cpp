@@ -448,8 +448,24 @@ bool jpegls_compress_jxl(const uint8_t* pixels, size_t pixels_size,
     bi.num_color_channels = component_count;
     bi.uses_original_profile = JXL_TRUE;
 
-    if (JxlEncoderSetBasicInfo(enc, &bi) != JXL_ENC_SUCCESS ||
-        JxlEncoderSetICCProfile(enc, SRGB_ICC, SRGB_ICC_LEN) != JXL_ENC_SUCCESS) {
+    // The embedded profile is 3-channel sRGB — JXL rejects it for any other
+    // channel count (grayscale JPEG-LS is 1-channel). Fall back to a plain
+    // sRGB/gray color encoding there; only the exact pixel bytes need to
+    // round-trip, so the profile choice doesn't affect correctness. Must be
+    // set after SetBasicInfo — JXL rejects color encoding calls before it.
+    if (JxlEncoderSetBasicInfo(enc, &bi) != JXL_ENC_SUCCESS) {
+        JxlEncoderDestroy(enc); JxlThreadParallelRunnerDestroy(runner);
+        snprintf(errmsg, errmsg_size, "JXL: setup"); return false;
+    }
+    bool color_ok;
+    if (component_count == 3) {
+        color_ok = JxlEncoderSetICCProfile(enc, SRGB_ICC, SRGB_ICC_LEN) == JXL_ENC_SUCCESS;
+    } else {
+        JxlColorEncoding ce;
+        JxlColorEncodingSetToSRGB(&ce, component_count == 1 ? JXL_TRUE : JXL_FALSE);
+        color_ok = JxlEncoderSetColorEncoding(enc, &ce) == JXL_ENC_SUCCESS;
+    }
+    if (!color_ok) {
         JxlEncoderDestroy(enc); JxlThreadParallelRunnerDestroy(runner);
         snprintf(errmsg, errmsg_size, "JXL: setup"); return false;
     }
