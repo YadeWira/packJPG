@@ -50,16 +50,32 @@ else
     fail "No C++ compiler found (clang++ or g++ required)"
 fi
 
-(cd "$SRC_DIR" && $CXX $CFLAGS $LTO -DUNIX \
+# JPEG-LS support (requires libcharls-dev + libjxl-dev): auto-detect via a
+# throwaway link probe, same pattern as source/Makefile's JLS auto-detect.
+# Windows/legacy targets below never get it — no mingw builds of those libs.
+# JLS_LIBS must stay after $SRC/$JLS_SRC on the command line (linker order).
+JLS_SRC=""
+JLS_DEFINE=""
+JLS_LIBS=""
+if echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
+    JLS_SRC="jpegls.cpp"
+    JLS_DEFINE="-DHAVE_JPEGLS"
+    JLS_LIBS="-lcharls -ljxl -ljxl_threads"
+    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found)"
+else
+    skip "JPEG-LS support disabled (libcharls-dev/libjxl-dev not found)"
+fi
+
+(cd "$SRC_DIR" && $CXX $CFLAGS $LTO -DUNIX $JLS_DEFINE \
     -o "../$DIST/packJPG_linux_x64" \
-    $SRC \
+    $SRC $JLS_SRC $JLS_LIBS \
     && strip --strip-unneeded "../$DIST/packJPG_linux_x64")
 ok "dist/packJPG_linux_x64"
 
 # native build (optimized for this machine only, not for distribution)
-(cd "$SRC_DIR" && $CXX $CFLAGS_NATIVE $LTO -DUNIX \
+(cd "$SRC_DIR" && $CXX $CFLAGS_NATIVE $LTO -DUNIX $JLS_DEFINE \
     -o "../$DIST/packJPG_linux_x64_native" \
-    $SRC)
+    $SRC $JLS_SRC $JLS_LIBS)
 ok "dist/packJPG_linux_x64_native (native, do not distribute)"
 
 # ─── Windows x64 ─────────────────────────────────────────────────────────────
