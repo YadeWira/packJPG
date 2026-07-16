@@ -113,11 +113,11 @@ lib: $(OBJ)
 #   lib_concurrent_test — N threads hammering pjglib_convert_*
 #   lib_batch_test      — pjglib_convert_batch byte-exact across a grid
 lib-tests: lib
-	c++ -I. -O2 -std=c++17 test/lib_roundtrip_test.cpp  packJPGlib.a -lpthread -o test/lib_roundtrip_test
-	c++ -I. -O2 -std=c++17 test/lib_concurrent_test.cpp packJPGlib.a -lpthread -o test/lib_concurrent_test
-	c++ -I. -O2 -std=c++17 test/lib_batch_test.cpp      packJPGlib.a -lpthread -o test/lib_batch_test
-	c++ -I. -O2 -std=c++17 test/lib_filemode_test.cpp   packJPGlib.a -lpthread -o test/lib_filemode_test
-	c++ -I. -O2 -std=c++17 test/lib_maxoutput_test.cpp  packJPGlib.a -lpthread -o test/lib_maxoutput_test
+	c++ -I. -O2 -std=c++17 test/lib_roundtrip_test.cpp  packJPGlib.a $(LIBS) -o test/lib_roundtrip_test
+	c++ -I. -O2 -std=c++17 test/lib_concurrent_test.cpp packJPGlib.a $(LIBS) -o test/lib_concurrent_test
+	c++ -I. -O2 -std=c++17 test/lib_batch_test.cpp      packJPGlib.a $(LIBS) -o test/lib_batch_test
+	c++ -I. -O2 -std=c++17 test/lib_filemode_test.cpp   packJPGlib.a $(LIBS) -o test/lib_filemode_test
+	c++ -I. -O2 -std=c++17 test/lib_maxoutput_test.cpp  packJPGlib.a $(LIBS) -o test/lib_maxoutput_test
 	@echo "[OK] lib tests: lib_roundtrip_test, lib_concurrent_test, lib_batch_test, lib_filemode_test, lib_maxoutput_test"
 
 dll: JLS=0
