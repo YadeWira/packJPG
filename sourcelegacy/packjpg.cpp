@@ -731,7 +731,12 @@ THREAD_LOCAL int            arith_ac_K[4]    = {5,5,5,5};
 THREAD_LOCAL int            rstc             =    0  ;   // count of restart markers
 THREAD_LOCAL int            scnc             =    0  ;   // count of scans
 THREAD_LOCAL int            rsti             =    0  ;   // restart interval
-THREAD_LOCAL char           padbit           =    -1 ;   // padbit (for huffman coding)
+THREAD_LOCAL signed char    padbit           =    -1 ;   // padbit (for huffman coding)
+// signed char, not bare char: on unsigned-char-default platforms (ARM/ARM64;
+// this build targets Windows/x86 so unaffected today, but the type should
+// match source/packjpg.cpp) `-1` would store as 255, breaking the
+// `padbit == -1` "still unset" check. See source/packjpg.cpp for the full
+// writeup — found via ASan under qemu aarch64 emulation.
 THREAD_LOCAL unsigned char* rst_err          =   NULL;   // number of wrong-set RST markers per scan
 
 THREAD_LOCAL unsigned char* zdstdata[4]      = { NULL }; // zero distribution (# of non-zeroes) lists (for higher 7x7 block)

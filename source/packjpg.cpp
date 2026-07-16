@@ -800,7 +800,15 @@ THREAD_LOCAL size_t         jpegls_pixels_sz   = 0;
 THREAD_LOCAL int            rstc             =    0  ;   // count of restart markers
 THREAD_LOCAL int            scnc             =    0  ;   // count of scans
 THREAD_LOCAL int            rsti             =    0  ;   // restart interval
-THREAD_LOCAL char           padbit           =    -1 ;   // padbit (for huffman coding)
+THREAD_LOCAL signed char    padbit           =    -1 ;   // padbit (for huffman coding)
+// signed char, not bare char: char's signedness is platform-defined (signed on
+// x86_64, unsigned on AArch64/ARM64). With plain char, `-1` stores as 255 on
+// ARM64, `padbit == -1` never matches, the "still unset" fallback never
+// fires, and 255 flows into pjg_encode_bit() as a "bit" -- model_b's binary
+// context only ever sizes counts[] for symbols 0/1, so this reads/writes far
+// out of bounds. Real bug, not ARM64-specific UB: any input without restart
+// markers (padbit never gets set from the real bitstream) hits it, on any
+// unsigned-char-default platform. Found via ASan under qemu aarch64 emulation.
 THREAD_LOCAL unsigned char* rst_err          =   NULL;   // number of wrong-set RST markers per scan
 
 THREAD_LOCAL unsigned char* zdstdata[4]      = { NULL }; // zero distribution (# of non-zeroes) lists (for higher 7x7 block)
