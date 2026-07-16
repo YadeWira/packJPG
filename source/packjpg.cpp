@@ -1103,7 +1103,7 @@ INTERN const char   pjg_magic[] = { 'J', 'S' };
 // set during single-threaded init (same contract as the thread-config knobs).
 INTERN unsigned int pjg_max_output_size = 256 * 1024 * 1024;
 // Blowup-ratio bomb guard: output must not exceed input * 500 + 1 MB.
-// Always active â the amplification vector is inherent to lossless
+// Always active — the amplification vector is inherent to lossless
 // compression and is present in upstream packJPG too.
 #define PJG_MAX_BLOWUP_RATIO  500
 #define PJG_BLOWUP_FLOOR_BYTES 1048576
@@ -3807,7 +3807,7 @@ INTERN bool merge_jpeg( void )
 
 	// Decompression-bomb guard (pre-decode): two-tier defense.
 	// Tier 1: absolute cap. Tier 2: blowup ratio. The estimate is a
-	// lower bound â 0xFF stuffing and restart markers only add to it.
+	// lower bound — 0xFF stuffing and restart markers only add to it.
 	{
 		int64_t est = (int64_t) 4 + hdrs + hufs + grbs;
 		if ( pjg_max_output_size > 0 && est > (int64_t) pjg_max_output_size ) {
