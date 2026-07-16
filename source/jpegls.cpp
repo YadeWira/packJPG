@@ -21,10 +21,15 @@
 
 static constexpr charls_interleave_mode ILV_NONE = static_cast<charls_interleave_mode>(0);
 
-#define JLS_CHECK(expr, msg, errmsg, errmsg_size) do { \
+// `cleanup` runs before the early return — every call site holds a CharLS
+// decoder/encoder handle that must be destroyed on the error path, or it
+// leaks (found by fuzzing: malformed input failing e.g. read_header() left
+// the decoder handle dangling).
+#define JLS_CHECK(expr, msg, errmsg, errmsg_size, cleanup) do { \
     charls_jpegls_errc e_ = (expr); \
     if (e_ != charls_jpegls_errc::success) { \
         snprintf(errmsg, errmsg_size, "JPEG-LS: %s (errc %d)", msg, (int)e_); \
+        cleanup; \
         return false; \
     } \
 } while(0)
@@ -86,13 +91,13 @@ bool jpegls_parse(const uint8_t* data, size_t size,
     }
 
     JLS_CHECK(charls_jpegls_decoder_set_source_buffer(dec, data, size),
-              "set source buffer", errmsg, errmsg_size);
+              "set source buffer", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
     JLS_CHECK(charls_jpegls_decoder_read_header(dec),
-              "read header", errmsg, errmsg_size);
+              "read header", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
 
     charls_frame_info fi;
     JLS_CHECK(charls_jpegls_decoder_get_frame_info(dec, &fi),
-              "get frame info", errmsg, errmsg_size);
+              "get frame info", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
 
     info.width = fi.width; info.height = fi.height;
     info.bits_per_sample = fi.bits_per_sample;
@@ -105,10 +110,10 @@ bool jpegls_parse(const uint8_t* data, size_t size,
 
     int32_t near_lossless;
     JLS_CHECK(charls_jpegls_decoder_get_near_lossless(dec, 0, &near_lossless),
-              "get NEAR", errmsg, errmsg_size);
+              "get NEAR", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
     charls_interleave_mode ilv;
     JLS_CHECK(charls_jpegls_decoder_get_interleave_mode(dec, &ilv),
-              "get ILV", errmsg, errmsg_size);
+              "get ILV", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
 
     if (near_lossless != 0) {
         snprintf(errmsg, errmsg_size,
@@ -123,10 +128,10 @@ bool jpegls_parse(const uint8_t* data, size_t size,
 
     size_t dest_sz;
     JLS_CHECK(charls_jpegls_decoder_get_destination_size(dec, 0, &dest_sz),
-              "get dest size", errmsg, errmsg_size);
+              "get dest size", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
     std::vector<uint8_t> planar(dest_sz);
     JLS_CHECK(charls_jpegls_decoder_decode_to_buffer(dec, planar.data(), dest_sz, 0),
-              "decode", errmsg, errmsg_size);
+              "decode", errmsg, errmsg_size, charls_jpegls_decoder_destroy(dec));
     charls_jpegls_decoder_destroy(dec);
 
     size_t plane_sz = (size_t)info.width * info.height;
@@ -244,28 +249,32 @@ bool jpegls_parse(const uint8_t* data, size_t size,
         size_t orig_len = info.entropy_lengths[s];
 
         charls_jpegls_encoder* enc = charls_jpegls_encoder_create();
+        if (!enc) {
+            snprintf(errmsg, errmsg_size, "JPEG-LS: failed to create CharLS encoder");
+            return false;
+        }
         charls_frame_info fi_one = {info.width, info.height, info.bits_per_sample, 1};
         JLS_CHECK(charls_jpegls_encoder_set_frame_info(enc, &fi_one),
-                  "verify: frame info", errmsg, errmsg_size);
+                  "verify: frame info", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
         JLS_CHECK(charls_jpegls_encoder_set_near_lossless(enc, 0),
-                  "verify: NEAR", errmsg, errmsg_size);
+                  "verify: NEAR", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
         JLS_CHECK(charls_jpegls_encoder_set_interleave_mode(enc, ILV_NONE),
-                  "verify: ILV", errmsg, errmsg_size);
+                  "verify: ILV", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
 
         size_t est;
         JLS_CHECK(charls_jpegls_encoder_get_estimated_destination_size(enc, &est),
-                  "verify: est size", errmsg, errmsg_size);
+                  "verify: est size", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
         std::vector<uint8_t> re_enc(est);
         JLS_CHECK(charls_jpegls_encoder_set_destination_buffer(enc, re_enc.data(), est),
-                  "verify: dest buffer", errmsg, errmsg_size);
+                  "verify: dest buffer", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
 
         const uint8_t* plane = planar.data() + (size_t)ch * plane_sz;
         JLS_CHECK(charls_jpegls_encoder_encode_from_buffer(enc, plane, plane_sz, 0),
-                  "verify: encode", errmsg, errmsg_size);
+                  "verify: encode", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
 
         size_t re_total;
         JLS_CHECK(charls_jpegls_encoder_get_bytes_written(enc, &re_total),
-                  "verify: bytes written", errmsg, errmsg_size);
+                  "verify: bytes written", errmsg, errmsg_size, charls_jpegls_encoder_destroy(enc));
         charls_jpegls_encoder_destroy(enc);
 
         // Extract entropy from re-encode
@@ -585,23 +594,44 @@ bool jpegls_reconstruct(const JlsFileInfo& info,
             tpl += info.part_sizes[s];
         }
 
-        // Re-encode component plane via CharLS
+        // Re-encode component plane via CharLS. info comes from a deserialized
+        // recipe — untrusted — so every setup call must be checked: an
+        // unchecked failure here previously left `est` uninitialized and
+        // could size re_enc's buffer from garbage, risking a heap overflow
+        // in encode_from_buffer (found while auditing after a fuzzer-found
+        // leak in the same file's decode path).
         int ch = info.channels[s];
         charls_jpegls_encoder* enc = charls_jpegls_encoder_create();
+        if (!enc) {
+            snprintf(errmsg, errmsg_size, "JPEG-LS: failed to create CharLS encoder");
+            free(output); output = nullptr; return false;
+        }
         charls_frame_info fi_one = {info.width, info.height, info.bits_per_sample, 1};
-        charls_jpegls_encoder_set_frame_info(enc, &fi_one);
-        charls_jpegls_encoder_set_near_lossless(enc, 0);
-        charls_jpegls_encoder_set_interleave_mode(enc, ILV_NONE);
+        JLS_CHECK(charls_jpegls_encoder_set_frame_info(enc, &fi_one),
+                  "reconstruct: frame info", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
+        JLS_CHECK(charls_jpegls_encoder_set_near_lossless(enc, 0),
+                  "reconstruct: NEAR", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
+        JLS_CHECK(charls_jpegls_encoder_set_interleave_mode(enc, ILV_NONE),
+                  "reconstruct: ILV", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
 
         size_t est;
-        charls_jpegls_encoder_get_estimated_destination_size(enc, &est);
+        JLS_CHECK(charls_jpegls_encoder_get_estimated_destination_size(enc, &est),
+                  "reconstruct: est size", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
         std::vector<uint8_t> re_enc(est);
-        charls_jpegls_encoder_set_destination_buffer(enc, re_enc.data(), est);
+        JLS_CHECK(charls_jpegls_encoder_set_destination_buffer(enc, re_enc.data(), est),
+                  "reconstruct: dest buffer", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
 
         const uint8_t* plane = pixels + (size_t)ch * plane_sz;
         charls_jpegls_errc e = charls_jpegls_encoder_encode_from_buffer(enc, plane, plane_sz, 0);
         size_t re_total;
-        charls_jpegls_encoder_get_bytes_written(enc, &re_total);
+        JLS_CHECK(charls_jpegls_encoder_get_bytes_written(enc, &re_total),
+                  "reconstruct: bytes written", errmsg, errmsg_size,
+                  (charls_jpegls_encoder_destroy(enc), free(output), output = nullptr));
         charls_jpegls_encoder_destroy(enc);
 
         if (e != charls_jpegls_errc::success) {
