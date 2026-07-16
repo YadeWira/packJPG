@@ -135,3 +135,21 @@ Description: Lossless JPEG compressor
  single-file parallel compression (-sfth) and batch multi-threading (-th).
  v4.0f adds native arithmetic-coded JPEG (SOF C9/CA) support.
 
+Package: packjpg
+Version: 5.0
+Architecture: amd64
+Maintainer: Yade Bravo <https://github.com/YadeWira/packJPG>
+Installed-Size: 352
+Depends: libcharls2, libjxl0.11
+Filename: pool/main/packjpg_5.0_amd64.deb
+Size: 120290
+MD5sum: c99a38bb4187976f4dfeb4cf0c741417
+SHA1: 376133b360d92393e053578a1389be232f952849
+SHA256: 8b187beac31d8ebc714f55eebb10f2c394a8f4cdb225f2aba831b7671a69e59e
+Section: utils
+Priority: optional
+Description: Lossless JPEG compressor
+ packJPG compresses JPEG files to the PJG format for lossless archival,
+ achieving better compression than standard JPEG storage. Supports
+ single-file parallel compression (-sfth) and batch multi-threading (-th).
+
