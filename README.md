@@ -477,10 +477,9 @@ real `thread_local`, runs `-thN` MT batch with auto-verify.)
 
 The on-disk `.pjg` format matches `source/` exactly (diagonal DC
 neighbor context, `0x02` sub-marker, single accepted format byte), so
-files are fully interchangeable between the two builds — **except
-JPEG-LS** (see [JPEG-LS support](#jpeg-ls-support)): no MinGW builds of
-CharLS/libjxl exist, so a `.pjg` produced from a `.jls` file on Linux
-cannot be decoded by this build.
+files are fully interchangeable between the two builds, including
+JPEG-LS (see [JPEG-LS support](#jpeg-ls-support)) — the vendored
+`winlibs/` static libs are linked in by default (`JLS=1`).
 
 To build from `sourcelegacy/`:
 
@@ -579,8 +578,8 @@ error rather than silently producing lossy or non-reproducible output.
 | Linux x64 (`packJPG_linux_x64`) | ✅ | via system `libcharls-dev`/`libjxl-dev` |
 | Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored cross-compiled static libs |
 | Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored cross-compiled static libs |
+| `sourcelegacy/` (Windows 7/8, x86 + x64) | ✅ | via vendored cross-compiled static libs |
 | `packJPG.dll` / library SDK archives | ❌ (not yet) | in progress |
-| `sourcelegacy/` (Windows 7/8 build) | ❌ (not yet) | in progress |
 
 No MinGW *packages* of CharLS/libjxl exist, so the Windows CLI builds
 link against static libs cross-compiled once and vendored under
@@ -602,12 +601,17 @@ make JLS=0       # force off — builds with zero extra dependencies
 # Windows cross-compile (needs source/winlibs/, already vendored in a full checkout)
 make win-x64    # auto-detects source/winlibs/x86_64/
 make win-x86    # auto-detects source/winlibs/i686/
+
+# sourcelegacy/ (Windows 7/8) — JLS=1 by default, links the same winlibs/
+cd ../sourcelegacy
+make            # -> x86 + x64, both with JPEG-LS
+make JLS=0      # force off
 ```
 
-`build_all.sh` does the same auto-detection for all three release
-binaries. Without the relevant libraries present, everything still
-builds — `.jls` files are just skipped like any other unsupported file
-type.
+`build_all.sh` does the same auto-detection for all release binaries,
+`source/` and `sourcelegacy/` alike. Without the relevant libraries
+present, everything still builds — `.jls` files are just skipped like
+any other unsupported file type.
 
 
 ## Known limitations

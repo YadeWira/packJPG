@@ -49,7 +49,9 @@ fi
 
 # JPEG-LS support (requires libcharls-dev + libjxl-dev): auto-detect via a
 # throwaway link probe, same pattern as source/Makefile's JLS auto-detect.
-# Windows/legacy targets below never get it — no mingw builds of those libs.
+# This probe is Linux-only; Windows/legacy targets get JPEG-LS via the
+# vendored source/winlibs/ static libs instead (see winlibs_link() below
+# and sourcelegacy/Makefile's own JLS=1 default).
 # JLS_LIBS must stay after $SRC/$JLS_SRC on the command line (linker order).
 JLS_SRC=""
 JLS_DEFINE=""
