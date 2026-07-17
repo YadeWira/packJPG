@@ -20,10 +20,35 @@ CXXFLAGS = -I. -I../source -O2 -Wall -funroll-loops -ffast-math \
            -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 \
            -D_WIN32_IE=0x0501
 
+# --- JPEG-LS support via vendored winlibs -----------------------------------
+# Pre-compiled static libs for CharLS, libjxl, highway, brotli, lcms2.
+# Build with  JLS=0  to disable (default: enabled for both archs).
+JLS ?= 1
+WINLIBS  = ../source/winlibs
+
+ifeq ($(JLS),1)
+  CXXFLAGS += -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE \
+              -I$(WINLIBS)/include
+endif
+
 LDFLAGS  = -static -static-libgcc -static-libstdc++ -flto
 
 SRC      = ../source/aricoder.cpp bitops.cpp packjpg.cpp
 BIN      = bin
+
+# JPEG-LS libs (same for both archs, filenames identical)
+ifeq ($(JLS),1)
+  SRC += ../source/jpegls.cpp
+  JLS_LIBS = $(WINLIBS)/$(1)/libcharls.a \
+              $(WINLIBS)/$(1)/libjxl.a \
+              $(WINLIBS)/$(1)/libjxl_threads.a \
+              $(WINLIBS)/$(1)/libjxl_cms.a \
+              $(WINLIBS)/$(1)/liblcms2.a \
+              $(WINLIBS)/$(1)/libhwy.a \
+              $(WINLIBS)/$(1)/libbrotlienc.a \
+              $(WINLIBS)/$(1)/libbrotlidec.a \
+              $(WINLIBS)/$(1)/libbrotlicommon.a
+endif
 
 T_X86    = $(BIN)/packJPG_win_legacy_x86.exe
 T_X64    = $(BIN)/packJPG_win_legacy_x64.exe
@@ -37,15 +62,15 @@ $(BIN):
 all: x86 x64
 
 x86: $(BIN)
-	$(CXX_X86) $(CXXFLAGS) -o $(T_X86) $(SRC) -s $(LDFLAGS)
+	$(CXX_X86) $(CXXFLAGS) -o $(T_X86) $(SRC) $(if $(JLS),$(call JLS_LIBS,i686),) -s $(LDFLAGS)
 	@echo "[OK] $(T_X86)"
 
 x64: $(BIN)
-	$(CXX_X64) $(CXXFLAGS) -o $(T_X64) $(SRC) -s $(LDFLAGS)
+	$(CXX_X64) $(CXXFLAGS) -o $(T_X64) $(SRC) $(if $(JLS),$(call JLS_LIBS,x86_64),) -s $(LDFLAGS)
 	@echo "[OK] $(T_X64)"
 
 dev: $(BIN)
-	$(CXX_X86) $(CXXFLAGS) -DDEV_BUILD -o $(T_DEV) $(SRC) -s $(LDFLAGS)
+	$(CXX_X86) $(CXXFLAGS) -DDEV_BUILD -o $(T_DEV) $(SRC) $(if $(JLS),$(call JLS_LIBS,i686),) -s $(LDFLAGS)
 	@echo "[OK] $(T_DEV)"
 
 clean:

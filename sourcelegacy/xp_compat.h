@@ -53,13 +53,13 @@ static inline bool xp_create_directories( const std::string& path ) {
     return GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
-// Returns true if the filename extension is .jpg, .jpeg, or .pjg (case-insensitive)
+// Returns true if the filename extension is .jpg, .jpeg, .pjg, or .jls (case-insensitive)
 static inline bool xp_is_jpg_or_pjg( const std::string& path ) {
     size_t dot = path.rfind( '.' );
     if ( dot == std::string::npos ) return false;
     std::string ext = path.substr( dot );
     for ( auto& ch : ext ) ch = (char)tolower( (unsigned char)ch );
-    return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg";
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg" || ext == ".jls";
 }
 
 // Replaces extension of a path string. ext should include the dot (e.g. ".pjg").
