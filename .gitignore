@@ -26,6 +26,10 @@
 *.a
 *.lib
 
+# source/winlibs/ is vendored (cross-compiled CharLS+libjxl for Windows
+# JPEG-LS, no mingw packages exist) — deliberately committed, not built.
+!/source/winlibs/**/*.a
+
 # Executables
 *.exe
 *.out

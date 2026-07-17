@@ -7,7 +7,7 @@ reconstruction. Typical file size reduction: ~20%.
 Optionally (Linux x64 builds only — see [JPEG-LS support](#jpeg-ls-support)),
 it also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller.
 
-**Supported platforms:** Linux x64, Windows 10/11 x64, Windows 7 / 8 (x86 + x64).
+**Supported platforms:** Linux x64, Windows 10/11 (x86 + x64), Windows 7 / 8 (x86 + x64).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
 
@@ -43,6 +43,7 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 | File | Target |
 |---|---|
 | `packJPG_win_x64.exe` | Windows 10/11 64-bit (also runs on Win7/8 x64 without ANSI colors) |
+| `packJPG_win_x86.exe` | Windows 10/11 32-bit |
 | `packJPG_win_legacy_x64.exe` | Windows 7 / 8 — 64-bit |
 | `packJPG_win_legacy_x86.exe` | Windows 7 / 8 — 32-bit |
 
@@ -536,6 +537,7 @@ Outputs in `dist/`:
 ```
 dist/packJPG_linux_x64
 dist/packJPG_win_x64.exe
+dist/packJPG_win_x86.exe
 dist/packJPG_win_legacy_x86.exe
 dist/packJPG_win_legacy_x64.exe
 dist/packjpg-<ver>-linux-x64.tar.gz
@@ -570,26 +572,42 @@ scan layout, with no encoder-side free choices. Scans that don't meet
 this (interleaved, near-lossless) are detected and refused with a clear
 error rather than silently producing lossy or non-reproducible output.
 
-**Platform availability:** JPEG-LS is **Linux x64 only**. It requires
-`libcharls-dev` + `libjxl-dev`, and there are no MinGW builds of those
-libraries — so Windows (`packJPG.dll`, `packJPG_win_x64.exe`) and the
-`sourcelegacy/` build never get it, regardless of what the
-`source/` codebase supports. A `.pjg` produced from JPEG-LS on Linux
-still can't be decoded on those builds.
+**Platform availability:**
+
+| Build | JPEG-LS? | Notes |
+|---|---|---|
+| Linux x64 (`packJPG_linux_x64`) | ✅ | via system `libcharls-dev`/`libjxl-dev` |
+| Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored cross-compiled static libs |
+| Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored cross-compiled static libs |
+| `packJPG.dll` / library SDK archives | ❌ (not yet) | in progress |
+| `sourcelegacy/` (Windows 7/8 build) | ❌ (not yet) | in progress |
+
+No MinGW *packages* of CharLS/libjxl exist, so the Windows CLI builds
+link against static libs cross-compiled once and vendored under
+`source/winlibs/` (`x86_64`/`i686`) rather than built per-release — see
+`source/winlibs/README.md` for the reproducible cross-compile recipe.
+A `.pjg` produced from JPEG-LS still can't be decoded on a build that
+lacks JPEG-LS support (clean error, not a crash).
 
 ### Building with JPEG-LS
 
 ```bash
+# Linux (needs libcharls-dev + libjxl-dev)
 sudo apt install libcharls-dev libjxl-dev   # Debian/Ubuntu
 cd source
 make            # auto-detects the libraries above
 make JLS=1       # force on (fails to build if the libraries are missing)
 make JLS=0       # force off — builds with zero extra dependencies
+
+# Windows cross-compile (needs source/winlibs/, already vendored in a full checkout)
+make win-x64    # auto-detects source/winlibs/x86_64/
+make win-x86    # auto-detects source/winlibs/i686/
 ```
 
-`build_all.sh` does the same auto-detection for the Linux x64 release
-binary. Without the libraries present, everything still builds — `.jls`
-files are just skipped like any other unsupported file type.
+`build_all.sh` does the same auto-detection for all three release
+binaries. Without the relevant libraries present, everything still
+builds — `.jls` files are just skipped like any other unsupported file
+type.
 
 
 ## Known limitations

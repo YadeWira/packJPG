@@ -190,6 +190,28 @@ CROSS_FLAGS = -I. -O3 -Wall -funroll-loops -ffast-math \
               -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 CROSS_LD    = -static -static-libgcc -static-libstdc++
 
+# --- Windows JPEG-LS (vendored) ----------------------------------------------
+# No mingw packages of CharLS/libjxl exist, so the static libs are cross-
+# compiled once and vendored under winlibs/ instead of built per-release —
+# see winlibs/README.md for the reproducible build recipe. Auto-detects via
+# file presence; a checkout missing winlibs/ (e.g. a stripped-down fork)
+# falls back to no-JPEG-LS on Windows rather than failing the build.
+WINLIBS_INC  = -Iwinlibs/include
+WINJLS_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE
+# Link order matters: libcharls before libjxl before libjxl's own deps.
+WINLIBS_X64  = winlibs/x86_64/libcharls.a winlibs/x86_64/libjxl.a \
+               winlibs/x86_64/libjxl_threads.a winlibs/x86_64/libjxl_cms.a \
+               winlibs/x86_64/liblcms2.a winlibs/x86_64/libhwy.a \
+               winlibs/x86_64/libbrotlienc.a winlibs/x86_64/libbrotlidec.a \
+               winlibs/x86_64/libbrotlicommon.a
+WINLIBS_X86  = winlibs/i686/libcharls.a winlibs/i686/libjxl.a \
+               winlibs/i686/libjxl_threads.a winlibs/i686/libjxl_cms.a \
+               winlibs/i686/liblcms2.a winlibs/i686/libhwy.a \
+               winlibs/i686/libbrotlienc.a winlibs/i686/libbrotlidec.a \
+               winlibs/i686/libbrotlicommon.a
+HAVE_WINLIBS_X64 := $(wildcard winlibs/x86_64/libcharls.a)
+HAVE_WINLIBS_X86 := $(wildcard winlibs/i686/libcharls.a)
+
 bin:
 	mkdir -p bin
 
@@ -199,12 +221,22 @@ linux-x64: bin
 
 win-x64: JLS=0
 win-x64: bin
+ifneq ($(HAVE_WINLIBS_X64),)
+	$(WIN64) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X64)
+else
+	@echo "[--] winlibs/x86_64 not found — building win-x64 without JPEG-LS"
 	$(WIN64) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD)
+endif
 	@echo "[OK] bin/$(TARGET)_win_x64.exe"
 
 win-x86: JLS=0
 win-x86: bin
+ifneq ($(HAVE_WINLIBS_X86),)
+	$(WIN32) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X86)
+else
+	@echo "[--] winlibs/i686 not found — building win-x86 without JPEG-LS"
 	$(WIN32) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD)
+endif
 	@echo "[OK] bin/$(TARGET)_win_x86.exe"
 
 all-platforms: linux-x64 win-x64 win-x86

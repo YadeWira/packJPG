@@ -2,14 +2,11 @@
 # build_all.sh — build all packJPG release targets from project root
 #
 # Targets:
-#   Linux x64                          (native, requires g++ or clang++)
-#   Windows x64                        (requires x86_64-w64-mingw32-g++)
-#   Windows legacy x86 (XP/Vista/7/8)  (requires i686-w64-mingw32-g++,    sourcelegacy build)
-#   Windows legacy x64 (XP/Vista/7/8)  (requires x86_64-w64-mingw32-g++,  sourcelegacy build)
-#
-# Note: modern Windows x86 (32-bit Win10) was dropped — that audience is
-# vanishingly small, and Win7/8 x86 users are better served by the legacy
-# x86 build (which also runs on XP).
+#   Linux x64                    (native, requires g++ or clang++)
+#   Windows x64                  (requires x86_64-w64-mingw32-g++)
+#   Windows x86                  (requires i686-w64-mingw32-g++)
+#   Windows legacy x86 (Win7/8)  (requires i686-w64-mingw32-g++,    sourcelegacy build)
+#   Windows legacy x64 (Win7/8)  (requires x86_64-w64-mingw32-g++,  sourcelegacy build)
 #
 # All binaries are collected into ./dist/
 #
@@ -78,6 +75,18 @@ ok "dist/packJPG_linux_x64"
     $SRC $JLS_SRC $JLS_LIBS)
 ok "dist/packJPG_linux_x64_native (native, do not distribute)"
 
+# ─── Windows JPEG-LS (vendored) ─────────────────────────────────────────────
+# No mingw packages of CharLS/libjxl exist, so the static libs are vendored
+# under source/winlibs/ instead of built per-release. See
+# source/winlibs/README.md for the reproducible cross-compile recipe.
+WINJLS_DEFS="-DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include"
+winlibs_link() {
+    # $1 = arch dir (x86_64 or i686)
+    local d="winlibs/$1"
+    echo "$d/libcharls.a $d/libjxl.a $d/libjxl_threads.a $d/libjxl_cms.a" \
+         "$d/liblcms2.a $d/libhwy.a $d/libbrotlienc.a $d/libbrotlidec.a $d/libbrotlicommon.a"
+}
+
 # ─── Windows x64 ─────────────────────────────────────────────────────────────
 
 echo ""
@@ -98,13 +107,66 @@ else
         echo "    [!!] $WINDRES64 not found — binary will have no icon"
     fi
 
-    (cd "$SRC_DIR" && $WIN64 $CFLAGS \
+    WIN64_JLS=""
+    WIN64_JLS_SRC=""
+    WIN64_JLS_LIBS=""
+    if [ -f "$SRC_DIR/winlibs/x86_64/libcharls.a" ]; then
+        WIN64_JLS="$WINJLS_DEFS"
+        WIN64_JLS_SRC="jpegls.cpp"
+        WIN64_JLS_LIBS="$(winlibs_link x86_64)"
+        ok "Windows x64 JPEG-LS: winlibs/x86_64 found"
+    else
+        skip "Windows x64 JPEG-LS: source/winlibs/x86_64 not found"
+    fi
+
+    (cd "$SRC_DIR" && $WIN64 $CFLAGS $WIN64_JLS \
         -o "../$DIST/packJPG_win_x64.exe" \
-        $SRC $ICONS64 \
+        $SRC $WIN64_JLS_SRC $ICONS64 $WIN64_JLS_LIBS \
         -static -static-libgcc -static-libstdc++ \
         && x86_64-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x64.exe")
     [ -f "$SRC_DIR/icons_x64.o" ] && rm -f "$SRC_DIR/icons_x64.o"
     ok "dist/packJPG_win_x64.exe"
+fi
+
+# ─── Windows x86 ─────────────────────────────────────────────────────────────
+
+echo ""
+echo "==> Windows x86"
+WIN86="i686-w64-mingw32-g++"
+WINDRES86="i686-w64-mingw32-windres"
+if ! command -v "$WIN86" &>/dev/null; then
+    skip "$WIN86 not found — skipping Windows x86"
+    skip "Install with: sudo apt install mingw-w64"
+else
+    ICONS86=""
+    if command -v "$WINDRES86" &>/dev/null; then
+        (cd "$SRC_DIR" && $WINDRES86 -O coff icons.rc -o icons_x86.o \
+            && echo "    [OK] icons compiled for x86" \
+            || echo "    [!!] icon compilation failed — binary will have no icon")
+        [ -f "$SRC_DIR/icons_x86.o" ] && ICONS86="icons_x86.o"
+    else
+        echo "    [!!] $WINDRES86 not found — binary will have no icon"
+    fi
+
+    WIN86_JLS=""
+    WIN86_JLS_SRC=""
+    WIN86_JLS_LIBS=""
+    if [ -f "$SRC_DIR/winlibs/i686/libcharls.a" ]; then
+        WIN86_JLS="$WINJLS_DEFS"
+        WIN86_JLS_SRC="jpegls.cpp"
+        WIN86_JLS_LIBS="$(winlibs_link i686)"
+        ok "Windows x86 JPEG-LS: winlibs/i686 found"
+    else
+        skip "Windows x86 JPEG-LS: source/winlibs/i686 not found"
+    fi
+
+    (cd "$SRC_DIR" && $WIN86 $CFLAGS $WIN86_JLS \
+        -o "../$DIST/packJPG_win_x86.exe" \
+        $SRC $WIN86_JLS_SRC $ICONS86 $WIN86_JLS_LIBS \
+        -static -static-libgcc -static-libstdc++ \
+        && i686-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x86.exe")
+    [ -f "$SRC_DIR/icons_x86.o" ] && rm -f "$SRC_DIR/icons_x86.o"
+    ok "dist/packJPG_win_x86.exe"
 fi
 
 # ─── Windows legacy x86 + x64 (XP/Vista/7/8) ─────────────────────────────────
