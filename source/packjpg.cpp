@@ -2988,11 +2988,13 @@ INTERN void process_file( void )
 					execute( reset_buffers );
 					execute( swap_streams );
 					execute( read_jpeg );
-					execute( decode_jpeg );
-					execute( check_value_range );
-					execute( adapt_icos );
-					execute( predict_dc );
-					execute( calc_zdst_lists );
+					if ( !jpg_jpegls ) {
+						execute( decode_jpeg );
+						execute( check_value_range );
+						execute( adapt_icos );
+						execute( predict_dc );
+						execute( calc_zdst_lists );
+					}
 					// re-encode with the same format as the original PJG
 					bool saved_sfth = sfth_mode;
 					sfth_mode = decoded_from_sfth;
