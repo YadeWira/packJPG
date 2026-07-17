@@ -7,7 +7,7 @@ reconstruction. Typical file size reduction: ~20%.
 Optionally (Linux x64 builds only — see [JPEG-LS support](#jpeg-ls-support)),
 it also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller.
 
-**Supported platforms:** Linux x64, Windows 10/11 x64, Windows 7 / 8 (x86 + x64, x64 community-maintained).
+**Supported platforms:** Linux x64, Windows 10/11 x64, Windows 7 / 8 (x86 + x64).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
 
@@ -43,7 +43,7 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 | File | Target |
 |---|---|
 | `packJPG_win_x64.exe` | Windows 10/11 64-bit (also runs on Win7/8 x64 without ANSI colors) |
-| `packJPG_win_legacy_x64.exe` | Windows 7 / 8 — 64-bit (community-maintained) |
+| `packJPG_win_legacy_x64.exe` | Windows 7 / 8 — 64-bit |
 | `packJPG_win_legacy_x86.exe` | Windows 7 / 8 — 32-bit |
 
 
@@ -461,10 +461,8 @@ x86 and x64. Compiled with C++14 and Win32 API in place of
 `std::filesystem` (`xp_compat.h` provides the shim layer), using
 `CreateThread` instead of C++17 `<thread>`/`<future>`.
 
-**x86 (Windows 7 / 8) is officially supported** — tested by the
-maintainer on real hardware/VM before each release. **x64 (Windows
-7 / 8) is community-maintained** (see below): validated only
-via Wine cross-runs against `source/`.
+**Both x86 and x64 (Windows 7 / 8) are officially supported** — tested
+by the maintainer on real hardware/VM before each release.
 
 **Threading on the legacy build:** single-file parallel compression
 (`-sfth`, Y/Cb/Cr on three Win32 threads) is supported — each thread
@@ -483,13 +481,6 @@ JPEG-LS** (see [JPEG-LS support](#jpeg-ls-support)): no MinGW builds of
 CharLS/libjxl exist, so a `.pjg` produced from a `.jls` file on Linux
 cannot be decoded by this build.
 
-> **Warning (x64 only):** the upstream maintainer does not own Windows
-> 7/8 x64 test hardware — `packJPG_win_legacy_x64.exe` is validated
-> only via Wine cross-runs against `source/`. Real hardware testing is
-> not in the upstream loop, so platform-specific regressions may slip
-> through. Bug reports with self-contained reproduction steps on real
-> hardware are welcome. (x86 doesn't have this caveat — see above.)
-
 To build from `sourcelegacy/`:
 
 ```
@@ -500,25 +491,6 @@ make dev    # -> bin/packJPG_win_legacy_x86_dev.exe (with developer functions)
 ```
 
 Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package).
-
-### Maintainer wanted (x64)
-
-The x64 legacy build (Windows 7 / 8) needs a maintainer who
-runs one of those on real hardware or VM and is willing to:
-
-* **Test releases** before they go out — at minimum, a self round-trip
-  on a few JPEGs and a sanity check that the binary launches without
-  missing-DLL errors.
-* **Triage x64-legacy bugs** filed against `sourcelegacy/`.
-* **Port new features** from `source/` when they land.
-
-x86 (Windows 7 / 8) doesn't need this — it's officially tested by the
-upstream maintainer already.
-
-If interested, open an issue titled `legacy-maintainer: <handle>` with
-the Windows version(s) you can cover and the scope you're up for.
-Maintainers get direct credit in `CHANGELOG.md` and the README, plus
-fast-track review on legacy-only PRs.
 
 
 ## Building from source
