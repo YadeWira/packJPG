@@ -76,7 +76,7 @@ ok "dist/packJPG-${VERSION}-linux-x64-lib.tar.gz"
 # ─── Windows (win64 / win32) ──────────────────────────────────────────────────
 
 build_win_lib() {
-    local ARCH="$1" CXX_POSIX="$2"
+    local ARCH="$1" CXX_POSIX="$2" WINLIBS_DLL_DIR="$3"
     echo ""
     echo "==> Windows $ARCH library"
 
@@ -84,6 +84,10 @@ build_win_lib() {
         skip "$CXX_POSIX not found — skipping win-$ARCH library (needs posix thread model)"
         return
     fi
+
+    local WIN_JLS_NOTE=""
+    [ -f "source/winlibs-dll/$WINLIBS_DLL_DIR/libcharls.a" ] && \
+        WIN_JLS_NOTE=" + JPEG-LS (vendored static libs, no runtime deps)"
 
     (cd source && make clean >/dev/null \
         && make dll CXX="$CXX_POSIX" >/dev/null)
@@ -103,8 +107,8 @@ build_win_lib() {
 packJPG v${VERSION} — Windows library/SDK (${ARCH})
 =============================================
 Embed packJPG (lossless JPEG <-> PJG) in your program. C-linkage API,
-multithreading ON by default. On-disk .pjg format unchanged since v4.0b.
-No JPEG-LS on Windows: no MinGW builds of libcharls/libjxl exist.
+multithreading ON by default${WIN_JLS_NOTE}.
+On-disk .pjg format unchanged since v4.0b.
 
 Files
   packJPG.dll     self-contained DLL (depends only on KERNEL32 + msvcrt)
@@ -133,8 +137,8 @@ EOF
     ok "dist/packJPG-${VERSION}-${ARCH}-lib.zip"
 }
 
-build_win_lib win64 x86_64-w64-mingw32-g++-posix
-build_win_lib win32 i686-w64-mingw32-g++-posix
+build_win_lib win64 x86_64-w64-mingw32-g++-posix x86_64
+build_win_lib win32 i686-w64-mingw32-g++-posix   i686
 
 echo ""
 echo "Library archives in $DIST/:"

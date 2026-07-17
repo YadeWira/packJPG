@@ -579,7 +579,7 @@ error rather than silently producing lossy or non-reproducible output.
 | Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored cross-compiled static libs |
 | Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored cross-compiled static libs |
 | `sourcelegacy/` (Windows 7/8, x86 + x64) | ✅ | via vendored cross-compiled static libs |
-| `packJPG.dll` / library SDK archives | ❌ (not yet) | in progress |
+| `packJPG.dll` / library SDK archives | ✅ | via a separate posix-thread-model vendored set (`winlibs-dll/`) |
 
 No MinGW *packages* of CharLS/libjxl exist, so the Windows CLI builds
 link against static libs cross-compiled once and vendored under
@@ -606,6 +606,12 @@ make win-x86    # auto-detects source/winlibs/i686/
 cd ../sourcelegacy
 make            # -> x86 + x64, both with JPEG-LS
 make JLS=0      # force off
+
+# packJPG.dll (needs source/winlibs-dll/, a separate posix-thread-model
+# vendor set — see source/winlibs-dll/README.md for why)
+cd ../source
+make dll CXX=x86_64-w64-mingw32-g++-posix   # win64, auto-detects winlibs-dll/x86_64/
+make dll CXX=i686-w64-mingw32-g++-posix     # win32, auto-detects winlibs-dll/i686/
 ```
 
 `build_all.sh` does the same auto-detection for all release binaries,

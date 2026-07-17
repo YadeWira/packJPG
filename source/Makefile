@@ -20,11 +20,71 @@ LIBS     = -lpthread
 # --- JPEG-LS support (optional, requires libcharls-dev + libjxl-dev) ---------
 # Auto-detect: try compiling a one-liner that includes charls/charls.h.
 # Override with  make JLS=1  (force on)  or  make JLS=0  (force off).
-# Cross-compile targets (dll, win-*) default to JLS=0 — no mingw builds exist.
+# Cross-compile targets (win-*) default to JLS=0 and use the vendored
+# winlibs/ static libs instead (see below) — no mingw packages exist.
+# dll auto-detects winlibs/ the same way (see DLL_WINLIBS wiring below).
 JLS ?= $(shell echo 'int main(){}' | $(CXX) $(CXXFLAGS) -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null && echo 1 || echo 0)
 ifeq ($(JLS),1)
   CXXFLAGS += -DHAVE_JPEGLS
   LIBS     += -lcharls -ljxl -ljxl_threads
+endif
+
+# --- Windows JPEG-LS (vendored) ----------------------------------------------
+# No mingw packages of CharLS/libjxl exist, so the static libs are cross-
+# compiled once and vendored under winlibs/ instead of built per-release —
+# see winlibs/README.md for the reproducible build recipe. Auto-detects via
+# file presence; a checkout missing winlibs/ (e.g. a stripped-down fork)
+# falls back to no-JPEG-LS on Windows rather than failing the build. Used by
+# the win-x64/win-x86 CLI targets (built with the plain, non-posix mingw
+# compiler — see WIN64/WIN32 below).
+WINLIBS_INC  = -Iwinlibs/include
+WINJLS_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE
+# Link order matters: libcharls before libjxl before libjxl's own deps.
+WINLIBS_X64  = winlibs/x86_64/libcharls.a winlibs/x86_64/libjxl.a \
+               winlibs/x86_64/libjxl_threads.a winlibs/x86_64/libjxl_cms.a \
+               winlibs/x86_64/liblcms2.a winlibs/x86_64/libhwy.a \
+               winlibs/x86_64/libbrotlienc.a winlibs/x86_64/libbrotlidec.a \
+               winlibs/x86_64/libbrotlicommon.a
+WINLIBS_X86  = winlibs/i686/libcharls.a winlibs/i686/libjxl.a \
+               winlibs/i686/libjxl_threads.a winlibs/i686/libjxl_cms.a \
+               winlibs/i686/liblcms2.a winlibs/i686/libhwy.a \
+               winlibs/i686/libbrotlienc.a winlibs/i686/libbrotlidec.a \
+               winlibs/i686/libbrotlicommon.a
+HAVE_WINLIBS_X64 := $(wildcard winlibs/x86_64/libcharls.a)
+HAVE_WINLIBS_X86 := $(wildcard winlibs/i686/libcharls.a)
+
+# --- Windows JPEG-LS for the DLL (separate vendor set, posix thread model) --
+# The DLL MUST be built with the posix-thread-model mingw compiler (see the
+# dll target's thread-model check below) to avoid a crash at DLL_PROCESS_
+# DETACH. The plain-compiler winlibs/ above are ABI-incompatible with that
+# (their libjxl_threads.a references __gthr_win32_* symbols, not __gthr_
+# posix_*), so the DLL gets its own posix-built vendor set under
+# winlibs-dll/ instead of reusing winlibs/ — see winlibs-dll/README.md.
+# dll doesn't go through CROSS_FLAGS/WIN64/WIN32 (build_lib_pkg.sh invokes it
+# directly via CXX=<mingw-triple>-posix, sharing plumbing with the native
+# Linux dll/so targets), so arch must be sniffed from $(CXX)'s name instead
+# of a distinct target name.
+WINLIBS_DLL_X64  = winlibs-dll/x86_64/libcharls.a winlibs-dll/x86_64/libjxl.a \
+                    winlibs-dll/x86_64/libjxl_threads.a winlibs-dll/x86_64/libjxl_cms.a \
+                    winlibs-dll/x86_64/liblcms2.a winlibs-dll/x86_64/libhwy.a \
+                    winlibs-dll/x86_64/libbrotlienc.a winlibs-dll/x86_64/libbrotlidec.a \
+                    winlibs-dll/x86_64/libbrotlicommon.a
+WINLIBS_DLL_X86  = winlibs-dll/i686/libcharls.a winlibs-dll/i686/libjxl.a \
+                    winlibs-dll/i686/libjxl_threads.a winlibs-dll/i686/libjxl_cms.a \
+                    winlibs-dll/i686/liblcms2.a winlibs-dll/i686/libhwy.a \
+                    winlibs-dll/i686/libbrotlienc.a winlibs-dll/i686/libbrotlidec.a \
+                    winlibs-dll/i686/libbrotlicommon.a
+HAVE_WINLIBS_DLL_X64 := $(wildcard winlibs-dll/x86_64/libcharls.a)
+HAVE_WINLIBS_DLL_X86 := $(wildcard winlibs-dll/i686/libcharls.a)
+
+ifneq ($(findstring i686,$(CXX)),)
+  DLL_ARCH         := i686
+  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_DLL_X86)
+  DLL_WINLIBS      := $(WINLIBS_DLL_X86)
+else
+  DLL_ARCH         := x86_64
+  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_DLL_X64)
+  DLL_WINLIBS      := $(WINLIBS_DLL_X64)
 endif
 
 CSRC     = $(wildcard *.c)
@@ -122,6 +182,9 @@ lib-tests: lib
 
 dll: JLS=0
 dll: CXXFLAGS += -DBUILD_DLL
+ifneq ($(HAVE_DLL_WINLIBS),)
+dll: CXXFLAGS += $(WINJLS_DEFS) $(WINLIBS_INC)
+endif
 # Self-contained DLL: statically link libgcc / libstdc++ / winpthread so the
 # shipped packJPG.dll has no external runtime DLL dependencies (it can be
 # dropped next to a host .exe on a clean Win7/Win10 box). Without these,
@@ -146,7 +209,12 @@ dll: $(OBJ)
 	          echo "         make dll CXX=$(CXX)-posix"; \
 	          exit 1 ;; \
 	 esac
+ifneq ($(HAVE_DLL_WINLIBS),)
+	$(CXX) -shared -o $(TARGET).dll $^ $(LDFLAGS) $(DLL_WINLIBS)
+else
+	@echo "[--] winlibs/$(DLL_ARCH) not found — building dll without JPEG-LS"
 	$(CXX) -shared -o $(TARGET).dll $^ $(LDFLAGS)
+endif
 
 # --- Unix shared library (.so) -----------------------------------------------
 # Native Linux/Unix shared object. Same C-linkage API as the Windows DLL.
@@ -189,28 +257,9 @@ CROSS_FLAGS = -I. -O3 -Wall -funroll-loops -ffast-math \
               -fomit-frame-pointer -std=c++17 \
               -D_WIN32_WINNT=0x0601 -DWINVER=0x0601
 CROSS_LD    = -static -static-libgcc -static-libstdc++
-
-# --- Windows JPEG-LS (vendored) ----------------------------------------------
-# No mingw packages of CharLS/libjxl exist, so the static libs are cross-
-# compiled once and vendored under winlibs/ instead of built per-release —
-# see winlibs/README.md for the reproducible build recipe. Auto-detects via
-# file presence; a checkout missing winlibs/ (e.g. a stripped-down fork)
-# falls back to no-JPEG-LS on Windows rather than failing the build.
-WINLIBS_INC  = -Iwinlibs/include
-WINJLS_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE
-# Link order matters: libcharls before libjxl before libjxl's own deps.
-WINLIBS_X64  = winlibs/x86_64/libcharls.a winlibs/x86_64/libjxl.a \
-               winlibs/x86_64/libjxl_threads.a winlibs/x86_64/libjxl_cms.a \
-               winlibs/x86_64/liblcms2.a winlibs/x86_64/libhwy.a \
-               winlibs/x86_64/libbrotlienc.a winlibs/x86_64/libbrotlidec.a \
-               winlibs/x86_64/libbrotlicommon.a
-WINLIBS_X86  = winlibs/i686/libcharls.a winlibs/i686/libjxl.a \
-               winlibs/i686/libjxl_threads.a winlibs/i686/libjxl_cms.a \
-               winlibs/i686/liblcms2.a winlibs/i686/libhwy.a \
-               winlibs/i686/libbrotlienc.a winlibs/i686/libbrotlidec.a \
-               winlibs/i686/libbrotlicommon.a
-HAVE_WINLIBS_X64 := $(wildcard winlibs/x86_64/libcharls.a)
-HAVE_WINLIBS_X86 := $(wildcard winlibs/i686/libcharls.a)
+# WINLIBS_INC/WINJLS_DEFS/WINLIBS_X64/WINLIBS_X86/HAVE_WINLIBS_X64/X86 are
+# defined earlier (near the JLS auto-detect section) so the dll target can
+# reference them too.
 
 bin:
 	mkdir -p bin
