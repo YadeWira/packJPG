@@ -1,5 +1,84 @@
 # packJPG Changelog
 
+## v5.0a (2026-07-17) — JPEG-LS everywhere, legacy x64 goes official
+
+> Follow-up to v5.0: closes the two gaps that release left open. JPEG-LS
+> now works on every shipped Windows artifact (not just Linux), and the
+> x64 legacy (Windows 7/8) build moves from community-maintained to
+> officially supported, same bar as x86. **On-disk `.pjg` format is
+> unchanged** — this is a platform/support-policy release, not a format
+> break.
+
+### Platform support changes
+
+- **x64 legacy build (Windows 7/8) is now officially supported** —
+  tested by the maintainer on real hardware/VM before each release,
+  same bar as x86. Previously community-maintained.
+- **Modern win-x86 CLI target revived** (`packJPG_win_x86.exe`,
+  previously dropped in v5.0 as "vanishingly small audience") — brought
+  back specifically to carry JPEG-LS to 32-bit Windows.
+
+### JPEG-LS on Windows
+
+JPEG-LS (`.jls`) recompression, added in v5.0 for Linux x64 only, now
+works on every Windows build:
+
+- **`source/` win-x64 / win-x86** — CharLS 2.4.2 + libjxl 0.11.2 (+
+  highway/brotli/lcms2) cross-compiled once and vendored under
+  `source/winlibs/` (no MinGW packages of either library exist).
+  `make win-x64`/`make win-x86` and `build_all.sh` auto-detect the
+  vendored libs by file presence and fall back to no-JPEG-LS if absent
+  (e.g. a stripped-down fork).
+- **`sourcelegacy/` (Windows 7/8, x86 + x64)** — same vendored libs,
+  wired into the C++14/Win32-API legacy tree (`JLS=1` by default).
+  Initial port contributed by the sibling `packJPG-lab` fork, reviewed
+  and merged here.
+- **`packJPG.dll` / library SDK archives** — the DLL needed its own
+  vendor set (`source/winlibs-dll/`, posix thread model): the DLL must
+  be built with the posix-model mingw compiler to avoid a crash at
+  `DLL_PROCESS_DETACH`, but the plain-compiler `winlibs/` libjxl is
+  ABI-incompatible with that (`__gthr_win32_*` vs `__gthr_posix_*`
+  symbols). `build_lib_pkg.sh`'s win64/win32 archives now ship JPEG-LS
+  automatically, transparent to the library API.
+
+### Bug fixes
+
+- **sourcelegacy JPEG-LS decompress crash** (found during review of the
+  packJPG-lab port, before merge): `process_file()`'s F_JPG/F_PJG
+  dispatch was missing the `if (!jpg_jpegls)` guard around
+  `adapt_icos`/`unpredict_dc`/`recode_jpeg` that `source/` already has.
+  JPEG-LS images never go through the normal baseline-JPEG scan setup,
+  so `recode_jpeg()` wrote through an unallocated `scnp` pointer —
+  null-pointer write, reproduced identically on both x86 and x64 under
+  Wine. Fixed before merge; never shipped.
+- **`-ver` false-positive on JPEG-LS decompress** (pre-existing since
+  v5.0's JPEG-LS launch, affecting `source/` too): the decompress
+  verify path (`x -ver`) called `decode_jpeg` and friends unconditionally
+  on the re-read merged output. JPEG-LS has no baseline Huffman/DCT scan
+  structure, so the entropy-decode loop didn't consume the bitstream
+  correctly, leaving a bogus "surplus data found after coded image
+  data" warning on every JPEG-LS `-ver` decompress. Not a crash (caught
+  as a warning), but a real false positive — fixed with the same
+  `jpg_jpegls` guard pattern, on both `source/` and `sourcelegacy/`.
+- **`padbit` declared as bare `char`** — heap-buffer-overflow on ARM64.
+  x86_64's char defaults to signed, so the `-1` sentinel worked by
+  accident; AArch64 defaults to unsigned char, silently turning `-1`
+  into `255` and corrupting the arithmetic coder's model. Fixed by
+  declaring it `signed char` explicitly across `source/`, `sourcePre/`,
+  and `sourcelegacy/`. Verified natively with `-funsigned-char` and
+  under real ARM64 via `qemu-user`.
+- Two pre-existing `cross-platform-verification` CI bugs fixed: `set -e`
+  was killing the round-trip step before its own skip-handling could
+  run, and a comment misattributed a compress-skip branch to an
+  "ImageMagick JPEG quirk" when the actual cause was the padbit bug
+  above.
+
+### Tooling
+
+- **`build_lib_pkg.sh`** — new script automating the library/SDK
+  release archives (`packJPG-<ver>-{linux-x64,win64,win32}-lib.{tar.gz,zip}`),
+  previously built and uploaded by hand.
+
 ## v5.0 (2026-07-16) — new LTS baseline: bomb-guard, JPEG-LS, drops Windows XP
 
 > Major version bump, not a v4.0g bugfix nor a v4.1 feature-only release —
