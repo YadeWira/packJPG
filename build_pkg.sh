@@ -75,18 +75,33 @@ else
     fail "No C++ compiler found (clang++ or g++ required)"
 fi
 
-# JPEG-LS support (requires libcharls-dev + libjxl-dev): auto-detect via a
-# throwaway link probe, same pattern as source/Makefile and build_all.sh.
+# JPEG-LS support: prefer the vendored static libs under source/linuxlibs/
+# (no runtime dependency at all — avoids the class of bug that broke the
+# v5.0a .deb, where a dynamically-linked binary's Depends drifted out of
+# sync with whatever libjxl/libcharls .so the build machine happened to
+# have). Falls back to a dynamic-link probe against system libcharls-dev/
+# libjxl-dev if the vendored libs aren't present.
 JLS_SRC=""
 JLS_DEFINE=""
 JLS_LIBS=""
-if echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
+# $SRC_DIR-prefixed: used for the existence check below (runs at repo root).
+# Unprefixed (linuxlibs/...): used in JLS_LIBS/JLS_DEFINE, which are consumed
+# by the compile command inside `cd "$SRC_DIR"` further down.
+if [ -f "$SRC_DIR/linuxlibs/x86_64/libcharls.a" ]; then
+    LINUXLIBS="linuxlibs/x86_64"
+    JLS_SRC="jpegls.cpp"
+    JLS_DEFINE="-DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include"
+    JLS_LIBS="$LINUXLIBS/libcharls.a $LINUXLIBS/libjxl.a $LINUXLIBS/libjxl_threads.a \
+              $LINUXLIBS/libjxl_cms.a $LINUXLIBS/liblcms2.a $LINUXLIBS/libhwy.a \
+              $LINUXLIBS/libbrotlienc.a $LINUXLIBS/libbrotlidec.a $LINUXLIBS/libbrotlicommon.a"
+    ok "JPEG-LS support detected (vendored static libs, no runtime deps)"
+elif echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
     JLS_SRC="jpegls.cpp"
     JLS_DEFINE="-DHAVE_JPEGLS"
     JLS_LIBS="-lcharls -ljxl -ljxl_threads"
-    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found)"
+    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found, dynamic)"
 else
-    skip "JPEG-LS support disabled (libcharls-dev/libjxl-dev not found)"
+    skip "JPEG-LS support disabled (no vendored libs, libcharls-dev/libjxl-dev not found)"
 fi
 
 # ─── Build binary ────────────────────────────────────────────────────────────

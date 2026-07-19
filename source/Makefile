@@ -23,8 +23,24 @@ LIBS     = -lpthread
 # Cross-compile targets (win-*) default to JLS=0 and use the vendored
 # winlibs/ static libs instead (see below) — no mingw packages exist.
 # dll auto-detects winlibs/ the same way (see DLL_WINLIBS wiring below).
+#
+# Native Linux prefers the vendored static libs under linuxlibs/ (see below)
+# over this dynamic-link probe — a dynamically-linked binary depends on
+# whatever libjxl/libcharls .so happens to be installed on the BUILD machine,
+# which silently breaks the .deb on any other distro/version (this bit the
+# v5.0a release: built against libjxl.so.0.7 on the CI runner, installed fine
+# via apt but crashed at runtime on a system with only libjxl.so.0.11).
+# Static linking removes the runtime dependency entirely.
 JLS ?= $(shell echo 'int main(){}' | $(CXX) $(CXXFLAGS) -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null && echo 1 || echo 0)
-ifeq ($(JLS),1)
+HAVE_LINUXLIBS_X64 := $(wildcard linuxlibs/x86_64/libcharls.a)
+ifneq ($(HAVE_LINUXLIBS_X64),)
+  CXXFLAGS += -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include
+  LIBS     += linuxlibs/x86_64/libcharls.a linuxlibs/x86_64/libjxl.a \
+              linuxlibs/x86_64/libjxl_threads.a linuxlibs/x86_64/libjxl_cms.a \
+              linuxlibs/x86_64/liblcms2.a linuxlibs/x86_64/libhwy.a \
+              linuxlibs/x86_64/libbrotlienc.a linuxlibs/x86_64/libbrotlidec.a \
+              linuxlibs/x86_64/libbrotlicommon.a
+else ifeq ($(JLS),1)
   CXXFLAGS += -DHAVE_JPEGLS
   LIBS     += -lcharls -ljxl -ljxl_threads
 endif

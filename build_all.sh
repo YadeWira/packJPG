@@ -47,22 +47,35 @@ else
     fail "No C++ compiler found (clang++ or g++ required)"
 fi
 
-# JPEG-LS support (requires libcharls-dev + libjxl-dev): auto-detect via a
-# throwaway link probe, same pattern as source/Makefile's JLS auto-detect.
-# This probe is Linux-only; Windows/legacy targets get JPEG-LS via the
-# vendored source/winlibs/ static libs instead (see winlibs_link() below
-# and sourcelegacy/Makefile's own JLS=1 default).
+linuxlibs_link() {
+    local d="linuxlibs/x86_64"
+    echo "$d/libcharls.a $d/libjxl.a $d/libjxl_threads.a $d/libjxl_cms.a" \
+         "$d/liblcms2.a $d/libhwy.a $d/libbrotlienc.a $d/libbrotlidec.a $d/libbrotlicommon.a"
+}
+
+# JPEG-LS support: prefer the vendored static libs under source/linuxlibs/
+# (zero runtime dependency — a dynamically-linked binary's Depends can drift
+# out of sync with whatever libjxl/libcharls .so the build machine happens
+# to have, which is exactly what broke the v5.0a .deb: built against
+# libjxl.so.0.7 on CI, crashed on any system without that exact SONAME).
+# Falls back to a dynamic-link probe against system libcharls-dev/libjxl-dev
+# if the vendored libs aren't present (e.g. a stripped-down fork).
 # JLS_LIBS must stay after $SRC/$JLS_SRC on the command line (linker order).
 JLS_SRC=""
 JLS_DEFINE=""
 JLS_LIBS=""
-if echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
+if [ -f "$SRC_DIR/linuxlibs/x86_64/libcharls.a" ]; then
+    JLS_SRC="jpegls.cpp"
+    JLS_DEFINE="-DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include"
+    JLS_LIBS="$(linuxlibs_link)"
+    ok "JPEG-LS support detected (vendored static libs, no runtime deps)"
+elif echo 'int main(){}' | $CXX $CFLAGS -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null; then
     JLS_SRC="jpegls.cpp"
     JLS_DEFINE="-DHAVE_JPEGLS"
     JLS_LIBS="-lcharls -ljxl -ljxl_threads"
-    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found)"
+    ok "JPEG-LS support detected (libcharls-dev + libjxl-dev found, dynamic)"
 else
-    skip "JPEG-LS support disabled (libcharls-dev/libjxl-dev not found)"
+    skip "JPEG-LS support disabled (no vendored libs, libcharls-dev/libjxl-dev not found)"
 fi
 
 (cd "$SRC_DIR" && $CXX $CFLAGS $LTO -DUNIX $JLS_DEFINE \

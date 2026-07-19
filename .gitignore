@@ -32,6 +32,10 @@
 # source/winlibs-dll/ is the same, rebuilt with the posix thread model
 # for packJPG.dll (see source/winlibs-dll/README.md).
 !/source/winlibs-dll/**/*.a
+# source/linuxlibs/ is vendored (static CharLS+libjxl for Linux, avoids the
+# runtime-dependency drift that broke the v5.0a .deb) — deliberately
+# committed, not built. See source/linuxlibs/README.md.
+!/source/linuxlibs/**/*.a
 
 # Executables
 *.exe
