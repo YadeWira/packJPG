@@ -139,12 +139,29 @@ if $BUILD_DEB; then
         INSTALLED_SIZE=$(du -sk "$STAGING/usr" | cut -f1)
 
         # Runtime deps for JPEG-LS, if the binary was linked against it.
-        # Package names carry the SONAME (libjxl0.11) per Debian convention —
-        # bump these if the build machine's libjxl/libcharls major version
-        # changes upstream.
+        # Debian/Ubuntu package names carry the SONAME (e.g. libjxl0.7 vs
+        # libjxl0.11) and differ across distro versions — a hardcoded name
+        # silently breaks on any build machine whose libjxl/libcharls major
+        # version differs from whatever the hardcode assumed (this bit us:
+        # the v5.0a .deb was built where libjxl-dev resolved to a libjxl.so.0.7
+        # binary, but Depends said libjxl0.11 — installed fine, wouldn't run).
+        # Fix: ask dpkg which package actually owns each .so the binary needs.
         DEB_DEPENDS=""
         if [ -n "$JLS_LIBS" ]; then
-            DEB_DEPENDS="Depends: libcharls2, libjxl0.11"
+            NEEDED_SONAMES=$(objdump -p "$STAGING/usr/bin/packjpg" | \
+                awk '/NEEDED/ && /libcharls|libjxl/ {print $2}')
+            JLS_PKG_LIST=""
+            for soname in $NEEDED_SONAMES; do
+                pkg=$(dpkg -S "$soname" 2>/dev/null | head -1 | cut -d: -f1)
+                if [ -z "$pkg" ]; then
+                    fail ".deb build: no installed package provides $soname (needed by the binary) — install the matching runtime package or rebuild without JPEG-LS"
+                fi
+                JLS_PKG_LIST="$JLS_PKG_LIST"$'\n'"$pkg"
+            done
+            JLS_PKGS=$(echo "$JLS_PKG_LIST" | sed '/^$/d' | sort -u | paste -sd, - | sed 's/,/, /g')
+            if [ -n "$JLS_PKGS" ]; then
+                DEB_DEPENDS="Depends: $JLS_PKGS"
+            fi
         fi
 
         # A blank line ends a control-file stanza, so filter it out when
