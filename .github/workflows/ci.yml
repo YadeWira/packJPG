@@ -161,3 +161,17 @@ jobs:
           git add .
           git commit -m "apt: publish packjpg ${{ github.event.inputs.tag || github.ref_name }}"
           git push
+
+      - name: Notify shared pack-apt repo
+        # Feeds the same .deb into the Pack Family shared apt repo
+        # (github.com/YadeWira/pack-apt) alongside packJPG's own gh-pages
+        # above. PACK_APT_TOKEN is a fine-grained PAT (Contents: read/write,
+        # scoped only to pack-apt) — GITHUB_TOKEN can't dispatch across repos.
+        env:
+          GH_TOKEN: ${{ secrets.PACK_APT_TOKEN }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          gh api repos/YadeWira/pack-apt/dispatches \
+            -f event_type=deb-release \
+            -f "client_payload[repo]=YadeWira/packJPG" \
+            -f "client_payload[tag]=$TAG"
