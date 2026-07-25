@@ -76,7 +76,7 @@ ok "dist/packJPG-${VERSION}-linux-x64-lib.tar.gz"
 # ─── Windows (win64 / win32) ──────────────────────────────────────────────────
 
 build_win_lib() {
-    local ARCH="$1" CXX_POSIX="$2" WINLIBS_DLL_DIR="$3"
+    local ARCH="$1" CXX_POSIX="$2" WINLIBS_ARCH_DIR="$3"
     echo ""
     echo "==> Windows $ARCH library"
 
@@ -86,7 +86,7 @@ build_win_lib() {
     fi
 
     local WIN_JLS_NOTE=""
-    [ -f "source/winlibs-dll/$WINLIBS_DLL_DIR/libcharls.a" ] && \
+    [ -f "source/winlibs/$WINLIBS_ARCH_DIR/libcharls.a" ] && \
         WIN_JLS_NOTE=" + JPEG-LS (vendored static libs, no runtime deps)"
 
     (cd source && make clean >/dev/null \

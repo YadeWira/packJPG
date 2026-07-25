@@ -4,10 +4,10 @@ packJPG is a lossless JPEG compression program. It compresses JPEG files
 to the PJG format and decompresses them back with bit-for-bit identical
 reconstruction. Typical file size reduction: ~20%.
 
-Optionally (Linux x64 builds only — see [JPEG-LS support](#jpeg-ls-support)),
-it also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller.
+It also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller —
+see [JPEG-LS support](#jpeg-ls-support).
 
-**Supported platforms:** Linux x64, Windows 10/11 (x86 + x64), Windows 7 / 8 (x86 + x64).
+**Supported platforms:** Linux x64, Windows 7 SP1+ (x86 + x64).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
 
@@ -42,10 +42,8 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 
 | File | Target |
 |---|---|
-| `packJPG_win_x64.exe` | Windows 10/11 64-bit (also runs on Win7/8 x64 without ANSI colors) |
-| `packJPG_win_x86.exe` | Windows 10/11 32-bit |
-| `packJPG_win_legacy_x64.exe` | Windows 7 / 8 — 64-bit |
-| `packJPG_win_legacy_x86.exe` | Windows 7 / 8 — 32-bit |
+| `packJPG_win_x64.exe` | Windows 7 SP1+ 64-bit (no ANSI colors before Windows 10) |
+| `packJPG_win_x86.exe` | Windows 7 SP1+ 32-bit (no ANSI colors before Windows 10) |
 
 
 ## Usage
@@ -190,13 +188,11 @@ packJPG a -th$((N/3)) -sfth -o -np *.jpg
 This fills all N cores: `N/3` files in parallel, each using 3 threads.
 On an 18-core box: `-th6 -sfth` = 6 × 3 = 18 threads.
 
-`-th<n>` is a `source/`-build feature (Linux + Windows 10/11 x64). The
-`sourcelegacy/` build ignores it and runs single-threaded — see the
-[Legacy Windows build](#legacy-windows-build)
-section for why.
+`-th<n>` works on every release binary (Linux and Windows, both archs) —
+one codebase (`source/`), real `thread_local`.
 
-**Ctrl+C behavior.** On `source/` builds, Ctrl+C in MT batch stops
-workers cleanly and removes any partial output files.
+**Ctrl+C behavior.** Ctrl+C in MT batch stops workers cleanly and removes
+any partial output files.
 
 ### `-sfth` (single-file parallel)
 
@@ -405,11 +401,14 @@ format**:
 
 | Source tree | Target platforms | Format produced |
 |---|---|---|
-| `source/` | Linux, macOS, Windows 10/11 | byte `0x28` + sub-marker `0x02` |
-| `sourcelegacy/` | Windows 7 / 8 (x86 + x64) | byte `0x28` + sub-marker `0x02` (full v4.0b parity) |
+| `source/` | Linux, macOS, Windows 7 SP1+ (x86 + x64) | byte `0x28` + sub-marker `0x02` |
 
-Both trees produce the same `.pjg` format — files are interchangeable
-between them. v4.0c through v5.0 did not change the on-disk format —
+A single codebase now covers every platform — the former `sourcelegacy/`
+(C++14, Win32-API-only) tree existed solely to support Windows XP, which
+v5.0 dropped entirely; once Windows 7 became the floor, `source/`'s
+C++17/`std::filesystem` code already worked there, making the second
+codebase redundant (removed in v5.0c). v4.0c through v5.0 did not change
+the on-disk format —
 their `.pjg` output is byte-exact/interchangeable with v4.0b's (v5.0
 was verified bidirectionally against v4.0f: each decodes the other's
 output byte-exact for non-JPEG-LS content).
@@ -455,44 +454,6 @@ are no longer decoded — keep an old binary on hand if you have v3.1d
 archives.
 
 
-## Legacy Windows build
-
-The `sourcelegacy/` directory contains the legacy-Windows port for both
-x86 and x64. Compiled with C++14 and Win32 API in place of
-`std::filesystem` (`xp_compat.h` provides the shim layer), using
-`CreateThread` instead of C++17 `<thread>`/`<future>`.
-
-**Both x86 and x64 (Windows 7 / 8) are officially supported** — tested
-by the maintainer on real hardware/VM before each release.
-
-**Threading on the legacy build:** single-file parallel compression
-(`-sfth`, Y/Cb/Cr on three Win32 threads) is supported — each thread
-works on a separate component, so there is no shared mutable state.
-Multi-file batch threading (`-thN`) is **not** active on the legacy
-build: the legacy toolchain has no working `thread_local`, so the codec's
-per-file state is a single process-global, and running several files
-concurrently would race on it. The legacy CLI therefore ignores `-thN`
-and processes files single-threaded. (The `source/` build, which has
-real `thread_local`, runs `-thN` MT batch with auto-verify.)
-
-The on-disk `.pjg` format matches `source/` exactly (diagonal DC
-neighbor context, `0x02` sub-marker, single accepted format byte), so
-files are fully interchangeable between the two builds, including
-JPEG-LS (see [JPEG-LS support](#jpeg-ls-support)) — the vendored
-`winlibs/` static libs are linked in by default (`JLS=1`).
-
-To build from `sourcelegacy/`:
-
-```
-make        # -> bin/packJPG_win_legacy_x86.exe + bin/packJPG_win_legacy_x64.exe
-make x86    # -> x86 only
-make x64    # -> x64 only
-make dev    # -> bin/packJPG_win_legacy_x86_dev.exe (with developer functions)
-```
-
-Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package).
-
-
 ## Building from source
 
 ### Prerequisites
@@ -500,16 +461,23 @@ Requires `i686-w64-mingw32-g++` and `x86_64-w64-mingw32-g++` (mingw-w64 package)
 | Target | Compiler |
 |---|---|
 | Linux x64 | `g++` ≥ 13 or `clang++` ≥ 18 (C++17) |
-| Windows x64 | `x86_64-w64-mingw32-g++` |
-| Windows legacy x86 (7/8) | `i686-w64-mingw32-g++` (C++14 mode) |
-| Windows legacy x64 (7/8) | `x86_64-w64-mingw32-g++` (C++14 mode) |
+| Windows x64 (Windows 7 SP1+) | `x86_64-w64-mingw32-g++-posix` |
+| Windows x86 (Windows 7 SP1+) | `i686-w64-mingw32-g++-posix` |
+
+The `-posix` (not plain/win32-model) mingw compiler variant is required:
+the plain alias doesn't implement `std::async`/`std::future` at all on
+some distros' mingw-w64 packaging (compile-time errors) — see
+`source/winlibs/README.md` for the full story.
 
 On Debian/Ubuntu:
 ```
 sudo apt install build-essential mingw-w64
 ```
 
-Optional, Linux x64 only — enables [JPEG-LS support](#jpeg-ls-support):
+JPEG-LS support (see [JPEG-LS support](#jpeg-ls-support)) works out of
+the box in a full checkout via the vendored static libs — no extra
+packages needed. Only relevant for a stripped-down fork/checkout
+missing `source/linuxlibs/`, as a Linux x64 dynamic-link fallback:
 ```
 sudo apt install libcharls-dev libjxl-dev
 ```
@@ -518,14 +486,12 @@ sudo apt install libcharls-dev libjxl-dev
 
 | Script | What it builds |
 |---|---|
-| `build_all.sh` | All targets: Linux x64, Windows x64, Windows legacy x86 + x64 |
-| `build_legacy.sh` | Windows legacy x86 + x64 only |
+| `build_all.sh` | All targets: Linux x64, Windows x64, Windows x86 |
 | `build_pkg.sh` | Linux packages: `.tar.gz`, `.deb`, `.rpm`, `.snap` |
 | `build_lib_pkg.sh` | Library/SDK archives for embedders: Linux x64, win64, win32 |
 
 ```bash
 bash build_all.sh              # all binaries → dist/
-bash build_legacy.sh           # legacy only
 bash build_pkg.sh              # all packages
 bash build_pkg.sh --deb --rpm  # selected formats only
 bash build_lib_pkg.sh          # library/SDK archives
@@ -537,8 +503,6 @@ Outputs in `dist/`:
 dist/packJPG_linux_x64
 dist/packJPG_win_x64.exe
 dist/packJPG_win_x86.exe
-dist/packJPG_win_legacy_x86.exe
-dist/packJPG_win_legacy_x64.exe
 dist/packjpg-<ver>-linux-x64.tar.gz
 dist/packjpg_<ver>_amd64.deb
 dist/packjpg-<ver>-1.x86_64.rpm
@@ -575,49 +539,42 @@ error rather than silently producing lossy or non-reproducible output.
 
 | Build | JPEG-LS? | Notes |
 |---|---|---|
-| Linux x64 (`packJPG_linux_x64`) | ✅ | via system `libcharls-dev`/`libjxl-dev` |
-| Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored cross-compiled static libs |
-| Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored cross-compiled static libs |
-| `sourcelegacy/` (Windows 7/8, x86 + x64) | ✅ | via vendored cross-compiled static libs |
-| `packJPG.dll` / library SDK archives | ✅ | via a separate posix-thread-model vendored set (`winlibs-dll/`) |
+| Linux x64 (`packJPG_linux_x64`) | ✅ | via vendored static libs (`source/linuxlibs/`), zero runtime deps |
+| Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored static libs (`source/winlibs/`) |
+| Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored static libs (`source/winlibs/`) |
+| `packJPG.dll` / library SDK archives | ✅ | via the same `winlibs/` vendored set (posix thread model, shared with the CLI) |
 
-No MinGW *packages* of CharLS/libjxl exist, so the Windows CLI builds
-link against static libs cross-compiled once and vendored under
-`source/winlibs/` (`x86_64`/`i686`) rather than built per-release — see
-`source/winlibs/README.md` for the reproducible cross-compile recipe.
+No MinGW *packages* of CharLS/libjxl exist, and dynamically linking
+against the system's `libcharls`/`libjxl` on Linux ties the binary's
+runtime dependency to whichever SONAME the build machine happens to
+have (this broke a `.deb` release once — see CHANGELOG v5.0b). Both
+Windows and Linux builds instead link static libs cross-compiled/built
+once and vendored under `source/winlibs/` and `source/linuxlibs/`
+respectively — see their READMEs for the reproducible build recipes.
 A `.pjg` produced from JPEG-LS still can't be decoded on a build that
 lacks JPEG-LS support (clean error, not a crash).
 
 ### Building with JPEG-LS
 
 ```bash
-# Linux (needs libcharls-dev + libjxl-dev)
-sudo apt install libcharls-dev libjxl-dev   # Debian/Ubuntu
 cd source
-make            # auto-detects the libraries above
-make JLS=1       # force on (fails to build if the libraries are missing)
-make JLS=0       # force off — builds with zero extra dependencies
+make            # auto-detects source/linuxlibs/ (Linux) or falls back to
+                 # a dynamic libcharls-dev/libjxl-dev probe if missing
+make JLS=0      # force off — builds with zero extra dependencies
 
 # Windows cross-compile (needs source/winlibs/, already vendored in a full checkout)
 make win-x64    # auto-detects source/winlibs/x86_64/
 make win-x86    # auto-detects source/winlibs/i686/
 
-# sourcelegacy/ (Windows 7/8) — JLS=1 by default, links the same winlibs/
-cd ../sourcelegacy
-make            # -> x86 + x64, both with JPEG-LS
-make JLS=0      # force off
-
-# packJPG.dll (needs source/winlibs-dll/, a separate posix-thread-model
-# vendor set — see source/winlibs-dll/README.md for why)
-cd ../source
-make dll CXX=x86_64-w64-mingw32-g++-posix   # win64, auto-detects winlibs-dll/x86_64/
-make dll CXX=i686-w64-mingw32-g++-posix     # win32, auto-detects winlibs-dll/i686/
+# packJPG.dll (needs source/winlibs/, same vendored set as the CLI —
+# posix thread model, see source/winlibs/README.md)
+make dll CXX=x86_64-w64-mingw32-g++-posix   # win64, auto-detects winlibs/x86_64/
+make dll CXX=i686-w64-mingw32-g++-posix     # win32, auto-detects winlibs/i686/
 ```
 
-`build_all.sh` does the same auto-detection for all release binaries,
-`source/` and `sourcelegacy/` alike. Without the relevant libraries
-present, everything still builds — `.jls` files are just skipped like
-any other unsupported file type.
+`build_all.sh` does the same auto-detection for all release binaries.
+Without the relevant vendored libs present, everything still builds —
+`.jls` files are just skipped like any other unsupported file type.
 
 
 ## Known limitations

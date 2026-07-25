@@ -7,6 +7,24 @@ them from source is a real, non-instant task (cmake + several sub-projects),
 so the result is vendored here and committed instead of rebuilt on every
 release.
 
+Built with the **posix-thread-model** mingw compilers
+(`x86_64-w64-mingw32-g++-posix`, `i686-w64-mingw32-g++-posix`), used
+uniformly for every consumer (win-x64/win-x86 CLI and `packJPG.dll`).
+Not the plain/win32-model alias — that turned out to be a portability
+trap on two fronts: it doesn't implement `std::async`/`std::future` at
+all on some distros' mingw-w64 packaging (compile-time "declared but
+never defined" errors, found when CI's build image was pinned to
+`ubuntu-22.04`), and separately it crashes the DLL at
+`DLL_PROCESS_DETACH` (see the `dll` target's thread-model check in
+`source/Makefile`). Earlier revisions of this vendoring kept two
+ABI-incompatible copies (a plain-compiler `winlibs/` for the CLI, a
+posix-compiler `winlibs-dll/` just for the DLL) — consolidated into this
+single posix-built set once the CLI needed posix too, for the same
+`std::future` reason above. (The `sourcelegacy/` C++14 tree, an earlier
+third consumer, was removed entirely in v5.0c once Windows XP support
+had already been dropped — `source/`'s C++17 code already worked on the
+Windows 7+ floor, making the separate tree redundant.)
+
 ```
 winlibs/
   include/
@@ -92,8 +110,8 @@ touch lcms/.git   # cmake checks for .git to detect a bundled lcms2
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 set(TOOLCHAIN_PREFIX x86_64-w64-mingw32)
-set(CMAKE_C_COMPILER   ${TOOLCHAIN_PREFIX}-gcc)
-set(CMAKE_CXX_COMPILER ${TOOLCHAIN_PREFIX}-g++)
+set(CMAKE_C_COMPILER   ${TOOLCHAIN_PREFIX}-gcc-posix)
+set(CMAKE_CXX_COMPILER ${TOOLCHAIN_PREFIX}-g++-posix)
 set(CMAKE_RC_COMPILER  ${TOOLCHAIN_PREFIX}-windres)
 set(CMAKE_AR           ${TOOLCHAIN_PREFIX}-ar)
 set(CMAKE_RANLIB       ${TOOLCHAIN_PREFIX}-ranlib)
@@ -173,6 +191,9 @@ After copying new `.a` files, sanity-check before committing:
 cd source
 make win-x64 && make win-x86
 wine bin/packJPG_win_x64.exe a -np some.jls   # or win-x86, via Wine or real Windows
+
+# Also verify the DLL, which shares this same vendor set:
+make dll CXX=x86_64-w64-mingw32-g++-posix
 ```
 
 Round-trip should stay byte-exact — compare against the previous library

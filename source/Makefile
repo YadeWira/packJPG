@@ -50,9 +50,17 @@ endif
 # compiled once and vendored under winlibs/ instead of built per-release —
 # see winlibs/README.md for the reproducible build recipe. Auto-detects via
 # file presence; a checkout missing winlibs/ (e.g. a stripped-down fork)
-# falls back to no-JPEG-LS on Windows rather than failing the build. Used by
-# the win-x64/win-x86 CLI targets (built with the plain, non-posix mingw
-# compiler — see WIN64/WIN32 below).
+# falls back to no-JPEG-LS on Windows rather than failing the build.
+#
+# Built with the posix-thread-model mingw compiler (-posix suffix — see
+# WIN64/WIN32 and the dll target below), used uniformly by every Windows
+# target (win-x64/win-x86 CLI and the dll): the plain/win32-
+# model alias is a portability trap on two fronts — it doesn't implement
+# std::async/std::future at all on some distros' mingw-w64 packaging
+# (compile-time errors, found pinning CI to ubuntu-22.04), and separately
+# it crashes the DLL at DLL_PROCESS_DETACH. A single posix-built vendor set
+# avoids maintaining two ABI-incompatible copies (their libjxl_threads.a
+# would otherwise reference __gthr_win32_* symbols, not __gthr_posix_*).
 WINLIBS_INC  = -Iwinlibs/include
 WINJLS_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE
 # Link order matters: libcharls before libjxl before libjxl's own deps.
@@ -69,38 +77,18 @@ WINLIBS_X86  = winlibs/i686/libcharls.a winlibs/i686/libjxl.a \
 HAVE_WINLIBS_X64 := $(wildcard winlibs/x86_64/libcharls.a)
 HAVE_WINLIBS_X86 := $(wildcard winlibs/i686/libcharls.a)
 
-# --- Windows JPEG-LS for the DLL (separate vendor set, posix thread model) --
-# The DLL MUST be built with the posix-thread-model mingw compiler (see the
-# dll target's thread-model check below) to avoid a crash at DLL_PROCESS_
-# DETACH. The plain-compiler winlibs/ above are ABI-incompatible with that
-# (their libjxl_threads.a references __gthr_win32_* symbols, not __gthr_
-# posix_*), so the DLL gets its own posix-built vendor set under
-# winlibs-dll/ instead of reusing winlibs/ — see winlibs-dll/README.md.
 # dll doesn't go through CROSS_FLAGS/WIN64/WIN32 (build_lib_pkg.sh invokes it
 # directly via CXX=<mingw-triple>-posix, sharing plumbing with the native
 # Linux dll/so targets), so arch must be sniffed from $(CXX)'s name instead
 # of a distinct target name.
-WINLIBS_DLL_X64  = winlibs-dll/x86_64/libcharls.a winlibs-dll/x86_64/libjxl.a \
-                    winlibs-dll/x86_64/libjxl_threads.a winlibs-dll/x86_64/libjxl_cms.a \
-                    winlibs-dll/x86_64/liblcms2.a winlibs-dll/x86_64/libhwy.a \
-                    winlibs-dll/x86_64/libbrotlienc.a winlibs-dll/x86_64/libbrotlidec.a \
-                    winlibs-dll/x86_64/libbrotlicommon.a
-WINLIBS_DLL_X86  = winlibs-dll/i686/libcharls.a winlibs-dll/i686/libjxl.a \
-                    winlibs-dll/i686/libjxl_threads.a winlibs-dll/i686/libjxl_cms.a \
-                    winlibs-dll/i686/liblcms2.a winlibs-dll/i686/libhwy.a \
-                    winlibs-dll/i686/libbrotlienc.a winlibs-dll/i686/libbrotlidec.a \
-                    winlibs-dll/i686/libbrotlicommon.a
-HAVE_WINLIBS_DLL_X64 := $(wildcard winlibs-dll/x86_64/libcharls.a)
-HAVE_WINLIBS_DLL_X86 := $(wildcard winlibs-dll/i686/libcharls.a)
-
 ifneq ($(findstring i686,$(CXX)),)
   DLL_ARCH         := i686
-  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_DLL_X86)
-  DLL_WINLIBS      := $(WINLIBS_DLL_X86)
+  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_X86)
+  DLL_WINLIBS      := $(WINLIBS_X86)
 else
   DLL_ARCH         := x86_64
-  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_DLL_X64)
-  DLL_WINLIBS      := $(WINLIBS_DLL_X64)
+  HAVE_DLL_WINLIBS := $(HAVE_WINLIBS_X64)
+  DLL_WINLIBS      := $(WINLIBS_X64)
 endif
 
 CSRC     = $(wildcard *.c)
@@ -121,6 +109,14 @@ CXXFLAGS += -DUNIX
 RC        =
 RES       =
 UPX       =
+# Statically link libgcc/libstdc++ so the released binary/.so doesn't
+# require a minimum libstdc++.so.6 version at runtime — same portability
+# class of fix as the vendored static CharLS/libjxl (see linuxlibs/
+# README.md) and the CI build-image pin (see .github/workflows/ci.yml): a
+# binary built with a newer GCC on a newer distro otherwise refuses to
+# start on an older one. Added to CXXFLAGS (not LDFLAGS) since `so:`
+# compiles+links in one invocation without referencing $(LDFLAGS).
+CXXFLAGS += -static-libgcc -static-libstdc++
 endif
 
 # --- default rules -----------------------------------------------------------
@@ -267,8 +263,13 @@ clean:
 #   make win-x86        -> bin/packJPG_win_x86.exe
 #   make all-platforms  -> all three
 
-WIN64       = x86_64-w64-mingw32-g++
-WIN32       = i686-w64-mingw32-g++
+# -posix (not the plain/win32-model alias): win32 thread model doesn't
+# implement std::async/std::future on some distros' mingw-w64 packaging
+# (compile-time "declared but never defined" errors) — found pinning CI to
+# ubuntu-22.04, where the default alias differs from what happened to work
+# on other distros. -posix is winpthread-backed, unambiguous everywhere.
+WIN64       = x86_64-w64-mingw32-g++-posix
+WIN32       = i686-w64-mingw32-g++-posix
 CROSS_FLAGS = -I. -O3 -Wall -funroll-loops -ffast-math \
               -fomit-frame-pointer -std=c++17 \
               -D_WIN32_WINNT=0x0601 -DWINVER=0x0601

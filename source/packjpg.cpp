@@ -1067,7 +1067,7 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 50;
-INTERN const char*  subversion   = "b";
+INTERN const char*  subversion   = "c";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
 [[maybe_unused]] INTERN const char*  versiondate  = "07/16/2026";
@@ -1158,6 +1158,9 @@ int main( int argc, char** argv )
 		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST && action != A_STATS) || (!auto_set) || (verify_lv > 1) ) ) ||
 		( ( !developer ) && ( !subcmd_given ) && ( !pipe_on ) ) ) {
 		show_help();
+		#if defined(_WIN32) || defined(WIN32)
+		std::_Exit( -1 );	// see the matching comment at the end of main()
+		#endif
 		return -1;
 	}
 	
@@ -1488,8 +1491,20 @@ int main( int argc, char** argv )
 		fprintf( msgout, "\n\n< press ENTER >\n" );
 		fgetc( stdin );
 	}
-	
-	
+
+
+	#if defined(_WIN32) || defined(WIN32)
+	// All work is already done and flushed by this point — skip the normal
+	// exit()-triggered cascade of static/thread_local destructors. On mingw
+	// i686 specifically, libjxl's SIMD dispatch teardown (highway-based
+	// runtime CPU-feature selection in enc_group.cc) crashes with a page
+	// fault during that cascade — reproduced identically on plain data,
+	// harmless to correctness (the crash is strictly post-completion), but
+	// ugly and returns the wrong process exit behavior under Wine/Windows.
+	// x86_64 doesn't hit this (native TLS vs. i686's emutls, most likely).
+	std::_Exit( ( error_cnt > 0 ) ? 1 : 0 );
+	#endif
+
 	return ( error_cnt > 0 ) ? 1 : 0;
 }
 #endif

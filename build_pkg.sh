@@ -29,7 +29,10 @@ PKG="packjpg"
 
 SRC_DIR="source"
 SRC="aricoder.cpp bitops.cpp packjpg.cpp"
-CFLAGS="-I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17 -DUNIX"
+# -static-libgcc -static-libstdc++: avoids requiring a minimum libstdc++.so.6
+# version at runtime on the end user's machine — same portability class as
+# the vendored static CharLS/libjxl (linuxlibs/) and the CI ubuntu-22.04 pin.
+CFLAGS="-I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17 -DUNIX -static-libgcc -static-libstdc++"
 DIST="dist"
 BINARY="$DIST/packJPG_linux_x64"
 

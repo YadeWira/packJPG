@@ -2,11 +2,16 @@
 # build_all.sh — build all packJPG release targets from project root
 #
 # Targets:
-#   Linux x64                    (native, requires g++ or clang++)
-#   Windows x64                  (requires x86_64-w64-mingw32-g++)
-#   Windows x86                  (requires i686-w64-mingw32-g++)
-#   Windows legacy x86 (Win7/8)  (requires i686-w64-mingw32-g++,    sourcelegacy build)
-#   Windows legacy x64 (Win7/8)  (requires x86_64-w64-mingw32-g++,  sourcelegacy build)
+#   Linux x64      (native, requires g++ or clang++)
+#   Windows x64    (Windows 7 SP1+, requires x86_64-w64-mingw32-g++-posix)
+#   Windows x86    (Windows 7 SP1+, requires i686-w64-mingw32-g++-posix)
+#
+# Single codebase (source/) covers both Windows archs down to Windows 7 —
+# the former sourcelegacy/ (C++14, Win32-API-only) tree existed only to
+# support Windows XP, which v5.0 dropped entirely; once the officially
+# supported floor became Windows 7, source/'s C++17/std::filesystem code
+# already worked there (Win32 APIs std::filesystem needs predate Windows 7
+# by a wide margin), making the second codebase redundant.
 #
 # All binaries are collected into ./dist/
 #
@@ -20,7 +25,10 @@ cd "$(dirname "$0")"
 
 SRC_DIR="source"
 SRC="aricoder.cpp bitops.cpp packjpg.cpp"
-CFLAGS="-I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17"
+# -static-libgcc -static-libstdc++: avoids requiring a minimum libstdc++.so.6
+# version at runtime on the end user's machine — same portability class as
+# the vendored static CharLS/libjxl (linuxlibs/) and the CI ubuntu-22.04 pin.
+CFLAGS="-I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer -std=c++17 -static-libgcc -static-libstdc++"
 CFLAGS_NATIVE="$CFLAGS -march=native"
 # LTO gives ~8% encode speedup via cross-TU inlining (clang only; guard below)
 CFLAGS_LTO="-flto=thin"
@@ -106,7 +114,13 @@ winlibs_link() {
 
 echo ""
 echo "==> Windows x64"
-WIN64="x86_64-w64-mingw32-g++"
+# -posix (not the plain/win32-model alias): the win32 thread model doesn't
+# implement std::async/std::future at all on some distros' mingw-w64
+# packaging (compile-time "declared but never defined" errors) — found
+# pinning CI to ubuntu-22.04, where the default alias differs from what
+# happened to work on other distros. -posix is winpthread-backed and
+# unambiguously supports the full <thread>/<future> API on any distro.
+WIN64="x86_64-w64-mingw32-g++-posix"
 WINDRES64="x86_64-w64-mingw32-windres"
 if ! command -v "$WIN64" &>/dev/null; then
     skip "$WIN64 not found — skipping Windows x64"
@@ -147,7 +161,7 @@ fi
 
 echo ""
 echo "==> Windows x86"
-WIN86="i686-w64-mingw32-g++"
+WIN86="i686-w64-mingw32-g++-posix"
 WINDRES86="i686-w64-mingw32-windres"
 if ! command -v "$WIN86" &>/dev/null; then
     skip "$WIN86 not found — skipping Windows x86"
@@ -182,32 +196,6 @@ else
         && i686-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x86.exe")
     [ -f "$SRC_DIR/icons_x86.o" ] && rm -f "$SRC_DIR/icons_x86.o"
     ok "dist/packJPG_win_x86.exe"
-fi
-
-# ─── Windows legacy x86 + x64 (XP/Vista/7/8) ─────────────────────────────────
-
-echo ""
-echo "==> Windows legacy x86 + x64 (sourcelegacy/)"
-WIN32="i686-w64-mingw32-g++"
-if [[ ! -f sourcelegacy/Makefile ]]; then
-    skip "sourcelegacy/Makefile not found — skipping legacy build"
-elif ! command -v "$WIN32" &>/dev/null; then
-    skip "$WIN32 not found — skipping legacy build"
-    skip "Install with: sudo apt install mingw-w64"
-elif ! command -v "$WIN64" &>/dev/null; then
-    skip "$WIN64 not found — skipping legacy x64 (legacy x86 alone built)"
-    (cd sourcelegacy && make x86)
-    [ -f sourcelegacy/bin/packJPG_win_legacy_x86.exe ] && \
-        cp sourcelegacy/bin/packJPG_win_legacy_x86.exe "$DIST/" && \
-        ok "dist/packJPG_win_legacy_x86.exe"
-else
-    (cd sourcelegacy && make)
-    [ -f sourcelegacy/bin/packJPG_win_legacy_x86.exe ] && \
-        cp sourcelegacy/bin/packJPG_win_legacy_x86.exe "$DIST/" && \
-        ok "dist/packJPG_win_legacy_x86.exe"
-    [ -f sourcelegacy/bin/packJPG_win_legacy_x64.exe ] && \
-        cp sourcelegacy/bin/packJPG_win_legacy_x64.exe "$DIST/" && \
-        ok "dist/packJPG_win_legacy_x64.exe"
 fi
 
 # ─── Summary ─────────────────────────────────────────────────────────────────

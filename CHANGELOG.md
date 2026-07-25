@@ -1,5 +1,76 @@
 # packJPG Changelog
 
+## v5.0c (2026-07-25) — drops sourcelegacy/, one codebase for all platforms
+
+> Removes the `sourcelegacy/` C++14 tree entirely. It existed solely to
+> support Windows XP (Win32 API in place of `std::filesystem`, manual
+> `CreateThread` instead of `<thread>`/`<future>`) — but v5.0 already
+> dropped XP support and moved the documented minimum to Windows 7/8.
+> `source/`'s C++17 code already worked on Windows 7 (the Win32 APIs
+> `std::filesystem` needs predate Windows 7 by a wide margin), so the
+> second codebase had been redundant since that policy change; this
+> release acts on it. No functional loss: `packJPG_win_x64.exe`/
+> `packJPG_win_x86.exe` already covered the same Windows 7 SP1+ floor,
+> verified on real Windows 7 hardware (below). On-disk `.pjg` format
+> unchanged.
+
+### Removed
+
+- `sourcelegacy/` (the whole tree) and `build_legacy.sh`. The
+  `packJPG_win_legacy_x64.exe`/`packJPG_win_legacy_x86.exe` release
+  binaries are gone — `packJPG_win_x64.exe`/`packJPG_win_x86.exe` are
+  the sole Windows binaries now, and already target Windows 7 SP1+.
+
+### Bug fixes
+
+Found while verifying the win-x64/win-x86 CLI could stand alone for
+Windows 7 (all three surfaced from the same root push: requiring the
+posix-thread-model mingw compiler everywhere, to fix a real, previously
+undiscovered portability bug):
+
+- **CI's Linux build image (`ubuntu-latest`) silently rolled to Ubuntu
+  24.04** at some point, and its glibc/GCC baked a `GLIBC_2.38`
+  requirement (`__isoc23_sscanf`, `fmod`) into every released Linux
+  binary/`.deb`/library archive — meaning `packJPG_linux_x64` couldn't
+  even start on Ubuntu 22.04 LTS or Debian 12, a huge chunk of the
+  realistic install base. Pinned the build job to `ubuntu-22.04`
+  (glibc 2.35 floor) and added `-static-libgcc -static-libstdc++` to
+  every Linux link step for extra headroom. Also dropped
+  `libcharls-dev`/`libjxl-dev` from CI's install step — vestigial since
+  v5.0b's static `linuxlibs/` — which incidentally had no package for
+  `libjxl-dev` at all on `ubuntu-22.04`'s default repos.
+- **`win-x86`'s `WIN86` build variable was never actually fixed to the
+  posix-model compiler** in an earlier pass that touched `WIN64`/`WIN32`
+  — a same-named-differently variable trap (`WIN86` for the modern CLI
+  vs. the by-then-removed `WIN32` for legacy). Ubuntu 22.04's plain/
+  win32-model mingw doesn't implement `std::async`/`std::future` at all
+  (compile-time errors) on either arch, so this blocked win-x86 from
+  building there until fixed.
+- **`source/winlibs/`'s vendored libjxl/CharLS were rebuilt from scratch**
+  using the exact same mingw-w64 GCC version CI actually links against
+  (previously built with a newer host GCC, which baked in libstdc++ ABI
+  symbols — `std::__throw_bad_array_new_length()` — absent from Ubuntu
+  22.04's older mingw-w64 GCC 10, an undefined-reference link failure).
+  Also consolidated the DLL's separate posix-built vendor set
+  (`winlibs-dll/`) into `winlibs/` now that the CLI needs posix too —
+  one vendor set instead of two ABI-incompatible copies.
+- **A previously-undiscovered i686-only crash**: once win-x86 moved to
+  the posix compiler, it started faulting at process exit (after all
+  actual work completed and flushed correctly) inside vendored libjxl's
+  SIMD dispatch teardown code (highway-based runtime CPU-feature
+  selection, `enc_group.cc`) — 64-bit and Linux are unaffected. Worked
+  around with `std::_Exit()` at the end of `main()` on Windows builds,
+  skipping the exit()-triggered destructor cascade entirely (safe here:
+  strictly post-completion, no cleanup work is lost).
+
+Verified end-to-end on real hardware, not just Wine: both
+`packJPG_win_x64.exe` and `packJPG_win_x86.exe`, built exactly as CI
+now builds them (Ubuntu 22.04 container, rebuilt `winlibs/`), round-trip
+JPEG-LS and JPEG byte-exact (SHA-256 checked) on a real Windows 7 SP1
+VM with `-ver -sfth` combined, clean exit code, no crash. The Linux
+binary/`.deb` were verified the same way against the real `pack-apt`
+shared repo, `GLIBC_2.35` confirmed as the new ceiling (`objdump -T`).
+
 ## v5.0b (2026-07-25) — Linux .deb portability fix, formalizes post-v5.0a hotfixes
 
 > Retags 3 commits that shipped as GitHub Release asset updates under the

@@ -27,11 +27,9 @@
 *.lib
 
 # source/winlibs/ is vendored (cross-compiled CharLS+libjxl for Windows
-# JPEG-LS, no mingw packages exist) — deliberately committed, not built.
+# JPEG-LS, no mingw packages exist, posix thread model) — deliberately
+# committed, not built. See source/winlibs/README.md.
 !/source/winlibs/**/*.a
-# source/winlibs-dll/ is the same, rebuilt with the posix thread model
-# for packJPG.dll (see source/winlibs-dll/README.md).
-!/source/winlibs-dll/**/*.a
 # source/linuxlibs/ is vendored (static CharLS+libjxl for Linux, avoids the
 # runtime-dependency drift that broke the v5.0a .deb) — deliberately
 # committed, not built. See source/linuxlibs/README.md.
@@ -46,10 +44,9 @@
 /zzz_backup/
 /dist/
 /source/bin/
-/source4xp/bin/
 
-# Pre-release dev tree (v4.1+ staging) — never published, source/ and
-# sourcelegacy/ get the finalized changes ported over instead.
+# Pre-release dev tree (v4.1+ staging) — never published, source/ gets
+# the finalized changes ported over instead.
 /sourcePre/
 
 # Compiled test harnesses (keep sources, ignore binaries)
