@@ -1070,7 +1070,7 @@ INTERN const unsigned char appversion = 50;
 INTERN const char*  subversion   = "c";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "07/16/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "07/25/2026";
 // v5.0 — new LTS baseline, major bump (not a v4.0g bugfix nor a v4.1
 // feature-only release) because three things land together: dropping
 // Windows XP support entirely (sourcelegacy now targets Win7+ x86 /
