@@ -1,5 +1,49 @@
 # packJPG Changelog
 
+## v5.0b (2026-07-25) — Linux .deb portability fix, formalizes post-v5.0a hotfixes
+
+> Retags 3 commits that shipped as GitHub Release asset updates under the
+> v5.0a tag without a matching git tag move or CHANGELOG entry — this
+> release corrects that bookkeeping gap and adds one more small fix found
+> while investigating it. On-disk `.pjg` format unchanged.
+
+### Bug fixes
+
+- **`.deb` `Depends` hardcoded `libjxl0.11`, breaks on other libjxl
+  versions**: the v5.0a `.deb` was built on `ubuntu-latest` (CI), where
+  the binary actually linked against `libjxl.so.0.7` — but `build_pkg.sh`
+  hardcoded `Depends: libcharls2, libjxl0.11`. Result: `apt install`
+  succeeded (dpkg doesn't check SONAMEs, only the declared Depends) but
+  the binary crashed at runtime with `error while loading shared
+  libraries: libjxl.so.0.7: cannot open shared object file` on any
+  system without that exact package (e.g. Debian trixie, which only has
+  `libjxl0.11`). Fixed by deriving `Depends` from the built binary's
+  actual `NEEDED` sonames via `objdump` + `dpkg -S`, instead of a
+  hardcoded guess.
+- **Statically link CharLS+libjxl on Linux — no more runtime deps**: the
+  `Depends` fix above was still a band-aid — a `.deb` built on
+  `ubuntu-latest` only installs cleanly on distros that happen to ship
+  the same libjxl SONAME (Debian trixie doesn't have `libjxl0.7` at
+  all, so the fixed `.deb` still failed to *install* there, just with a
+  clean apt error instead of a runtime crash). Root-caused by vendoring
+  static CharLS 2.4.2 + libjxl 0.11.2 (+ highway/brotli/lcms2) for Linux
+  x86_64 under `source/linuxlibs/`, same pattern as `source/winlibs/`
+  for Windows. `packJPG`/`libpackJPG.so`/the `.deb` now depend on
+  nothing but `libstdc++`/`libgcc_s`/`libm`/`libc` — no `Depends` line
+  needed for JPEG-LS at all. Verified end-to-end against the real
+  `pack-apt` shared repo: `apt install packjpg` on Debian trixie,
+  JPEG-LS round-trip byte-exact, zero extra dependencies.
+- **`sourcelegacy/` still targeted `_WIN32_WINNT`/`WINVER`/`_WIN32_IE`
+  `0x0501` (Windows XP SP2 API level)**, left over from before v5.0
+  dropped Windows XP support and moved the documented minimum to
+  Windows 7/8 — a doc/policy vs. compiled-target mismatch, not a
+  functional bug (0x0501 is backward-compatible with 7/8/10/11, and no
+  code here uses any WINNT-gated API introduced between XP and 7).
+  Bumped to `0x0601` (Windows 7) to match. Verified on real hardware:
+  both `packJPG_win_legacy_x64.exe` and `packJPG_win_legacy_x86.exe`
+  round-trip JPEG-LS and JPEG byte-exact (SHA-256 verified) on the
+  Windows 7 SP1 test VM, with `-ver -sfth` combined.
+
 ## v5.0a (2026-07-17) — JPEG-LS everywhere, legacy x64 goes official
 
 > Follow-up to v5.0: closes the two gaps that release left open. JPEG-LS

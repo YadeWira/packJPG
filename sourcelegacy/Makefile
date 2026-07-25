@@ -12,13 +12,16 @@ CXX_X86  = i686-w64-mingw32-g++
 CXX_X64  = x86_64-w64-mingw32-g++
 
 # C++14: avoids std::filesystem while keeping modern C++ features.
-# _WIN32_WINNT=0x0501: targets Windows XP SP2+ (works for both x86 and x64
-# legacy editions; Vista/Win7/Win8 also satisfied).
+# _WIN32_WINNT=0x0601: targets Windows 7 SP1+, matching the officially
+# supported minimum since v5.0 (Windows XP support was dropped entirely —
+# this was previously left at 0x0501/XP by oversight; no code here uses
+# any WINNT-gated API between XP and 7, so this is a doc/policy alignment,
+# not a behavior change).
 # v4.0d: -flto enables link-time optimization (mingw-w64 GCC supports it).
 CXXFLAGS = -I. -I../source -O2 -Wall -funroll-loops -ffast-math \
            -fomit-frame-pointer -flto -std=c++14 \
-           -D_WIN32_WINNT=0x0501 -DWINVER=0x0501 \
-           -D_WIN32_IE=0x0501
+           -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 \
+           -D_WIN32_IE=0x0601
 
 # --- JPEG-LS support via vendored winlibs -----------------------------------
 # Pre-compiled static libs for CharLS, libjxl, highway, brotli, lcms2.
