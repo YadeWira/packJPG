@@ -138,6 +138,7 @@ photos/lena_fast.pjg         (compressed with -sfth)
 | `-th<n>` | number of worker threads; 0 = auto-detect (default: 1) |
 | `-sfth` | parallel single-file compression using 3 threads (Y/Cb/Cr) |
 | `-r` | recurse into subdirectories |
+| `-fs` | preserve the source folder structure under `-od` (use with `-r`); without it every output lands flat in the target directory |
 | `-dry` | dry run: simulate without writing output files |
 | `-module` | machine-friendly output: OK/ERROR + elapsed seconds |
 | `-maxout<MB>` | when decoding, refuse to reconstruct a JPEG larger than `<MB>` megabytes (decompression-bomb guard; default 256 MB, 0 = unlimited) |
