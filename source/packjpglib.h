@@ -15,6 +15,37 @@
 	#define EXPORT extern
 #endif
 
+/* ---------------------------------------------------------------------------
+   WINDOWS / MinGW CONSUMERS: THREAD MODEL MUST BE "posix"
+   ---------------------------------------------------------------------------
+   The shipped Windows binaries (packJPG.dll + libpackJPG.a import lib, and any
+   packJPGlib.a you cross-build yourself) are compiled with the *posix*
+   thread-model MinGW driver — the one with the -posix suffix, e.g.
+   x86_64-w64-mingw32-g++-posix. The codec's internal std::mutex / std::once
+   objects are therefore backed by winpthreads.
+
+   You must build YOUR OWN objects with the same -posix driver. On Debian and
+   Ubuntu the unsuffixed driver (x86_64-w64-mingw32-g++) is the *win32* model,
+   so the default choice is the wrong one.
+
+   Why this warning is unusually loud: the mismatch does not fail to link. It
+   links clean, the process starts, compression completes and returns correct
+   data — and then the first decode blocks forever on a lock, sitting at ~0%
+   CPU. There is no error message, no crash and no timeout; the symptom is a
+   process that simply never finishes. Verified on Windows x64 with the same
+   static lib linked both ways: -posix round-trips byte-exact in ~100ms, the
+   unsuffixed driver hangs indefinitely after a successful compress.
+
+   Nothing in the build or the API can detect this for you, because a
+   posix-built library absorbed into a win32-model host binary is
+   indistinguishable at link time from a correct build. Check your driver:
+
+       x86_64-w64-mingw32-g++-posix -v 2>&1 | grep 'Thread model'
+       -> Thread model: posix
+
+   (Linux/Unix consumers are unaffected — this is a MinGW-only hazard.)
+   --------------------------------------------------------------------------- */
+
 /* C99 / C++ bool shim. The lib API uses `bool` in three places; C
    consumers need stdbool.h, C++ gets it from the language. */
 #if !defined(__cplusplus)
