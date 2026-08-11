@@ -25,10 +25,16 @@ sudo apt install clang mingw-w64
 
 # Arch
 sudo pacman -S clang mingw-w64-gcc
-
-# macOS
-brew install llvm mingw-w64
 ```
+
+> **macOS is not a supported build host.** It was covered by the
+> cross-platform CI workflow up to and including v5.0c, and removed after it:
+> the Apple Silicon job had failed on every run for weeks while the rest of CI
+> stayed green, so it verified nothing and hid its own breakage. The code is
+> portable C++17 and probably still builds there (`brew install llvm
+> mingw-w64` used to be the recipe), but nothing measures it, so no claim is
+> made. The verified set is the **Supported targets** line at the top of this
+> document, plus Linux ARM64, which CI builds and round-trip-checks.
 
 
 ## Compiling with make
@@ -85,8 +91,8 @@ Define `BUILD_LIB` when compiling to produce a library instead of an
 executable. Define `BUILD_DLL` in addition for a shared library (DLL).
 
 ```
-make lib    # static library (packJPGlib.a) — Linux/macOS/Windows
-make so     # Unix shared object (libpackJPG.so) — Linux/macOS
+make lib    # static library (packJPGlib.a) — Linux/Windows
+make so     # Unix shared object (libpackJPG.so) — Linux
 make dll    # Windows shared library (packJPG.dll) — MinGW cross-compile
 ```
 

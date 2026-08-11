@@ -264,8 +264,8 @@ format as the CLI, with **multithreading enabled by default**.
 
 ```bash
 cd source
-make lib        # → packJPGlib.a   static lib (Linux/macOS/Windows)
-make so         # → libpackJPG.so  Unix shared object (Linux/macOS)
+make lib        # → packJPGlib.a   static lib (Linux/Windows)
+make so         # → libpackJPG.so  Unix shared object (Linux)
 make dll        # → packJPG.dll + libpackJPG.a (Windows; MinGW posix model)
 
 # Static lib + tests
@@ -401,7 +401,7 @@ format**:
 
 | Source tree | Target platforms | Format produced |
 |---|---|---|
-| `source/` | Linux, macOS, Windows 7 SP1+ (x86 + x64) | byte `0x28` + sub-marker `0x02` |
+| `source/` | Linux x64, Linux ARM64, Windows 7 SP1+ (x86 + x64) | byte `0x28` + sub-marker `0x02` |
 
 A single codebase now covers every platform — the former `sourcelegacy/`
 (C++14, Win32-API-only) tree existed solely to support Windows XP, which
@@ -412,6 +412,14 @@ the on-disk format —
 their `.pjg` output is byte-exact/interchangeable with v4.0b's (v5.0
 was verified bidirectionally against v4.0f: each decodes the other's
 output byte-exact for non-JPEG-LS content).
+
+The platforms in that table are the ones CI builds and round-trip-verifies.
+The code is portable C++17 and other Unix hosts (macOS among them) are
+expected to build, but nothing measures it: macOS was covered by the
+cross-platform workflow up to and including v5.0c, and removed after it
+because the Apple Silicon job had failed on every run for weeks while the
+rest of CI stayed green — a permanently red check verifies nothing and hides
+its own breakage. Treat macOS as unsupported until someone measures it.
 
 **Version numbering:**
 
