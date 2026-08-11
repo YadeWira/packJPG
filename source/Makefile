@@ -177,6 +177,33 @@ pgo-clean:
 
 lib: CXXFLAGS += -DBUILD_LIB
 lib: $(OBJ)
+	@# CRITICAL (Windows/MinGW cross-builds only): same thread-model rule as the
+	@# dll target below, and it bites harder here because a static lib gets
+	@# absorbed into someone else's binary.
+	@#
+	@# The codec's internal std::mutex/std::once_flag resolve against whichever
+	@# threading runtime the *compiler driver* selects. Mixing the two models in
+	@# one image does NOT fail to link — it links clean and then deadlocks the
+	@# first time the decoder takes a lock, with the process pinned at ~0% CPU.
+	@# Verified on real Windows x64: the identical .a linked by the plain
+	@# (win32-model) driver compresses fine and then never returns from
+	@# decompression; relinked by the -posix driver it round-trips byte-exact in
+	@# ~100ms. A silent hang is far worse than a build error, hence this guard.
+	@#
+	@# NOTE: this only covers building the .a itself. A posix-built .a linked
+	@# INTO a win32-model host binary is the same bug and cannot be detected
+	@# here — consumers must use the -posix driver for their own objects too.
+	@# See the thread-model warning in packjpglib.h.
+	@case "$(CXX)" in \
+	  *mingw*) model=`$(CXX) -v 2>&1 | sed -n 's/^Thread model: //p'`; \
+	    case "$$model" in \
+	      win32) echo "ERROR: $(CXX) uses the win32 thread model — the static lib"; \
+	             echo "       would deadlock at runtime inside any host that links it."; \
+	             echo "       Rebuild with the posix model:"; \
+	             echo "         make lib CXX=$(CXX)-posix"; \
+	             exit 1 ;; \
+	    esac ;; \
+	esac
 	ar r $(TARGET)lib.a $(OBJ)
 	ranlib $(TARGET)lib.a
 
