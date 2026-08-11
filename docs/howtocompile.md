@@ -51,7 +51,7 @@ Individual targets are available via the Makefile:
 | `make native` | Linux x64 with `-march=native -mtune=native` (max-perf, non-portable) |
 | `make pgo` | two-phase profile-guided build (see below) |
 | `make dev` | Linux x64 with developer functions (`DEV_BUILD`) |
-| `make lib` | static library `packJPGlib.a` (`BUILD_LIB`) |
+| `make lib` | static library `packJPGlib.a` (`BUILD_LIB`; when cross-compiling for Windows, MinGW posix model required — enforced, see below) |
 | `make so` | Unix shared object `libpackJPG.so` (`BUILD_LIB` + `BUILD_SO`, `-fPIC`) |
 | `make dll` | Windows DLL `packJPG.dll` (`BUILD_DLL`; MinGW posix model required) |
 
@@ -105,20 +105,25 @@ make dll    # Windows shared library (packJPG.dll) — MinGW cross-compile
 
 ### Cross-compiling for Windows — always use the posix thread model
 
-**Every** Windows target (the DLL, and the win-x64/win-x86 CLI
-executables) requires the *posix* thread-model mingw compiler, not the
-plain/win32-model one — `win-x64`/`win-x86` already default to it
-(`x86_64-w64-mingw32-g++-posix`/`i686-w64-mingw32-g++-posix`); the `dll`
-target needs it passed explicitly since it shares plumbing with the
-native Linux `lib`/`so` targets:
+**Every** Windows target requires the *posix* thread-model mingw compiler,
+not the plain/win32-model one: the DLL, the win-x64/win-x86 CLI executables,
+**and a `packJPGlib.a` you cross-compile for Windows**. `win-x64`/`win-x86`
+already default to it (`x86_64-w64-mingw32-g++-posix` /
+`i686-w64-mingw32-g++-posix`); `dll` and `lib` need it passed explicitly,
+since they share plumbing with the native Linux build:
 
 ```
 make dll CXX=x86_64-w64-mingw32-g++-posix   # x64
 make dll CXX=i686-w64-mingw32-g++-posix     # x86
+make lib CXX=x86_64-w64-mingw32-g++-posix   # static lib, cross for Windows
 ```
 
-Two independent reasons the plain/win32-model alias is a portability
-trap, found the hard way:
+Both targets **refuse to build** under the win32 model rather than produce
+a broken artifact. The `lib` guard was added in v5.0d after the mismatch
+cost a downstream project (packMP3) ten hours of debugging.
+
+Three independent reasons the plain/win32-model alias is a portability
+trap, found the hard way — one per artifact kind:
 
 1. **The DLL crashes at exit.** The codec keeps per-thread state in
    `thread_local` objects with non-trivial destructors (`std::unique_ptr`,
@@ -135,6 +140,26 @@ trap, found the hard way:
    a compile-time "declared but never defined" error) — affecting the
    win-x64/win-x86 CLI too, since the codec uses `std::async` for
    intra-file parallelism (`-sfth`).
+
+3. **The static lib hangs the host — silently.** This is the worst of the
+   three because there is no noisy variant of it. `packJPGlib.a` gets
+   absorbed into someone else's binary, and its `std::mutex`/`std::once`
+   resolve against whichever threading runtime the *host's* driver picked.
+   Mixing the two models in one image **does not fail to link**: exit 0, no
+   warning, a complete executable. The only symptom is that the first decode
+   blocks forever on a lock, process pinned at ~0% CPU — no error, no crash,
+   no timeout. Measured on real Windows x64 with one `.a` linked both ways:
+   posix round-trips byte-exact in ~104 ms, the plain driver never returns
+   from decompression (killed at 90 s having burned 0.09 s of CPU).
+
+   The `lib` guard covers producing the `.a`. It cannot cover the case that
+   actually bit packMP3 — a *posix* `.a` inside a win32-model host — because
+   that is indistinguishable at link time from a correct build. **Consumers
+   must build their own objects with the `-posix` driver too**; that is the
+   only instrument that exists, and it is why `packjpglib.h` opens with a
+   thread-model warning. To check a `.a` after the fact, look at which
+   symbols it wants: `nm`/`objdump` showing `pthread_*` means posix,
+   `__gthr_win32_*` means win32.
 
 The produced DLL is self-contained (libgcc / libstdc++ / winpthread are
 statically linked; it depends only on `KERNEL32.dll` + `msvcrt.dll`),

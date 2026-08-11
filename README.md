@@ -215,12 +215,24 @@ lossless. A warning is shown if `-sfth` is used on fewer than 3 cores.
 ### `-dry` — dry run
 
 Simulates processing without writing any output. Useful to preview
-ratios before committing to a batch.
+ratios before committing to a batch. The codec does all the work — the
+per-file lines, sizes and ratios are the real ones — only the writer is
+discarded, so the summary ends with an explicit marker (added in v5.0d,
+before which a dry run's output was indistinguishable from a real one):
 
 ```
 packJPG a -dry -np *.jpg
 packJPG a -dry -th0 -np *.jpg
 ```
+
+```
+2 file(s)  2 ok  0 error(s)  0 warning(s)
+ compressed: 2 JPG
+ dry run: no output files were written
+```
+
+The machine-readable `-module` format is unaffected: a script that passes
+`-dry` already knows it did.
 
 ### `-module` — machine-friendly output
 
@@ -272,11 +284,17 @@ make dll        # → packJPG.dll + libpackJPG.a (Windows; MinGW posix model)
 make lib-tests  # → test/lib_roundtrip_test, lib_concurrent_test, lib_batch_test
 ```
 
-> **Windows DLL:** cross-compile with the MinGW **posix** thread model
-> (`make dll CXX=x86_64-w64-mingw32-g++-posix`). The win32 model
-> miscompiles the codec's `thread_local` destructors and the DLL faults
-> at process exit; the `dll` target refuses to build with it. The
-> produced DLL is self-contained (no external runtime DLLs).
+> **Windows builds — use the MinGW `-posix` driver, for the DLL *and* the
+> static lib** (`make dll CXX=x86_64-w64-mingw32-g++-posix`, same for
+> `make lib`). Both targets refuse to build under the win32 model. For the
+> DLL the win32 model miscompiles the codec's `thread_local` destructors and
+> the DLL faults at process exit. For the static lib it is worse, because
+> there is no noisy failure: a thread-model mismatch between the `.a` and the
+> host **links clean with exit 0** and then deadlocks on the first decode,
+> process at ~0% CPU. **Consumers must build their own objects with `-posix`
+> too** — a posix `.a` inside a win32 host is undetectable at link time. See
+> the warning at the top of `packjpglib.h`. The produced DLL is
+> self-contained (no external runtime DLLs).
 
 Header: `source/packjpglib.h`. Consumers `#include "packjpglib.h"` and
 link against the static lib, the `.so`, or the DLL — the C-linkage API is

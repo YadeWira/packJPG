@@ -1067,10 +1067,10 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 50;
-INTERN const char*  subversion   = "c";
+INTERN const char*  subversion   = "d";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "07/25/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "08/11/2026";
 // v5.0 — new LTS baseline, major bump (not a v4.0g bugfix nor a v4.1
 // feature-only release) because three things land together: dropping
 // Windows XP support entirely (sourcelegacy now targets Win7+ x86 /
@@ -1435,6 +1435,15 @@ int main( int argc, char** argv )
 		if ( acc_list_cnt > 0 ) { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "listed: %i PJG",       acc_list_cnt ); }
 		fprintf( msgout, "\n" );
 	}
+	// A -dry run is otherwise indistinguishable from a real one: identical
+	// per-file lines, sizes and ratio, because the codec does all the work
+	// and only the writer is swapped for a MemoryWriter. Without this line
+	// neither a human reading the output nor a script parsing it can tell
+	// whether anything was written. Printed after the compressed/decompressed
+	// counts so it reads as a qualifier on them ("it did the work, and wrote
+	// nothing"). ASCII only — this file avoids non-ASCII on Windows consoles.
+	if ( dry_run )
+		fprintf( msgout, " dry run: no output files were written\n" );
 	if ( ( file_cnt > error_cnt ) && ( verbosity != 0 ) &&
 	 ( acc_jpgsize > 0 || acc_pjgsize > 0 ) ) {
 		// acc_jpgsize in bytes → convert to MB for MB/s

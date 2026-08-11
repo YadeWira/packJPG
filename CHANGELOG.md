@@ -1,5 +1,75 @@
 # packJPG Changelog
 
+## v5.0d (2026-08-11) — thread-model guard for the static lib, honest `-dry`
+
+> No format change and no codec change: `.pjg` output is byte-identical to
+> v5.0c and the library is functionally the same. What this release adds is
+> protection and honesty around three things that had already cost a
+> downstream project real time.
+>
+> The headline is a build guard. packMP3 v3.0c shipped a version that **hung
+> forever on Windows** on any MP3 with a JPEG cover: the cover compressed
+> fine and the verify pass immediately after blocked, process pinned at ~0%
+> CPU. It went ten hours before being recognised as a deadlock rather than
+> slowness. The cause was a MinGW thread-model mismatch — our `packJPGlib.a`
+> is posix-model, their host objects were win32-model — and the link that
+> produces it **does not fail**: exit 0, no warning, a complete executable.
+> The only symptom that exists is the hang.
+
+### Added
+
+- `source/Makefile`: the `lib` target now refuses to build with a win32-model
+  MinGW driver, the same rule the `dll` target has enforced since v4.0e. A
+  static lib is the more dangerous case, since it is absorbed into someone
+  else's binary. The check asks the driver for its thread model rather than
+  matching its filename, so it covers any win32-model driver and cannot fire
+  on a native build (`g++`/`clang++` report `posix`).
+- `source/packjpglib.h`: an explicit thread-model warning for consumers.
+  This is the part that actually reaches them — the build guard only covers
+  producing the `.a`, and the mismatch that bit packMP3 (a posix `.a` inside
+  a win32-model host) is undetectable at link time. Nothing in the `.a`, the
+  build or the API can catch it downstream, so documentation is the only
+  instrument available.
+- `-dry` now prints `dry run: no output files were written` in the summary.
+  Its output was previously **indistinguishable** from a real run — same
+  per-file lines, same sizes, same ratio, because the codec does all the work
+  and only the writer is swapped — so neither a human nor a script could tell
+  from the output whether anything had been written. The machine-readable
+  `-module` format is unchanged.
+
+### Fixed (documentation)
+
+- `pjglib_set_max_output_size` in `packjpglib.h` said `0 = unlimited
+  (default)`, which reads as "unlimited is the default". The default is
+  **256 MB**; `0` disables the guard. A consumer following the header would
+  have called the setter with `0` to "restore the default" and silently
+  turned the bomb guard off while believing they had turned it back on. The
+  CLI help had it right; only the header was wrong. Reported by packMP3,
+  which hit it while adopting the guard.
+- The same block now documents what a rejection looks like: the cap can
+  produce four distinct messages, which one appears depends on how the `.pjg`
+  was written (the `sfth` one only on `-sfth`-format input), all four mean
+  "rejected by the guard" rather than "corrupt input", and the separate
+  `blowup ratio exceeded` comes from the always-on ratio guard. Hosts that
+  classify errors must match all four; the four were found by a consumer
+  fabricating a bomb by hand, not by reading the source.
+- The block also documents per-file use: safe to change the limit between
+  calls under a caller-held lock covering set + convert, since nothing caches
+  the value earlier — but **not** compatible with `pjglib_convert_batch` when
+  the ops need different limits, because the workers share one process-wide
+  value and the last setter wins.
+
+### Removed
+
+- macOS from the cross-platform CI workflow, and from the platform claims in
+  `README.md` and `docs/howtocompile.md`. The Apple Silicon job had failed on
+  every completed run since 2026-07-19 — including the v5.0c release commit —
+  while the main CI stayed green. A permanently red check verifies nothing
+  and hides its own breakage. Linux ARM64 stays: it is the only non-x86_64
+  host in CI, which is where the `padbit` signedness bug appeared. The docs
+  now say macOS is expected to build but unmeasured, instead of claiming
+  support nothing verified.
+
 ## v5.0c (2026-07-25) — drops sourcelegacy/, one codebase for all platforms
 
 > Removes the `sourcelegacy/` C++14 tree entirely. It existed solely to
