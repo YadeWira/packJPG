@@ -17,12 +17,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            label: macOS Apple Silicon
-            install: brew install jpeg-turbo imagemagick
-          - os: macos-13
-            label: macOS Intel
-            install: brew install jpeg-turbo imagemagick
+          # macOS (macos-14 Apple Silicon / macos-13 Intel) was dropped: the
+          # Apple Silicon job had been failing on every run since 2026-07-19
+          # while the main CI stayed green, so it verified nothing and hid its
+          # own breakage. macOS is not a target we ship or test — see the
+          # supported-platform list in docs/howtocompile.md.
+          #
+          # Linux ARM64 stays, and is the reason this workflow exists: it is
+          # the only job covering a non-x86_64 host, which is where the
+          # `padbit` signedness bug showed up (bare `char` is unsigned on
+          # ARM64, breaking the `== -1` sentinel and corrupting the
+          # arithmetic coder). x86_64 builds cannot catch that class.
           - os: ubuntu-24.04-arm
             label: Linux ARM64
             install: sudo apt-get update -q && sudo apt-get install -y libjpeg-turbo-progs imagemagick
