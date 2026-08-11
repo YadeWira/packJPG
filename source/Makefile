@@ -177,33 +177,41 @@ pgo-clean:
 
 lib: CXXFLAGS += -DBUILD_LIB
 lib: $(OBJ)
-	@# CRITICAL (Windows/MinGW cross-builds only): same thread-model rule as the
-	@# dll target below, and it bites harder here because a static lib gets
-	@# absorbed into someone else's binary.
+	@# Same thread-model rule as the dll target below. No check for a "mingw"
+	@# name is needed and none is made: native drivers (g++, clang++) report
+	@# "Thread model: posix", so this can only ever fire on a win32-model
+	@# cross driver. Keying on the driver's *name* instead would leave any
+	@# win32-model driver not called *mingw* silently unguarded.
 	@#
-	@# The codec's internal std::mutex/std::once_flag resolve against whichever
-	@# threading runtime the *compiler driver* selects. Mixing the two models in
-	@# one image does NOT fail to link — it links clean and then deadlocks the
-	@# first time the decoder takes a lock, with the process pinned at ~0% CPU.
-	@# Verified on real Windows x64: the identical .a linked by the plain
-	@# (win32-model) driver compresses fine and then never returns from
-	@# decompression; relinked by the -posix driver it round-trips byte-exact in
-	@# ~100ms. A silent hang is far worse than a build error, hence this guard.
+	@# What this refuses: producing a win32-model packJPGlib.a. Two concrete
+	@# consequences, neither of them subtle once you hit them —
+	@#   1. winlibs/ (CharLS, libjxl and deps) are posix-built, so a win32 .a
+	@#      hands the consumer undefined references to __gthr_win32_mutex_*
+	@#      at THEIR link step, pointing at our library for their driver choice.
+	@#   2. the win32 model ships an incomplete std::async/std::future in some
+	@#      mingw-w64 packagings, and its thread_local teardown faults at exit
+	@#      (the reason the dll target has refused it since v4.0e).
 	@#
-	@# NOTE: this only covers building the .a itself. A posix-built .a linked
-	@# INTO a win32-model host binary is the same bug and cannot be detected
-	@# here — consumers must use the -posix driver for their own objects too.
-	@# See the thread-model warning in packjpglib.h.
-	@case "$(CXX)" in \
-	  *mingw*) model=`$(CXX) -v 2>&1 | sed -n 's/^Thread model: //p'`; \
-	    case "$$model" in \
-	      win32) echo "ERROR: $(CXX) uses the win32 thread model — the static lib"; \
-	             echo "       would deadlock at runtime inside any host that links it."; \
-	             echo "       Rebuild with the posix model:"; \
-	             echo "         make lib CXX=$(CXX)-posix"; \
-	             exit 1 ;; \
-	    esac ;; \
-	esac
+	@# What this does NOT and CANNOT catch is the mismatch that actually bit a
+	@# consumer (packMP3): a *posix* .a absorbed into a win32-model host binary.
+	@# That links clean, exit 0, no warning, and then deadlocks the first time
+	@# the decoder takes a lock — process pinned at ~0% CPU, no error, no crash.
+	@# Measured on real Windows x64 with one .a linked both ways: -posix
+	@# round-trips byte-exact in ~104 ms, the plain driver never returns from
+	@# decompression (killed at 90 s having burned 0.09 s of CPU). Nothing in
+	@# the .a, the build or the API can detect that downstream, which is why
+	@# packjpglib.h carries a thread-model warning for consumers.
+	@model=`$(CXX) -v 2>&1 | sed -n 's/^Thread model: //p'`; \
+	 case "$$model" in \
+	   win32) echo "ERROR: $(CXX) uses the win32 thread model — refusing to build"; \
+	          echo "       packJPGlib.a with it. The vendored winlibs (CharLS,"; \
+	          echo "       libjxl) are posix-built, so this .a would hand your"; \
+	          echo "       consumers undefined references to __gthr_win32_mutex_*;"; \
+	          echo "       the win32 model also has an incomplete std::async and"; \
+	          echo "       faulting thread_local teardown. Rebuild with posix:"; \
+	          echo "         make lib CXX=$(CXX)-posix"; \
+	          exit 1 ;; \
+	 esac
 	ar r $(TARGET)lib.a $(OBJ)
 	ranlib $(TARGET)lib.a
 
