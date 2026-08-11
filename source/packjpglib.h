@@ -71,10 +71,36 @@ EXPORT void pjglib_set_inter_file_threads( int n );
 EXPORT int  pjglib_get_inter_file_threads( void );
 
 /* Decompression-bomb guard. Cap the size (bytes) of a JPEG the decoder will
-   reconstruct from a .pjg; 0 = unlimited (default). When set, decoding a .pjg
-   whose output would exceed n bytes fails cleanly instead of producing it.
-   Recommended for hosts that decode untrusted .pjg input. Process-wide; set
-   during single-threaded init. */
+   reconstruct from a .pjg. Decoding a .pjg whose output would exceed n bytes
+   fails cleanly instead of producing it. Recommended for hosts that decode
+   untrusted .pjg input.
+
+   Default is 256 MB, NOT unlimited — n = 0 disables the guard. Callers that
+   want to restore a previous value should save it with the getter rather than
+   assume any particular default.
+
+   Process-wide; set during single-threaded init. It is, however, safe to
+   change between calls if the caller serializes: the value is read only
+   inside the convert call, nothing caches it earlier. A per-file limit is
+   therefore fine under a caller-held lock covering set + convert — but it is
+   NOT compatible with pjglib_convert_batch when the ops need different
+   limits, since the workers share this one process-wide value (it is not
+   part of the per-thread state) and the last setter wins for all of them.
+
+   Diagnosing a rejection: the cap can produce four distinct messages in
+   the pjglib_convert_* msg buffer, and which one appears depends on how the
+   .pjg was written, not on how it is decoded. Hosts that classify errors
+   should match all four rather than assume one:
+
+     "output size limit exceeded: reconstructed JPEG would be at least ..."
+     "output size limit exceeded: reconstructed JPEG is ..."
+     "sfth component stream too large: ..."       (-sfth-format .pjg only)
+     "corrupt data: decoder exceeded size limit"  (per-field limit)
+
+   None of the four can occur on a valid .pjg with a large enough cap, so all
+   four mean "rejected by the guard" and not "corrupt input". A fifth message,
+   "blowup ratio exceeded: ...", comes from the always-on ratio guard
+   (output > input * 500 + 1 MB) and is not affected by this setter. */
 EXPORT void         pjglib_set_max_output_size( unsigned int n );
 EXPORT unsigned int pjglib_get_max_output_size( void );
 
