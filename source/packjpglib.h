@@ -72,6 +72,34 @@ EXPORT void pjglib_init_streams( void* in_src, int in_type, int in_size, void* o
 EXPORT const char* pjglib_version_info( void );
 EXPORT const char* pjglib_short_name( void );
 
+/* Concurrency model — two kinds of state, and the split matters more than
+   it looks:
+
+   PER-THREAD. The stream objects set up by pjglib_init_streams, plus the
+   error state a failed convert reports, live in thread-local storage.
+   Two consequences, one a requirement and one a permission:
+
+     * pjglib_init_streams and the pjglib_convert_* that consumes it MUST
+       run on the SAME thread. Split the pair across two threads — easy to
+       do by accident on a task queue or a language runtime's thread pool,
+       where consecutive statements need not stay on one thread — and the
+       converting thread finds no streams at all, because it never
+       initialised its own.
+     * N threads may each run their own init + convert concurrently with
+       no lock of yours. That is not an accident of the implementation; it
+       is what the thread-local state is for, and it is covered by
+       test/lib_concurrent_test and by the LoadLibrary harness in
+       test/dll-harness/.
+
+   PROCESS-WIDE. The configuration setters below — intra/inter file threads
+   and max_output_size — are ordinary globals shared by every thread. This
+   is why a per-file output cap needs a caller-held lock covering set +
+   convert, while the converts themselves do not.
+
+   So a mutex around the whole API is not needed for thread safety and
+   costs you the parallelism above; a mutex is needed when you change
+   configuration per item, or to keep an init/convert pair together. */
+
 /* -----------------------------------------------
 	function declarations: library threading controls
 	----------------------------------------------- */
