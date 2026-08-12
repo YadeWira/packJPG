@@ -86,7 +86,20 @@ EXPORT const char* pjglib_short_name( void );
    Affects all subsequent pjglib_convert_* and pjglib_convert_batch calls.
    Default resolution happens lazily on the first convert call. Setters
    are NOT thread-safe — call them during single-threaded init, before
-   spawning workers. */
+   spawning workers.
+
+   Scope of the thread-safety claims in this header: measured with C and
+   C++ hosts. Concurrent pjglib_convert_* from several host threads is
+   verified there — including, on Windows, four raw CreateThread threads
+   entering the DLL at once (measured on Windows 7 SP1 x64 and Windows 10
+   x64 against the released packJPG.dll). Nothing is claimed for hosts
+   whose language runtime schedules its own threads: one such host
+   (FreePascal, loading the DLL and calling from its RTL thread pool)
+   deadlocks, while the same DLL and the same input are fine from that
+   host single-threaded and from C threads on the same machine. That is a
+   sample of one, so it is recorded as unmeasured territory rather than as
+   a claim about any particular runtime. If your host is not C/C++,
+   measure before relying on concurrency. */
 EXPORT void pjglib_set_intra_file_threads( int n );
 EXPORT int  pjglib_get_intra_file_threads( void );
 
