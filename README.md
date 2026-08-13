@@ -296,6 +296,15 @@ make lib-tests  # → test/lib_roundtrip_test, lib_concurrent_test, lib_batch_te
 > too** — a posix `.a` inside a win32 host is undetectable at link time. See
 > the warning at the top of `packjpglib.h`. The produced DLL is
 > self-contained (no external runtime DLLs).
+>
+> **Load the DLL before creating threads.** If `packJPG.dll` is loaded with
+> `LoadLibrary` into a process whose threads already exist, and those
+> pre-existing threads call the codec, the process hangs after the work
+> completes, while thread-local storage is torn down — 6 of 6 runs on
+> Windows 10 21H2 x64, not reproduced on Windows 7 SP1 x64. Threads created
+> after the load are fine, and the static library is unaffected. Full
+> scope, numbers and workarounds in `packjpglib.h`; reproducer in
+> `source/test/dll-harness/`.
 
 Header: `source/packjpglib.h`. Consumers `#include "packjpglib.h"` and
 link against the static lib, the `.so`, or the DLL — the C-linkage API is

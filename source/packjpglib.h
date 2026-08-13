@@ -120,14 +120,32 @@ EXPORT const char* pjglib_short_name( void );
    C++ hosts. Concurrent pjglib_convert_* from several host threads is
    verified there — including, on Windows, four raw CreateThread threads
    entering the DLL at once (measured on Windows 7 SP1 x64 and Windows 10
-   x64 against the released packJPG.dll). Nothing is claimed for hosts
-   whose language runtime schedules its own threads: one such host
-   (FreePascal, loading the DLL and calling from its RTL thread pool)
-   deadlocks, while the same DLL and the same input are fine from that
-   host single-threaded and from C threads on the same machine. That is a
-   sample of one, so it is recorded as unmeasured territory rather than as
-   a claim about any particular runtime. If your host is not C/C++,
-   measure before relying on concurrency. */
+   x64 against the released packJPG.dll).
+
+   KNOWN DEFECT, Windows DLL only: LOAD THE DLL BEFORE YOU CREATE THREADS.
+   If packJPG.dll is loaded with LoadLibrary into a process whose threads
+   already exist, and those pre-existing threads then call the codec, the
+   process hangs — measured 6 of 6 runs against the released v5.0d DLL on
+   Windows 10 Enterprise LTSC 21H2 (build 19044.7291) x64, with 4 and with
+   8 threads. Not reproduced on Windows 7 SP1 x64 (3 runs), so the OS
+   dependence is an observation over two machines, not a mechanism.
+
+   The work completes first: every thread returns a correct result, and the
+   hang lands afterwards while thread-local storage is torn down. That is
+   why the symptom is a process that never exits rather than a bad output,
+   and why it is invisible to a round-trip check.
+
+   Threads created AFTER the load are unaffected, single-threaded use is
+   unaffected, and the static library is unaffected — this is specific to
+   the dynamically loaded DLL. So the workaround is ordering, not locking:
+   LoadLibrary during startup, before spawning your pool. A host whose
+   runtime starts its own threads before your code runs (packJPG hit this
+   with a FreePascal host) may not be able to control that ordering, in
+   which case the win32-thread-model build does not exhibit it (0 of 6
+   runs) — but see the thread-model warning above for what that costs.
+
+   test/dll-harness/ reproduces all of this from four small C hosts,
+   contributed by the consumer who found it. */
 EXPORT void pjglib_set_intra_file_threads( int n );
 EXPORT int  pjglib_get_intra_file_threads( void );
 

@@ -47,3 +47,24 @@ Windows version, and not concurrency as such.
 ytool works around it by serializing every `pjglib_init_streams` +
 `pjglib_convert_*` pair behind one lock (the same thing upstream packMP3
 does), and by building its DLL with the default win32-model driver.
+
+## host_preexisting_threads.c (added after the root cause was found)
+
+The one that reproduces it. Same as `host_concurrent.c` except the worker
+threads are created **before** `LoadLibrary`, then released through a gate
+afterwards. Usage is identical:
+
+    host_pre.exe <packJPG.dll> <input.jpg> <nthreads>
+
+Measured 2x2 on Windows 10 x64, 4 threads, same JPEG, same machine:
+
+| DLL build | threads created | result |
+|---|---|---|
+| win32-model | after `LoadLibrary` | exits clean |
+| win32-model | before `LoadLibrary` | exits clean |
+| posix-model | after `LoadLibrary` | exits clean |
+| posix-model | **before** `LoadLibrary` | work completes, then **hangs at teardown** |
+
+All four threads print `ok=1` with correct output before it wedges, so the
+codec itself is fine — the hang is in `thread_local` destructor teardown.
+No FreePascal involved: this is a pure-C reproduction.
