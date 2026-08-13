@@ -302,9 +302,11 @@ make lib-tests  # → test/lib_roundtrip_test, lib_concurrent_test, lib_batch_te
 > pre-existing threads call the codec, the process hangs after the work
 > completes, while thread-local storage is torn down — 6 of 6 runs on
 > Windows 10 21H2 x64, not reproduced on Windows 7 SP1 x64. Threads created
-> after the load are fine, and the static library is unaffected. Full
-> scope, numbers and workarounds in `packjpglib.h`; reproducer in
-> `source/test/dll-harness/`.
+> after the load are clean in every measurement, and the static library is
+> unaffected. Loading early closes that hole but is **not** a guarantee: the
+> one real consumer we have loads the DLL before any of its threads exist and
+> still hangs, cause unknown. Full scope and numbers in `packjpglib.h`;
+> reproducer in `source/test/dll-harness/`.
 
 Header: `source/packjpglib.h`. Consumers `#include "packjpglib.h"` and
 link against the static lib, the `.so`, or the DLL — the C-linkage API is

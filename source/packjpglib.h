@@ -135,14 +135,24 @@ EXPORT const char* pjglib_short_name( void );
    why the symptom is a process that never exits rather than a bad output,
    and why it is invisible to a round-trip check.
 
-   Threads created AFTER the load are unaffected, single-threaded use is
-   unaffected, and the static library is unaffected — this is specific to
-   the dynamically loaded DLL. So the workaround is ordering, not locking:
-   LoadLibrary during startup, before spawning your pool. A host whose
-   runtime starts its own threads before your code runs (packJPG hit this
-   with a FreePascal host) may not be able to control that ordering, in
-   which case the win32-thread-model build does not exhibit it (0 of 6
-   runs) — but see the thread-model warning above for what that costs.
+   In every measurement, threads created AFTER the load are clean, and both
+   single-threaded use and the static library are unaffected — this belongs
+   to the dynamically loaded DLL. Loading before you spawn threads therefore
+   removes the failure mode described above.
+
+   It does NOT make the DLL known-good in a multithreaded dynamic host, and
+   the distinction is not academic: the one real consumer we have (ytool, a
+   FreePascal host) already loads packJPG.dll from its runtime's
+   initialization block, before any of its worker threads exist — the clean
+   column in every C measurement — and still hangs against a posix-model
+   DLL, for a reason nobody has found. So treat load-before-threads as
+   closing a measured hole, not as a guarantee. If you are building a
+   dynamic multithreaded host, measure yours; test/dll-harness/ is the
+   scaffolding to do it with.
+
+   The win32-thread-model build does not exhibit any of this (0 of 6 on the
+   pre-existing case, and it is what that consumer settled on) — but see
+   the thread-model warning above for what that trade costs.
 
    test/dll-harness/ reproduces all of this from four small C hosts,
    contributed by the consumer who found it. */
