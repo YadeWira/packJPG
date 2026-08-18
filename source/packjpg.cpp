@@ -8831,7 +8831,8 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	MemoryWriter* bwrt;
 	model_s* model;
 	int c;
-	size_t exhaust_bytes = 0; // track post-exhaustion output
+	size_t exhaust_bytes = 0; // output size at the first exhaustion point
+	bool   exhaust_seen  = false; // whether that point has been recorded yet
 	
 	
 	// start byte writer
@@ -8850,6 +8851,16 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 		c = decode_ari( dec, model );
 		// After input exhaustion, tolerate a few more bytes for zero-padding
 		// (legitimate streams need it), but reject sustained output (bombs).
+		// Record where the input ran out BEFORE measuring how far past it we
+		// have decoded. This used to live in the `else if` below, which is only
+		// reached when c == 256 — so on a stream that exhausts on an ordinary
+		// symbol, exhaust_bytes stayed 0 and post_exhaust_bytes became the
+		// TOTAL decoded, not the overshoot. Any field larger than the 64 KB
+		// tolerance then failed as if it were a bomb.
+		if ( dec->is_exhausted() && !exhaust_seen ) {
+			exhaust_seen  = true;
+			exhaust_bytes = bwrt->num_bytes_written();
+		}
 		if ( dec->is_exhausted() && c != 256 ) {
 			size_t post_exhaust_bytes = bwrt->num_bytes_written() - exhaust_bytes;
 			if ( post_exhaust_bytes > 65536 ) {
@@ -8860,8 +8871,6 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 				errorlevel = 2;
 				return false;
 			}
-		} else if ( dec->is_exhausted() && exhaust_bytes == 0 ) {
-			exhaust_bytes = bwrt->num_bytes_written(); // first exhaustion point
 		}
 		if ( c == 256 ) break;
 		if ( bwrt->num_bytes_written() >= (size_t) decode_limit ) {
