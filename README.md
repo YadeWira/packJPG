@@ -288,14 +288,14 @@ make lib-tests  # → test/lib_roundtrip_test, lib_concurrent_test, lib_batch_te
 > **Windows builds — use the MinGW `-posix` driver, for the DLL *and* the
 > static lib** (`make dll CXX=x86_64-w64-mingw32-g++-posix`, same for
 > `make lib`). Both targets refuse to build under the win32 model. For the
-> DLL the win32 model miscompiles the codec's `thread_local` destructors and
-> the DLL faults at process exit. For the static lib it is worse, because
-> there is no noisy failure: a thread-model mismatch between the `.a` and the
-> host **links clean with exit 0** and then deadlocks on the first decode,
-> process at ~0% CPU. **Consumers must build their own objects with `-posix`
-> too** — a posix `.a` inside a win32 host is undetectable at link time. See
-> the warning at the top of `packjpglib.h`. The produced DLL is
-> self-contained (no external runtime DLLs).
+> DLL, a win32-model build faults at process exit after the first conversion
+> and a posix-model build of the same source does not. For the static lib it
+> is worse, because there is no noisy failure: a thread-model mismatch
+> between the `.a` and the host **links clean with exit 0** and then
+> deadlocks on the first decode, process at ~0% CPU. **Consumers must build
+> their own objects with `-posix` too** — a posix `.a` inside a win32 host is
+> undetectable at link time. See the warning at the top of `packjpglib.h`.
+> The produced DLL is self-contained (no external runtime DLLs).
 >
 > **Load the DLL before creating threads.** If `packJPG.dll` is loaded with
 > `LoadLibrary` into a process whose threads already exist, and those

@@ -125,14 +125,21 @@ cost a downstream project (packMP3) ten hours of debugging.
 Three independent reasons the plain/win32-model alias is a portability
 trap, found the hard way — one per artifact kind:
 
-1. **The DLL crashes at exit.** The codec keeps per-thread state in
-   `thread_local` objects with non-trivial destructors (`std::unique_ptr`,
-   `std::string`). Under the MinGW **win32** thread model these
-   destructors are torn down through a broken `__cxa_thread_atexit` path
-   inside a DLL, so the process faults (`0xC0000005`) at exit *after*
-   the first conversion — the conversion succeeds, then the host crashes
-   on teardown. The **posix** model (winpthread-backed) tears them down
-   cleanly. The `dll` target refuses to build with the win32 model.
+1. **The DLL crashes at exit.** What is *measured*: a DLL built with the
+   MinGW **win32** thread model faults (`0xC0000005`) at process exit
+   after the first conversion — the conversion succeeds, then the host
+   crashes on teardown; the same source built with the **posix** model
+   (winpthread-backed) does not. Switching only the thread model makes the
+   fault appear and disappear. The `dll` target refuses to build with the
+   win32 model.
+
+   What is *inferred*, and deliberately not called a root cause: the codec
+   keeps per-thread state in `thread_local` objects with non-trivial
+   destructors (`std::unique_ptr`, `std::string`), and per-thread teardown
+   in dynamically-loaded DLLs is a known-awkward area. That is context
+   consistent with the trigger, not evidence of a particular failure mode —
+   nobody here has stepped through the teardown path to confirm which one
+   it is.
 
 2. **The plain alias doesn't compile `std::async`/`std::future` at all**
    on some distros' mingw-w64 packaging (Ubuntu 22.04's, notably — the
