@@ -1079,10 +1079,10 @@ THREAD_LOCAL unsigned char orig_set[ 8 ] = { 0 }; // store array for settings
 	----------------------------------------------- */
 
 INTERN const unsigned char appversion = 50;
-INTERN const char*  subversion   = "d";
+INTERN const char*  subversion   = "e";
 INTERN const char*  apptitle     = "packJPG";
 INTERN const char*  appname      = "packjpg";
-[[maybe_unused]] INTERN const char*  versiondate  = "08/11/2026";
+[[maybe_unused]] INTERN const char*  versiondate  = "08/18/2026";
 // v5.0 — new LTS baseline, major bump (not a v4.0g bugfix nor a v4.1
 // feature-only release) because three things land together: dropping
 // Windows XP support entirely (sourcelegacy now targets Win7+ x86 /

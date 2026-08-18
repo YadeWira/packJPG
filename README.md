@@ -59,7 +59,7 @@ packJPG <subcommand> [switches] [filename(s)]
 | `a` | compress JPEG files to PJG (archive) |
 | `x` | decompress PJG files back to JPEG (extract) |
 | `mix` | auto-detect and process both directions (use with caution) |
-| `list` | display info about PJG files without decompressing |
+| `list` | display info about PJG files without decompressing (header only — see below) |
 | `stats` | show JPEG file info (size, dimensions, color mode) without compressing |
 
 packJPG recognizes file types by content, not extension: `.jpg`, `.jls`
@@ -92,6 +92,28 @@ packJPG mix *.*                       # auto-detect each file
 packJPG list *.pjg                    # show version + size, no decompress
 packJPG - < sail.pjg > sail.jpg       # stream
 ```
+
+### `list` — what it actually checks
+
+`list` reads the PJG header and reports the format version and packed size. It
+does **not** decode the payload, so a file that lists cleanly can still fail to
+decompress: for a normal `.pjg` everything after the header is an arithmetic
+stream with no declared length to compare against, and verifying it means
+paying for the decompression that `list` exists to avoid. (For JPEG-LS payloads
+the part sizes *are* declared, and those are checked.)
+
+The output says so rather than leaving it implied:
+
+```
+  version : v4.0
+  packed  : 16.7 KB
+  checked : header only - run `x` or `-ver` to verify the payload
+```
+
+A header that is truncated, has an unknown code or carries an incompatible
+version byte is rejected with the same message the decoder would give — `list`
+and `x` share one header reader, so `list` never accepts a file `x` refuses at
+that stage.
 
 ### `mix` — mixed mode
 

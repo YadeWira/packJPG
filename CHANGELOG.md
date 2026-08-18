@@ -1,5 +1,96 @@
 # packJPG Changelog
 
+## v5.0e (2026-08-18) — three defects that were in v5.0d
+
+> No format change and no codec change: `.pjg` output stays byte-identical to
+> v5.0c/v5.0d. This release fixes three bugs that shipped, two of them found by
+> testing rather than by a report, and one of them a denial of service that
+> reaches any host decoding untrusted input.
+>
+> The order they were found matters, because each came out of checking the one
+> before it. Fixing `list` meant verifying the decompression-bomb guard had not
+> been weakened; verifying the guard exposed the `-sfth` failure; and confirming
+> the guard still fired on truncated input exposed the hang.
+
+### Fixed
+
+- **`-sfth` produced `.pjg` files that could not be decompressed.**
+  `packJPG a -sfth` reported success and wrote a file that `packJPG x` then
+  refused. Measured on an 85-file corpus: 2 of 32 compressible files, ~6%. The
+  same files round-trip byte-exact without `-sfth`.
+
+  The cause was in the decompression-bomb guard, not in the parallel code.
+  `exhaust_bytes` — the output size at the moment the input ran out — was
+  assigned in a branch only reached when the end symbol appeared, so a stream
+  that exhausted on an ordinary symbol measured the *total* decoded instead of
+  the overshoot, and any header field over the 64 KB tolerance tripped the
+  guard. Only `-sfth` was affected because it decodes the shared header from a
+  bounded reader, where exhaustion is observed; the sequential path reads from
+  the continuous file and never runs dry there. It needed a header over 64 KB,
+  which is why it looked size-independent: a 1.87 MB file with a 10 KB header
+  passes, a 1.55 MB CMYK file with a 593 KB ICC profile does not.
+
+  Threading was not involved. Forcing the decode sequential still failed, and
+  forcing the encode sequential produced a byte-identical file that still
+  failed.
+
+- **A corrupt `.pjg` could spin the decoder forever.** A truncated file ran
+  past 25 s with no result at flat 2.2 MB RSS — a CPU denial of service, not a
+  memory bomb. On random byte mutation, 18 of 20 seeds hung past 15 s.
+
+  The escape chain in `decode_ari(model_s)` had no bound. Each escape drops the
+  model one order, so a valid stream escapes at most `max_order + 2` times;
+  past the end of input the reader feeds zeros forever and the chain never
+  ends. Sampling a debug build showed the per-coefficient index frozen for
+  30 seconds, so this was never slowness.
+
+  The chain is now bounded at 64 and the decoder is marked corrupt on overflow,
+  checked at all five decode sites so the file is rejected instead of a wrong
+  output being written. `is_corrupt()` is deliberately separate from
+  `is_exhausted()`: running out of input is normal at the end of a valid
+  stream, this is not.
+
+  **This one reaches the library.** `pjglib_set_max_output_size` does not help,
+  because it caps output size and this consumes time at constant memory.
+  Anyone embedding packJPG to decode `.pjg` data they did not produce should
+  take this release.
+
+- **`list` accepted files the decoder rejects.** `list_pjg` walked the PJG
+  header with its own copy of the decoder's logic and ignored the return of
+  every read, so a file truncated to 40 bytes was reported as `version : v0.2`,
+  `1 ok, 0 error(s)`, with the version invented from what the failed reads left
+  behind. No out-of-bounds access, but the lister was the more permissive of
+  the two while doing strictly less work.
+
+  Both now go through one `pjg_read_header_codes()`. Also fixed: the settings
+  block read 8 bytes without checking, so a short read left `nois_trs` and
+  `segm_cnt` half-filled.
+
+### Changed
+
+- `list` now prints what it verified: `checked : header only - run x or -ver
+  to verify the payload`. It still cannot check an arithmetic-coded payload
+  without decoding it, so a file with an intact header and a truncated body
+  lists cleanly — that limit is now stated instead of implied. For JPEG-LS
+  payloads the part sizes are declared in the file, and those are checked.
+
+### Credit
+
+The `list` defect came from applying to packJPG the criterion
+[packMP3](https://github.com/YadeWira/packMP3) published with v3.0e: *a lister
+should not accept a file the decoder would reject*.
+[packPNG](https://github.com/YadeWira/packPNG) found three instances of it in
+its own code with the same 30-second test and shipped v2.0i/v2.0j.
+
+### Verification
+
+85-file corpus round-trip byte-exact: 32/32 sequential, 32/32 with `-sfth`
+(was 30/32). Repo test files 10/10 in both modes, JPEG-LS byte-exact.
+Truncated input now fails in 0.8–6.3 s with no output file; 0 of 20 fuzz seeds
+hang (was 18 of 20), 39 of 40 mutations rejected. The bomb guard still fires
+identically on a file truncated to 4000 bytes. Library harnesses
+(roundtrip/batch/concurrent/maxoutput) green.
+
 ## v5.0d (2026-08-11) — thread-model guard for the static lib, honest `-dry`
 
 > No format change and no codec change: `.pjg` output is byte-identical to
