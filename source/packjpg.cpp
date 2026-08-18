@@ -6020,6 +6020,7 @@ INTERN bool unpack_pjg( void )
 					if ( !pjg_decode_ac_low   ( &dec, cmp ) ) { fail(); return; }
 					f_y_dc .wait(); if ( any_err.load() ) return;
 					if ( !pjg_decode_dc       ( &dec, cmp ) ) { fail(); return; }
+					if ( dec.is_corrupt() ) { snprintf( errormessage, MSG_SIZE, "corrupt stream: decoder could not make progress" ); errorlevel = 2; fail(); return; }
 				} ) );
 			}
 
@@ -6043,6 +6044,9 @@ INTERN bool unpack_pjg( void )
 				y_ok = pjg_decode_dc( &ydec, 0 );
 				if ( !y_ok ) { cmp_errs[0] = errormessage; any_err.store(true); }
 			}
+			if ( ydec.is_corrupt() && !any_err.load() ) {
+				snprintf( errormessage, MSG_SIZE, "corrupt stream: decoder could not make progress" ); errorlevel = 2; cmp_errs[0] = errormessage; any_err.store( true );
+			}
 			p_y_dc.set_value();
 
 			for ( auto& f : futs ) f.get();
@@ -6062,6 +6066,7 @@ INTERN bool unpack_pjg( void )
 						pjg_decode_zstscan  ( &dec, cmp ) && pjg_decode_zdst_high( &dec, cmp ) &&
 						pjg_decode_ac_high  ( &dec, cmp ) && pjg_decode_zdst_low ( &dec, cmp ) &&
 						pjg_decode_ac_low   ( &dec, cmp ) && pjg_decode_dc       ( &dec, cmp );
+					if ( ok && dec.is_corrupt() ) { snprintf( errormessage, MSG_SIZE, "corrupt stream: decoder could not make progress" ); errorlevel = 2; ok = false; }
 					if ( !ok ) { cmp_errs[cmp] = errormessage; any_err.store(true); }
 				} ) );
 			}
@@ -6102,6 +6107,9 @@ INTERN bool unpack_pjg( void )
 			if ( !pjg_decode_zdst_low ( decoder, cmp ) ) { delete decoder; return false; }
 			if ( !pjg_decode_ac_low   ( decoder, cmp ) ) { delete decoder; return false; }
 			if ( !pjg_decode_dc       ( decoder, cmp ) ) { delete decoder; return false; }
+			if ( decoder->is_corrupt() ) {
+				snprintf( errormessage, MSG_SIZE, "corrupt stream: decoder could not make progress" ); errorlevel = 2; delete decoder; return false;
+			}
 		}
 		if ( !pjg_decode_bit( decoder, &cb ) ) { delete decoder; return false; }
 		if ( cb == 0 ) grbs = 0;
@@ -8857,6 +8865,12 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 		// symbol, exhaust_bytes stayed 0 and post_exhaust_bytes became the
 		// TOTAL decoded, not the overshoot. Any field larger than the 64 KB
 		// tolerance then failed as if it were a bomb.
+		if ( dec->is_corrupt() ) {
+			delete( model );
+			delete bwrt;
+			snprintf( errormessage, MSG_SIZE, "corrupt stream: decoder could not make progress" ); errorlevel = 2;
+			return false;
+		}
 		if ( dec->is_exhausted() && !exhaust_seen ) {
 			exhaust_seen  = true;
 			exhaust_bytes = bwrt->num_bytes_written();

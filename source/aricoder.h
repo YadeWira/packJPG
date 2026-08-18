@@ -214,6 +214,11 @@ class ArithmeticDecoder {
 	unsigned int decode_count( symbol* s );
 	void decode( symbol* s );
 	bool is_exhausted() const { return exhausted_; }
+	// Set when a decode gave up on a stream it cannot make progress on (see the
+	// escape-chain bound in decode_ari below). Distinct from is_exhausted():
+	// running out of input is normal at the end of a valid stream, this is not.
+	bool is_corrupt() const { return corrupt_; }
+	void mark_corrupt() { corrupt_ = true; }
 	
 	private:
 	unsigned char read_bit();
@@ -223,6 +228,7 @@ class ArithmeticDecoder {
 	unsigned char bbyte = 0;
 	unsigned char cbit = 0;
 	bool exhausted_ = false;
+	bool corrupt_ = false;
 	
 	// arithmetic coding variables
 	unsigned int ccode = 0;
@@ -333,11 +339,23 @@ static inline int decode_ari( ArithmeticDecoder* decoder, model_s* model )
 	uint32_t count;
 	int c;
 	
+	// Bound the escape chain. Each ESCAPE drops the model one order, so a valid
+	// stream escapes at most max_order + 2 times (3 or 4 here) before reaching
+	// the order that always has the symbol. On a truncated stream the reader
+	// feeds zeros forever and the chain never ends: measured spinning here at a
+	// fixed dpos for minutes at flat memory, which is a CPU denial of service
+	// for any host decoding untrusted .pjg input. 64 is far above anything a
+	// legitimate stream reaches and far below where it costs anything.
+	int escapes = 0;
 	do{
 		model->get_symbol_scale( &s );
 		count = decoder->decode_count( &s );
 		c = model->convert_symbol_to_int( count, &s );
 		decoder->decode( &s );	
+		if ( c == ESCAPE_SYMBOL && ++escapes > 64 ) {
+			decoder->mark_corrupt();
+			return 0; // caller bails on is_corrupt(); model left untouched
+		}
 	} while ( c == ESCAPE_SYMBOL );
 	model->update_model( c );
 	
