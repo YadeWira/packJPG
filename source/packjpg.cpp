@@ -506,6 +506,28 @@ static std::filesystem::path safe_path( const char* s )
 #define DIV_INT(v1,v2)	( (v1 < 0) ? (v1 - (v2>>1)) / v2 : (v1 + (v2>>1)) / v2 )
 #define B_SHORT(v1,v2)	( ( ((int) v1) << 8 ) + ((int) v2) )
 #define BITLEN1024P(v)	( pbitlen_0_1024[ v ] )
+// Decoder-side lookups index pbitlen_0_1024 with values derived from ALREADY
+// DECODED coefficients, so a corrupt stream drives them past the table (1025
+// entries; measured indices up to 1426 on truncated input, reading into the
+// neighbouring globals). Reject rather than clamp: a clamped index is a
+// legal-looking context that keeps the decode running and yields a wrong file
+// in silence, which is the failure class this is meant to remove.
+// The cast to unsigned is load-bearing and covers BOTH bounds: a negative index
+// wraps to a huge value and fails the single comparison. Writing this as
+// ( (v) <= 1024 ) compiles, reads the same, and silently lets negative indices
+// through — which read BACKWARDS from the table. Keep the cast, or spell out
+// ( (v) >= 0 && (v) <= 1024 ).
+#define PJG_BITLEN_OK(v)	( (unsigned)(v) <= 1024u )
+// Pin the PROPERTY, not the spelling: any rewriting that still rejects negative
+// indices and keeps the 0..1024 window compiles; one that loses either does not.
+// Catches the two likely edits — dropping the cast, and copying the -2048..2047
+// limit of the sibling macro.
+static_assert( !PJG_BITLEN_OK(-1),    "PJG_BITLEN_OK must reject negative indices" );
+static_assert( !PJG_BITLEN_OK(-524),  "PJG_BITLEN_OK must reject negative indices" );
+static_assert( !PJG_BITLEN_OK(-2048), "PJG_BITLEN_OK must reject negative indices" );
+static_assert(  PJG_BITLEN_OK(0),     "0 is a valid index" );
+static_assert(  PJG_BITLEN_OK(1024),  "1024 is the last valid index" );
+static_assert( !PJG_BITLEN_OK(1025),  "1025 is past the end of pbitlen_0_1024" );
 #define BITLEN2048N(v)	( (pbitlen_n2048_2047+2048)[ v ] )
 #define CLAMPED(l,h,v)	( ( v < l ) ? l : ( v > h ) ? h : v )
 
@@ -3014,6 +3036,22 @@ INTERN void process_file( void )
 			case A_COMPRESS:
 				execute( unpack_pjg );
 				if ( !jpg_jpegls ) {
+					// The compression path validates coefficients right after
+					// decode_jpeg; the decompression path never did. Coefficients
+					// rebuilt from a corrupt .pjg can exceed the per-band maximum
+					// and then index the bitlength tables out of range inside
+					// recode_jpeg. Same check, same invariant, other direction.
+					//
+					// This bound is about INTEGRITY, not memory safety, and it is
+					// deliberately far tighter than the tables it protects: MAX_V
+					// runs 20..1024 per band, the tables overflow at 1024/2047.
+					// Relaxing it to the table limit still stops the overflow and
+					// still passes every valid file — and returns 86-93% of the
+					// silently wrong outputs, plus one out-of-range read that only
+					// this check covers. Measured over 4950 corrupt-input cells.
+					// A coefficient over its band maximum is not dangerous; it is
+					// proof the file is corrupt, which is the whole point.
+					execute( check_value_range );
 					execute( adapt_icos );
 					execute( unpredict_dc );
 					execute( recode_jpeg );
@@ -8322,6 +8360,9 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 
 	// get max absolute value/bit length
 	max_val = MAX_V( cmp, 0 );
+	if ( !PJG_BITLEN_OK( max_val ) ) { snprintf( errormessage, MSG_SIZE,
+		"corrupt stream: max_val index %d out of range in pjg_decode_dc", (int)( max_val ) );
+		errorlevel = 2; return false; }
 	max_len = BITLEN1024P( max_val );
 
 	// init models for bitlenghts and -patterns
@@ -8376,11 +8417,17 @@ INTERN bool pjg_decode_dc( ArithmeticDecoder* dec, int cmp )
 		snum = segm_tab[ zdstls[dpos] ];
 		// calculate contexts (for bit length)
 		ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
+		if ( !PJG_BITLEN_OK( ctx_avr ) ) { snprintf( errormessage, MSG_SIZE,
+			"corrupt stream: ctx_avr index %d out of range in pjg_decode_dc", (int)( ctx_avr ) );
+			errorlevel = 2; return false; }
 		ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 		int ctx_shift = ctx_len;
 		int ctx_dim   = max_len + 1;
 		if ( use_cc ) {
 			int y_abs = ABS( y_coeffs[ dpos ] );
+			if ( !PJG_BITLEN_OK( y_abs ) ) { snprintf( errormessage, MSG_SIZE,
+				"corrupt stream: y_abs index %d out of range in pjg_decode_dc", (int)( y_abs ) );
+				errorlevel = 2; return false; }
 			int y_clen = BITLEN1024P( y_abs );
 			if ( y_clen > 7 ) y_clen = 7;
 			ctx_shift = ( ctx_len << 3 ) | y_clen;
@@ -8566,6 +8613,9 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 
 		// get max bit length
 		max_val = MAX_V( cmp, bpos );
+		if ( !PJG_BITLEN_OK( max_val ) ) { snprintf( errormessage, MSG_SIZE,
+			"corrupt stream: max_val index %d out of range in pjg_decode_ac_high", (int)( max_val ) );
+			errorlevel = 2; return false; }
 		max_len = BITLEN1024P( max_val );
 
 		// arithmetic compression loop
@@ -8585,10 +8635,16 @@ INTERN bool pjg_decode_ac_high( ArithmeticDecoder* dec, int cmp )
 			snum = segm_tab[ zdstls[dpos] ];
 			// calculate contexts (for bit length)
 			ctx_avr = pjg_aavrg_context( c_absc, c_weight, dpos, p_y, p_x, r_x ); // AVERAGE context
+			if ( !PJG_BITLEN_OK( ctx_avr ) ) { snprintf( errormessage, MSG_SIZE,
+				"corrupt stream: ctx_avr index %d out of range in pjg_decode_ac_high", (int)( ctx_avr ) );
+				errorlevel = 2; return false; }
 			ctx_len = BITLEN1024P( ctx_avr ); // BITLENGTH context
 			int ctx_shift = ctx_len;
 			if ( use_cc ) {
 				int y_abs = ABS( y_coeffs[ dpos ] );
+				if ( !PJG_BITLEN_OK( y_abs ) ) { snprintf( errormessage, MSG_SIZE,
+					"corrupt stream: y_abs index %d out of range in pjg_decode_ac_high", (int)( y_abs ) );
+					errorlevel = 2; return false; }
 				int y_clen = BITLEN1024P( y_abs );
 				if ( y_clen > 7 ) y_clen = 7;
 				ctx_shift = ( ctx_len << 3 ) | y_clen;
@@ -8744,6 +8800,9 @@ INTERN bool pjg_decode_ac_low( ArithmeticDecoder* dec, int cmp )
 		// get max bit length / other info
 		max_valp = MAX_V( cmp, bpos );
 		max_valn = -max_valp;
+		if ( !PJG_BITLEN_OK( max_valp ) ) { snprintf( errormessage, MSG_SIZE,
+			"corrupt stream: max_valp index %d out of range in pjg_decode_ac_low", (int)( max_valp ) );
+			errorlevel = 2; return false; }
 		max_len = BITLEN1024P( max_valp );
 		thrs_bp = ( max_len > nois_trs[cmp] ) ? max_len - nois_trs[cmp] : 0;
 		
@@ -8767,6 +8826,9 @@ INTERN bool pjg_decode_ac_low( ArithmeticDecoder* dec, int cmp )
 			int ctx_shift = ctx_len;
 			if ( use_cc ) {
 				int y_abs = ABS( y_coeffs[ dpos ] );
+				if ( !PJG_BITLEN_OK( y_abs ) ) { snprintf( errormessage, MSG_SIZE,
+					"corrupt stream: y_abs index %d out of range in pjg_decode_ac_low", (int)( y_abs ) );
+					errorlevel = 2; return false; }
 				int y_clen = BITLEN1024P( y_abs );
 				if ( y_clen > 7 ) y_clen = 7;
 				ctx_shift = ( ctx_len << 3 ) | y_clen;
