@@ -1,5 +1,73 @@
 # packJPG Changelog
 
+## v5.0f (2026-08-25) — out-of-range reads in the decoder, and a validation that was never wired
+
+> No format change and no codec change: `.pjg` output stays byte-identical to
+> v5.0c through v5.0e, and files written by this build open with older ones.
+> The compression path is untouched — every change is on the decode side.
+>
+> The defect that mattered most was not a missing check. `check_value_range()`
+> already existed, already validated every coefficient against its band maximum,
+> and was called on one of the two paths that needed it. One line closes 818 of
+> the 851 wrong outputs measured here; the other 33 needed the range guards.
+
+### Fixed
+
+- **A corrupt or crafted `.pjg` could make the decoder read past the end of its
+  bit-length table.** `pbitlen_0_1024` has 1025 entries and is indexed by values
+  derived from the stream. In the DC band those values can reach 2047, because
+  the band maximum is 1024 and a coefficient of that magnitude needs 11 bits;
+  the AC bands top out at 1023 and cannot. Eight rejections in `pjg_decode_dc`,
+  `pjg_decode_ac_high` and `pjg_decode_ac_low` now refuse the file instead,
+  naming the site in the error.
+
+  Measured over a grid of truncations and bit-flips: out-of-range reads 322 → 6,
+  segmentation faults 270 → 0. The libFuzzer harness in `source/test/` goes from
+  four sanitizer findings on a 1 MB artifact to none.
+
+  Six of the eight rejections cannot be reached by any corruption of a file, and
+  that is a property of the quantization tables rather than an accident:
+  `freqmax[0]` is 1024 while no AC entry exceeds 1020, so the AC index is capped
+  at 1023 by construction. They are kept as defence in depth and are verified by
+  direct injection, not by corpus — which is worth saying plainly, because a
+  check with no possible regression case reads exactly like a check whose
+  regression case nobody wrote.
+
+- **Decoded coefficients were not validated, so a damaged file could reconstruct
+  a JPEG that was quietly wrong.** `check_value_range` ran when compressing and
+  not when decompressing. It now runs on both. Of 851 silently wrong outputs
+  measured across the corruption grid, 818 come from this single line.
+
+  Relaxing the threshold to the table's real limit — the tidier-looking version —
+  returns 86–93% of those wrong outputs while passing every byte-identity check,
+  so the comment at the guard carries that number.
+
+### Verified
+
+- 100 of 100 valid `.pjg` files reconstruct byte-identically, with no false
+  rejections.
+- All eight guards sit upstream of the access they protect, checked by injecting
+  an out-of-range value immediately before each one. The negative control matters
+  here: a guard moved downstream still returns 1 *and still prints its own
+  message*, so only a sanitizer run under `halt_on_error=0` separates a fix that
+  works from one that does not.
+- `PJG_BITLEN_OK` casts to unsigned so a negative index fails the same
+  comparison. That cast is load-bearing and six `static_assert`s pin it; the
+  dangerous rewritings fail to compile.
+
+### Known, not fixed here
+
+Truncated files are still accepted in some cases, `-sfth` still ignores what
+`read()` returns, and decoding a corrupt file still costs more than decoding a
+sound one — the median corrupt input takes twice as long and the worst 31×.
+Those have measured fixes that are not in this release.
+
+A `.pjg` carries no declared length and no checksum, so a truncated or
+single-bit-flipped file can be a valid encoding of a *different* JPEG. That
+residue is structural and no guard closes it: 70 of 1980 shallow truncations and
+4 of 990 single-bit flips still reconstruct something wrong. Closing it means
+changing the format.
+
 ## v5.0e (2026-08-18) — three defects that were in v5.0d
 
 > No format change and no codec change: `.pjg` output stays byte-identical to
