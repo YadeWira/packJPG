@@ -576,6 +576,12 @@ struct huffCodes {
 };
 
 struct huffTree {
+	// Puesto por jpg_build_huffcodes cuando la DHT viola la propiedad de
+	// prefijo. El 256 de l[]/r[] no es capacidad sino frontera de significado:
+	// el arbol se camina con while(node < 256) y devuelve node - 256, asi que
+	// agrandar los arreglos no arreglaria nada -- cambiaria la lectura fuera de
+	// rango por simbolos inventados en silencio.
+	bool overflow;
 	unsigned short l[ 256 ];
 	unsigned short r[ 256 ];
 };
@@ -6337,6 +6343,12 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				// build huffman codes & trees
 				jpg_build_huffcodes( &(segment[ hpos + 0 ]), &(segment[ hpos + 16 ]),
 					&(hcodes[ lval ][ rval ]), &(htrees[ lval ][ rval ]) );
+				if ( htrees[ lval ][ rval ].overflow ) {
+					snprintf( errormessage, MSG_SIZE,
+						"invalid dht: table %i/%i is not a prefix code", lval, rval );
+					errorlevel = 2;
+					return false;
+				}
 				htset[ lval ][ rval ] = 1;
 				hpos += skip;
 			}
@@ -6412,7 +6424,7 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				return false;
 			}
 			for ( i = 0; i < cs_cmpc; i++ ) {
-				for ( cmp = 0; ( segment[ hpos ] != cmpnfo[ cmp ].jid ) && ( cmp < cmpc ); cmp++ );
+				for ( cmp = 0; ( cmp < cmpc ) && ( segment[ hpos ] != cmpnfo[ cmp ].jid ); cmp++ );
 				if ( cmp == cmpc ) {
 					snprintf( errormessage, MSG_SIZE, "component id mismatch in start-of-scan" );
 					errorlevel = 2;
@@ -7349,6 +7361,7 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 	int i, j, k;
 	
 	
+	ht->overflow = false;
 	// fill with zeroes
 	memset( hc->clen, 0, 256 * sizeof( short ) );
 	memset( hc->cval, 0, 256 * sizeof( short ) );
@@ -7393,6 +7406,11 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 		node = 0;   		   		
 		// go through each code & store path
 		for ( j = hc->clen[ i ] - 1; j > 0; j-- ) {
+			// node >= 256 no es un id de nodo: es la marca de hoja que dejo
+			// otro simbolo (i + 256). Llegar aca significa que un codigo es
+			// prefijo de otro -- una DHT que viola la propiedad de prefijo --
+			// y seguir indexaria l[]/r[] fuera de rango.
+			if ( node >= 256 ) { ht->overflow = true; return; }
 			if ( BITN( hc->cval[ i ], j ) == 1 ) {
 				if ( ht->r[ node ] == 0 )
 					 ht->r[ node ] = nextfree++;
@@ -7406,6 +7424,10 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 		}
 		// last link is number of targetvalue + 256
 		if ( hc->clen[ i ] > 0 ) {
+			// Segundo sitio, y hace falta: con clen[i] == 1 el bucle de arriba
+			// no se ejecuta nunca (j arranca en 0 y la condicion es j > 0), asi
+			// que el camino llega aca directo con el node heredado.
+			if ( node >= 256 ) { ht->overflow = true; return; }
 			if ( BITN( hc->cval[ i ], 0 ) == 1 )
 				ht->r[ node ] = i + 256;
 			else
