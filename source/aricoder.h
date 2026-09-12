@@ -218,6 +218,7 @@ class ArithmeticDecoder {
 	// escape-chain bound in decode_ari below). Distinct from is_exhausted():
 	// running out of input is normal at the end of a valid stream, this is not.
 	bool is_corrupt() const { return corrupt_; }
+	unsigned int fabricated_bits() const { return fabricated_bits_; }
 	void mark_corrupt() { corrupt_ = true; }
 	
 	private:
@@ -229,6 +230,10 @@ class ArithmeticDecoder {
 	unsigned char cbit = 0;
 	bool exhausted_ = false;
 	bool corrupt_ = false;
+	// Bits consumed after the input ran out. The prefill makes every valid
+	// decode read a little past its last byte: measured 22 to 34 bits over 38
+	// files. Sustained fabrication past that is a truncated stream.
+	unsigned int fabricated_bits_ = 0;
 	
 	// arithmetic coding variables
 	unsigned int ccode = 0;
