@@ -6014,11 +6014,27 @@ INTERN bool unpack_pjg( void )
 	}
 
 	if ( parallel_fmt ) {
-		// -sfth format: bounded header blob + parallel component streams
-		uint8_t hle[4] = {}; str_in->read( hle, 4 );
+		// -sfth format: bounded header blob + parallel component streams.
+		// Every size here is declared in the stream, so a short read is a
+		// truncation we can name instead of decoding zeros as if they were
+		// data. Each read is checked against the count it asked for.
+		const unsigned int sfth_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
+		uint8_t hle[4] = {};
+		if ( str_in->read( hle, 4 ) != 4 ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth header size)" );
+			errorlevel = 2; return false;
+		}
 		uint32_t hsz = (uint32_t)hle[0] | ((uint32_t)hle[1]<<8) |
 		               ((uint32_t)hle[2]<<16) | ((uint32_t)hle[3]<<24);
-		std::vector<uint8_t> hblob( hsz ); str_in->read( hblob.data(), hsz );
+		if ( hsz > sfth_cap ) {
+			snprintf( errormessage, MSG_SIZE, "sfth header blob too large: %u bytes (limit %u)", hsz, sfth_cap );
+			errorlevel = 2; return false;
+		}
+		std::vector<uint8_t> hblob( hsz );
+		if ( str_in->read( hblob.data(), hsz ) != hsz ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth header blob, %u bytes declared)", hsz );
+			errorlevel = 2; return false;
+		}
 		{
 			MemoryReader hmr( hblob ); ArithmeticDecoder hdec( hmr );
 			if ( !pjg_decode_generic( &hdec, &hdrdata, &hdrs ) ) return false;
@@ -6030,26 +6046,37 @@ INTERN bool unpack_pjg( void )
 			if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
 			if ( !jpg_setup_imginfo() ) return false;
 		} // hdec destroyed — stream aligned after hblob
-		uint8_t ncmps = 0; str_in->read_byte( &ncmps );
+		uint8_t ncmps = 0;
+		if ( !str_in->read_byte( &ncmps ) ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth component count)" );
+			errorlevel = 2; return false;
+		}
 		if ( (int)ncmps != cmpc ) {
 			snprintf( errormessage, MSG_SIZE, "sfth cmp count mismatch (%i vs %i)", (int)ncmps, cmpc );
 			errorlevel = 2; return false;
 		}
 		std::vector<uint32_t> csizes( cmpc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
-			uint8_t le[4] = {}; str_in->read( le, 4 );
+			uint8_t le[4] = {};
+			if ( str_in->read( le, 4 ) != 4 ) {
+				snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth size of component %i)", cmp );
+				errorlevel = 2; return false;
+			}
 			csizes[cmp] = (uint32_t)le[0]|((uint32_t)le[1]<<8)|((uint32_t)le[2]<<16)|((uint32_t)le[3]<<24);
 		}
 		std::vector<std::vector<uint8_t>> cbufs( cmpc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			{
-				unsigned int csiz_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
-				if ( csizes[cmp] > csiz_cap ) {
-					snprintf( errormessage, MSG_SIZE, "sfth component stream too large: %u bytes (limit %u)", csizes[cmp], csiz_cap );
+				if ( csizes[cmp] > sfth_cap ) {
+					snprintf( errormessage, MSG_SIZE, "sfth component stream too large: %u bytes (limit %u)", csizes[cmp], sfth_cap );
 					errorlevel = 2; return false;
 				}
 			}
-						cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
+			cbufs[cmp].resize( csizes[cmp] );
+			if ( str_in->read( cbufs[cmp].data(), csizes[cmp] ) != csizes[cmp] ) {
+				snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth component %i, %u bytes declared)", cmp, csizes[cmp] );
+				errorlevel = 2; return false;
+			}
 		}
 		// v4.0 sfth pipeline: cross-comp reads colldata[0][bpos] during Cb/Cr
 		// decode. AC bands partition is disjoint (ac_high=7×7 inner, ac_low=
