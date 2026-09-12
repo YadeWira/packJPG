@@ -5847,6 +5847,28 @@ INTERN bool pjg_read_header_codes( pjg_header_info* info )
 				errorlevel = 2;
 				return false;
 			}
+			// Both fields are raw bytes from the file and both are used as sizes:
+			// segm_cnt-1 indexes segm_tables[49][50], and nois_trs is a shift
+			// width. Unchecked, 0 and 255 read outside the table, and a shift of
+			// 32 or more is undefined -- while values as low as 15 allocate a
+			// model big enough to hang the decode for half a minute. The CLI
+			// clamps both (-t to 0..10, -s to 1..49); the file never did.
+			for ( int i = 0; i < 4; i++ ) {
+				if ( info->segm_cnt[ i ] < 1 || info->segm_cnt[ i ] > 49 ) {
+					snprintf( errormessage, MSG_SIZE,
+						"corrupt stream: segment count %i out of range (1..49) for component %i",
+						(int) info->segm_cnt[ i ], i );
+					errorlevel = 2;
+					return false;
+				}
+				if ( info->nois_trs[ i ] > 10 ) {
+					snprintf( errormessage, MSG_SIZE,
+						"corrupt stream: noise threshold %i out of range (0..10) for component %i",
+						(int) info->nois_trs[ i ], i );
+					errorlevel = 2;
+					return false;
+				}
+			}
 			info->has_settings = true;
 		}
 		else if ( hcode == 0x01 ) {
