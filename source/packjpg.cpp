@@ -374,6 +374,7 @@ packJPG by Matthias Stirner, 01/2016
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <climits>
 #include <string>
 #include <cmath>
 #include <ctime>
@@ -981,6 +982,7 @@ INTERN bool mix_mode        = false;	// -mix: auto-detect with warning
 INTERN bool subcmd_given    = false;	// a subcommand was explicitly provided
 INTERN bool module_mode = false;	// machine-friendly output: OK/ERROR + time only
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
+INTERN char* outname   = NULL;	// -o with a file destination: exact output path (one input only)
 INTERN int  verify_lv  = 0;		// verification level ( none (0), simple (1), detailed output (2) )
 INTERN int  err_tol    = 1;		// error threshold ( proceed on warnings yes (2) / no (1) )
 INTERN bool disc_meta  = false;	// discard meta-info yes / no
@@ -2157,47 +2159,132 @@ INTERN void initialize_options( int argc, char** argv )
 		}
 	}
 
+	// Clean break, no compatibility aliases. Every old spelling is listed in
+	// cli_retirados[] so it fails with the name of its replacement instead of
+	// "unknown option": a switch that vanished silently is worse than one that
+	// never existed. See doc/CLI.md in source/pja/.
+	struct Retirado { const char* viejo; bool prefijo; const char* nuevo; };
+	static const Retirado cli_retirados[] = {
+		{ "-p",       false, "--proceed" },
+		{ "-d",       false, "--discard-meta" },
+		{ "-ver",     false, "--verify" },
+		{ "-vp",      false, "--progress" },
+		{ "-np",      false, "--no-pause" },
+		{ "-fs",      false, "--keep-structure" },
+		{ "-dry",     false, "-n, --dry-run" },
+		{ "-module",  false, "--porcelain" },
+		{ "-sfth",    false, "--parallel-stages" },
+		{ "-od",      true,  "-o DIR, --output-dir=DIR" },
+		{ "-maxout",  true,  "--max-output=256M" },
+	};
+
+	// Reads the value of a switch. Long form takes it with '=', short form as
+	// the next argument. Never glued: "-th4" and "-v2" are gone on purpose --
+	// gluing is what forced sscanf() patterns that also matched things nobody
+	// meant, and it is why "-t" could never be given a meaning.
+	bool cli_error = false;
+	auto valor_de = [&]( const char* sw ) -> const char* {
+		if ( argc > 1 ) { argc--; argv++; return *argv; }
+		fprintf( stderr, "\nError: '%s' needs a value\n\n", sw );
+		cli_error = true;
+		return NULL;
+	};
+	// Matches "--nombre" or "--nombre=VALOR"; *val is the value or NULL.
+	auto largo = []( const char* a, const char* nombre, const char** val ) -> bool {
+		size_t n = strlen( nombre );
+		if ( strncmp( a, nombre, n ) != 0 ) return false;
+		if ( a[n] == '\0' )  { *val = NULL;       return true; }
+		if ( a[n] == '=' )   { *val = a + n + 1;  return true; }
+		return false;
+	};
+	auto entero = []( const char* v, int def ) -> int {
+		if ( v == NULL ) return def;
+		char* fin = NULL;
+		long l = strtol( v, &fin, 10 );
+		if ( fin == v || *fin != '\0' ) return INT_MIN;   // no es un entero
+		return (int) l;
+	};
+
 	while ( --argc > 0 ) {
 		argv++;
-		// switches begin with '-'
-		if ( strcmp((*argv), "-p" ) == 0 ) {
+		const char* val = NULL;
+
+		// Retired spellings first, so they never fall through to "unknown".
+		{
+			bool retirado = false;
+			for ( const Retirado& r : cli_retirados ) {
+				bool hit = r.prefijo
+					? ( strncmp( *argv, r.viejo, strlen( r.viejo ) ) == 0 )
+					: ( strcmp( *argv, r.viejo ) == 0 );
+				if ( hit ) {
+					fprintf( stderr, "\nError: '%s' no longer exists -- use '%s'\n",
+					         r.viejo, r.nuevo );
+					fprintf( stderr, "Switches were reworked; run without arguments for the list.\n\n" );
+					retirado = true;
+					break;
+				}
+			}
+			if ( retirado ) return;
+		}
+		// -v2 and -th4 were glued forms; they are retired too, but only when
+		// something is actually glued -- bare -v and -th are the new spellings.
+		if ( ( strncmp( *argv, "-v", 2 ) == 0 && (*argv)[2] != '\0' && isdigit( (unsigned char)(*argv)[2] ) )
+		  || ( strncmp( *argv, "-th", 3 ) == 0 && (*argv)[3] != '\0' ) ) {
+			fprintf( stderr, "\nError: '%s' no longer exists -- values go separate: '-v -v' or '--verbose=N', '-th N' or '--threads=N'\n\n", *argv );
+			return;
+		}
+
+		if ( strcmp( *argv, "--proceed" ) == 0 ) {
 			err_tol = 2;
 		}
-		else if ( strcmp((*argv), "-d" ) == 0 ) {
+		else if ( strcmp( *argv, "--discard-meta" ) == 0 ) {
 			disc_meta = true;
-		}		
-		else if ( strcmp((*argv), "-ver" ) == 0 ) {
+		}
+		else if ( strcmp( *argv, "--verify" ) == 0 ) {
 			verify_lv = ( verify_lv < 1 ) ? 1 : verify_lv;
 		}
-		else if ( sscanf( (*argv), "-v%i", &tmp_val ) == 1 ){
-			verbosity = tmp_val;
-			verbosity = ( verbosity < 0 ) ? 0 : verbosity;
-			verbosity = ( verbosity > 2 ) ? 2 : verbosity;			
+		else if ( strcmp( *argv, "-v" ) == 0 ) {
+			// repeatable: -v -v is level 2
+			if ( verbosity < 0 ) verbosity = 0;   // leaving --progress
+			if ( verbosity < 2 ) verbosity++;
 		}
-		else if ( strcmp((*argv), "-vp" ) == 0 ) {
+		else if ( largo( *argv, "--verbose", &val ) ) {
+			int n = entero( val, 1 );
+			if ( n == INT_MIN ) { fprintf( stderr, "\nError: --verbose needs a number\n\n" ); return; }
+			verbosity = ( n < 0 ) ? 0 : ( n > 2 ) ? 2 : n;
+		}
+		else if ( strcmp( *argv, "--progress" ) == 0 ) {
 			verbosity = -1;
 		}
-		else if ( strcmp((*argv), "-np" ) == 0 ) {
+		else if ( strcmp( *argv, "--no-pause" ) == 0 ) {
 			wait_exit = false;
 		}
-		else if ( strcmp((*argv), "--no-color" ) == 0 ) {
+		else if ( strcmp( *argv, "--no-color" ) == 0 ) {
 			force_no_color = true;
 		}
-		else if ( strcmp((*argv), "-r" ) == 0 ) {
+		else if ( strcmp( *argv, "-r" ) == 0 || strcmp( *argv, "--recursive" ) == 0 ) {
 			recursive = true;
 		}
-		else if ( strcmp((*argv), "-fs" ) == 0 ) {
+		else if ( strcmp( *argv, "--keep-structure" ) == 0 ) {
 			fs_mode = true;
 		}
-		else if ( strcmp((*argv), "-dry" ) == 0 ) {
+		else if ( strcmp( *argv, "-n" ) == 0 || strcmp( *argv, "--dry-run" ) == 0 ) {
 			dry_run = true;
 		}
-		else if ( strcmp((*argv), "-module" ) == 0 ) {
+		else if ( strcmp( *argv, "--porcelain" ) == 0 ) {
 			module_mode = true;
 			wait_exit = false;
 			verbosity = 0; // suppress all output except final OK/ERROR line
 		}
-		else if ( sscanf( (*argv), "-th%i", &tmp_val ) == 1 ) {
+		else if ( strcmp( *argv, "-f" ) == 0 || strcmp( *argv, "--force" ) == 0 ) {
+			overwrite = true;
+		}
+		else if ( strcmp( *argv, "-th" ) == 0 || largo( *argv, "--threads", &val ) ) {
+			if ( val == NULL ) { val = valor_de( "-th" ); if ( cli_error ) return; }
+			tmp_val = entero( val, -1 );
+			if ( tmp_val == INT_MIN || tmp_val < 0 ) {
+				fprintf( stderr, "\nError: thread count must be a number (0 = auto)\n\n" ); return;
+			}
 			if ( tmp_val == 0 ) {
 				// auto: use all detected cores (x64/Linux), cap at 4 for x86
 				// x86 has 2-4GB address space limit; too many threads causes OOM
@@ -2209,39 +2296,67 @@ INTERN void initialize_options( int argc, char** argv )
 				num_threads = ( cores > 2 ) ? 2 : cores;
 				#endif
 			} else {
-				num_threads = ( tmp_val < 1 ) ? 1 : tmp_val;
+				num_threads = tmp_val;
 			}
 		}
-		else if ( strcmp((*argv), "-o" ) == 0 ) {
-			overwrite = true;
-		}
-		else if ( strcmp((*argv), "-sfth" ) == 0 ) {
+		else if ( strcmp( *argv, "--parallel-stages" ) == 0 ) {
 			sfth_mode = true;
 			// Warn if fewer than 3 cores are available
 			int cores = (int) std::thread::hardware_concurrency();
 			if ( cores > 0 && cores < 3 ) {
-				fprintf( msgout, "\nWarning: -sfth works best with 3+ cores (detected: %i)\n\n", cores );
+				fprintf( msgout, "\nWarning: --parallel-stages works best with 3+ cores (detected: %i)\n\n", cores );
 			}
 		}
-		else if ( sscanf( (*argv), "-maxout%i", &tmp_val ) == 1 ) {
-			// v4.0e decompression-bomb guard: cap reconstructed-JPEG size, in MB.
+		else if ( largo( *argv, "--max-output", &val ) ) {
+			// Decompression-bomb guard: cap reconstructed-JPEG size.
 			// Sets the same pjg_max_output_size global as the library's
-			// pjglib_set_max_output_size(). Default is 256 MB; 0 = unlimited.
-			// Decoding a .pjg whose output would exceed the cap fails cleanly.
-			if ( tmp_val < 0 )    tmp_val = 0;
-			if ( tmp_val > 4095 ) tmp_val = 4095;
-			if ( tmp_val == 0 )
-				pjg_max_output_size = 0;
-			else
-				pjg_max_output_size = (unsigned int) tmp_val * 1024u * 1024u;
+			// pjglib_set_max_output_size(). Default 256 MB; 0 = unlimited.
+			if ( val == NULL ) { val = valor_de( "--max-output" ); if ( cli_error ) return; }
+			char* fin = NULL;
+			long long n = strtoll( val, &fin, 10 );
+			if ( fin == val || n < 0 ) {
+				fprintf( stderr, "\nError: --max-output needs a size, e.g. 256M\n\n" ); return;
+			}
+			long long mult = 1024 * 1024;   // bare number means MB
+			if ( *fin != '\0' ) {
+				switch ( *fin ) {
+					case 'k': case 'K': mult = 1024; break;
+					case 'm': case 'M': mult = 1024 * 1024; break;
+					case 'g': case 'G': mult = 1024 * 1024 * 1024LL; break;
+					default:
+						fprintf( stderr, "\nError: unknown size unit '%s' -- use K, M or G\n\n", fin );
+						return;
+				}
+				if ( fin[1] != '\0' ) {
+					fprintf( stderr, "\nError: unknown size unit '%s' -- use K, M or G\n\n", fin );
+					return;
+				}
+			}
+			long long bytes = n * mult;
+			if ( bytes > 4095LL * 1024 * 1024 ) bytes = 4095LL * 1024 * 1024;
+			pjg_max_output_size = (unsigned int) bytes;   // 0 stays 0 = unlimited
 		}
-		else if ( strncmp((*argv), "-od", 3 ) == 0 && strlen(*argv) > 3 ) {
-			// Feature #37: -od<path> sets output directory
-			outdir = (*argv) + 3;
-			// Create directory if it doesn't exist
+		else if ( strcmp( *argv, "-o" ) == 0 || largo( *argv, "--output-dir", &val ) ) {
+			bool solo_dir = ( strcmp( *argv, "-o" ) != 0 );
+			if ( val == NULL ) { val = valor_de( solo_dir ? "--output-dir" : "-o" ); if ( cli_error ) return; }
+			// cp semantics for -o: a directory that exists, or a name that ends
+			// in a separator, is a destination directory; anything else is the
+			// output NAME. --output-dir= only ever takes a directory.
+			size_t vl = strlen( val );
+			bool parece_dir = ( vl > 0 && ( val[vl-1] == '/'
+			#if defined(_WIN32) || defined(WIN32)
+				|| val[vl-1] == '\\'
+			#endif
+				) );
 			std::error_code ec;
-			std::filesystem::create_directories( safe_path( outdir ), ec );
-			// ec is silently ignored — if it fails, the error will surface later when writing files
+			bool es_dir = std::filesystem::is_directory( safe_path( val ), ec );
+			if ( solo_dir || parece_dir || es_dir ) {
+				outdir = (char*) val;
+				std::filesystem::create_directories( safe_path( outdir ), ec );
+				// ec ignored on purpose: a failure surfaces when writing files
+			} else {
+				outname = (char*) val;
+			}
 		}
 		#if defined(DEV_BUILD)
 		else if ( strcmp((*argv), "-dev") == 0 ) {
@@ -2442,6 +2557,27 @@ INTERN void initialize_options( int argc, char** argv )
 	// count number of files (or filenames) in filelist
 	for ( file_cnt = 0; filelist[ file_cnt ] != NULL; file_cnt++ );
 
+	// -o with a file destination only makes sense for one input. Without this,
+	// "packJPG a *.jpg -o out.pjg" would write fifty times over the same file
+	// and the last one would win, in silence. Same rule cp applies.
+	if ( outname != NULL ) {
+		if ( file_cnt > 1 ) {
+			fprintf( stderr, "\nError: -o '%s' is not a directory, so it takes one input file (got %i)\n",
+			         outname, file_cnt );
+			fprintf( stderr, "Use a directory, or -o with a trailing '/' to create one.\n\n" );
+			file_cnt = 0; filelist[0] = NULL;
+			return;
+		}
+		// And it never silently replaces something that is already there.
+		// "-o a.jpg b.jpg" used to mean overwrite-mode with two inputs; now it
+		// means write b over a, which would destroy a.jpg without this.
+		if ( !overwrite && file_exists( outname ) ) {
+			fprintf( stderr, "\nError: -o '%s' already exists -- pass -f to overwrite\n\n", outname );
+			file_cnt = 0; filelist[0] = NULL;
+			return;
+		}
+	}
+
 	// pre-scan to count processable files (JPG/PJG) for accurate progress display
 	// skipped for single-file invocations — no overhead worth optimizing away
 	if ( file_cnt == 1 ) {
@@ -2555,7 +2691,7 @@ INTERN void process_ui( void )
 	
 	if ( local_verbosity >= 0 ) { // standard UI
 		if ( action == A_LIST || action == A_STATS ) {
-			// -list / stats: print filename as header, details follow from list_pjg/list_jpg
+			// list / stats: print filename as header, details follow from list_pjg/list_jpg
 			fprintf( msgout, "\n%s\n", filelist[ file_no ] );
 		} else if ( !use_buf ) {
 			// single-thread verbose: check file first, then print header only if processable
@@ -2878,22 +3014,36 @@ INTERN void show_help( void )
 	fprintf( msgout, "Switches:" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "\n" );
-	fprintf( msgout, " [-ver]   verify files after processing\n" );
-	fprintf( msgout, " [-v?]    set level of verbosity (max: 2) (def: 0)\n" );
-	fprintf( msgout, " [-vp]    progress bar mode (overrides -v?)\n" );
-	fprintf( msgout, " [-np]    no pause after processing files\n" );
-	fprintf( msgout, " [--no-color] disable ANSI color output\n" );
-	fprintf( msgout, " [-o]     overwrite existing files\n" );
-	fprintf( msgout, " [-sfth]  use 3 cores for single-file compression (pre-pack stages)\n" );
-	fprintf( msgout, " [-th?]   set number of threads (0=auto, def: 1)\n" );
-	fprintf( msgout, " [-r]     recurse into subdirectories\n" );
-	fprintf( msgout, " [-fs]    preserve source folder structure under -od (use with -r)\n" );
-	fprintf( msgout, " [-dry]   dry run: simulate without writing output files\n" );
-	fprintf( msgout, " [-module] machine-friendly output: OK/ERROR + time only\n" );
-	fprintf( msgout, " [-od<p>] write output files to directory <p>\n" );
-	fprintf( msgout, " [-maxout<MB>] cap reconstructed-JPEG size when decoding (def: 256 MB, 0=unlimited)\n" );
-	fprintf( msgout, " [-p]     proceed on warnings\n" );
-	fprintf( msgout, " [-d]     discard meta-info\n" );
+	fprintf( msgout, " -o PATH, --output-dir=DIR  where the output goes (see below)\n" );
+	fprintf( msgout, " -f, --force            overwrite existing files\n" );
+	fprintf( msgout, " -r, --recursive        recurse into subdirectories\n" );
+	fprintf( msgout, " -n, --dry-run          simulate without writing output files\n" );
+	fprintf( msgout, " -v                     more detail; repeat for more (-v -v)\n" );
+	fprintf( msgout, "     --verbose=N        same, as a number (0..2, def: 0)\n" );
+	fprintf( msgout, "     --progress         progress bar instead of per-file output\n" );
+	fprintf( msgout, "     --porcelain        machine-friendly output: OK/ERROR + time only\n" );
+	fprintf( msgout, "     --no-color         disable ANSI color output\n" );
+	fprintf( msgout, "     --no-pause         no pause after processing files\n" );
+	fprintf( msgout, "     --verify           verify files after processing\n" );
+	fprintf( msgout, "     --proceed          proceed on warnings\n" );
+	fprintf( msgout, "     --discard-meta     discard meta-info\n" );
+	fprintf( msgout, "     --keep-structure   mirror source folders under -o (use with -r)\n" );
+	fprintf( msgout, " -th N, --threads=N     number of threads (0=auto, def: 1)\n" );
+	fprintf( msgout, "     --parallel-stages  use 3 cores for single-file compression (pre-pack stages)\n" );
+	fprintf( msgout, "     --max-output=SIZE  cap reconstructed-JPEG size when decoding\n" );
+	fprintf( msgout, "                        (K/M/G, bare number = MB; def: 256M, 0 = unlimited)\n" );
+	fprintf( msgout, "\n" );
+	fprintf( msgout, "-o works like the destination of cp: an existing directory or a name\n" );
+	fprintf( msgout, "ending in '/' is a directory; anything else is the output file name,\n" );
+	fprintf( msgout, "and then only one input file is allowed.\n" );
+	fprintf( msgout, "\n" );
+	fprintf( msgout, "  %s a foto.jpg                 -> foto.pjg\n", appname );
+	fprintf( msgout, "  %s a foto.jpg -o pana.pjg     -> pana.pjg\n", appname );
+	fprintf( msgout, "  %s x foto.pjg -o CARPETA/     -> CARPETA/foto.jpg\n", appname );
+	fprintf( msgout, "\n" );
+	fprintf( msgout, "Switch names changed in this version and the old ones are gone, not\n" );
+	fprintf( msgout, "aliased. Passing one prints the name that replaced it. Note that -o no\n" );
+	fprintf( msgout, "longer means 'overwrite' -- that is -f now.\n" );
 	#if defined(DEV_BUILD)
 	if ( developer ) {
 	fprintf( msgout, "\n" );
@@ -3019,8 +3169,8 @@ INTERN void process_file( void )
 				execute( dump_pgm );
 				break;
 			case A_LIST:
-				// -list only works on .pjg files
-				snprintf( errormessage, MSG_SIZE, "-list is only supported for PJG files" );
+				// the "list" subcommand only works on .pjg files
+				snprintf( errormessage, MSG_SIZE, "'list' is only supported for PJG files" );
 				errorlevel = 2;
 				break;
 			// A_STATS handled outside the DEV_BUILD block (runs list_jpg)
@@ -3308,7 +3458,7 @@ INTERN bool check_file( void )
         if (pipe_on) {
             str_out = std::make_unique<StreamWriter>();
         } else if ( action == A_LIST ) {
-            // no output file for -list
+            // no output file for the list subcommand
         } else if ( dry_run ) {
             str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
         } else if ( compress_only ) {
@@ -9611,6 +9761,15 @@ INTERN inline void progress_bar( int current, int last )
 #if !defined(BUILD_LIB)
 INTERN inline char* create_filename( const char* base, const char* extension )
 {
+	// -o with a file destination wins over everything: the user named the
+	// output, so the extension is not appended and outdir does not apply.
+	// Guarded at parse time to one input file.
+	if ( outname != NULL && extension != NULL ) {
+		char* exacto = (char*) calloc( strlen( outname ) + 1, sizeof( char ) );
+		strcpy( exacto, outname );
+		return exacto;
+	}
+
 	// Feature #37: if outdir is set, put the output file there instead of next to the input.
 	// -fs: when -r expanded a dir AND outdir is set, mirror the path's relative
 	// subdir from src_root under outdir (caesium-clt -RS semantics).

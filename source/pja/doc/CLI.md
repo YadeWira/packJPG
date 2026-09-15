@@ -1,7 +1,20 @@
 # Rework de la línea de comandos
 
+**Aplicado** en `source/packjpg.cpp` (`initialize_options`, `show_help`).
+Medido con 43 celdas: 43/43 acá, 1/43 contra v5.0f, que es el control de que la
+batería discrimina en vez de aceptar todo.
+
 **Corte limpio, sin alias de compatibilidad.** Decidido: los scripts existentes
-se rompen. Lo que sigue incluye cómo hacer que rompan con un mensaje útil.
+se rompen. Lo que sigue incluye cómo hacer que rompan con un mensaje útil, y así
+está implementado: cada grafía retirada está en `cli_retirados[]` y falla
+nombrando su reemplazo, no con "unknown option".
+
+Lo que se agregó al implementar, y que este documento no preveía: **un nombre de
+salida que ya existe se rechaza salvo que se pase `-f`.** Sin eso,
+`packJPG a -o a.jpg b.jpg` —que en la grafía vieja era *sobrescribir, dos
+entradas*— comprimía `b.jpg` encima de `a.jpg` en silencio. El cambio de
+significado de `-o` es el único del rework que no rompe ruidosamente por sí
+solo, así que necesita esa guarda.
 
 La mayoría de los switches actuales vienen del packJPG original y arrastran
 nombres que no se adivinan. Los subcomandos (`a`, `x`, `mix`, `list`, `stats`)
