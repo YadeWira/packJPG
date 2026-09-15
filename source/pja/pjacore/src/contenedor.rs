@@ -160,12 +160,8 @@ mod pruebas {
 
     const SAL: [u8; TAM_SAL] = [5u8; TAM_SAL];
     const NB: [u8; TAM_NONCE] = [6u8; TAM_NONCE];
-    const CORPUS: &str = "/mnt/IA_LAB/agentes/PJPG/verificacion/corpus-validos";
-
     fn reales(n: usize) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        let mut r: Vec<_> = fs::read_dir(CORPUS).unwrap().filter_map(|e| e.ok())
-            .map(|e| e.path()).filter(|p| p.extension().map_or(false, |x| x == "pjg")).collect();
-        r.sort(); r.truncate(n);
+        let r = crate::corpus::pjgs(n);
         let datos = r.iter().map(|p| fs::read(p).unwrap()).collect();
         let nombres = r.iter().map(|p| p.file_name().unwrap()
             .to_string_lossy().as_bytes().to_vec()).collect();
@@ -220,6 +216,42 @@ mod pruebas {
         let a = abrir(&cif, Some(b"correcta")).unwrap();
         assert_eq!(a.contenedor.miembros.len(), 4);
         assert_eq!(a.payloads, d);
+    }
+
+    /// El byte de perfil de KDF se lee de verdad.
+    ///
+    /// Hace falta forzarlo: el perfil V1 vale **cero**, o sea el mismo valor
+    /// que tenía el byte reservado antes de existir. Con los contenedores que
+    /// escribimos hoy, quitar el cableado entero no cambiaría ni un byte ni
+    /// haría fallar ninguna otra prueba. Esta es la única que lo distingue.
+    #[test] fn el_perfil_de_kdf_se_valida() {
+        let (d, n) = reales(3);
+        let e = ents(&d, &n);
+        let clave = cifrado::derivar_clave(b"pass", &SAL).unwrap();
+        let (cif, _) = escribir(&e, FLAG_CIFRADO, Some((&clave, &NB, &SAL))).unwrap();
+        let (claro, _) = escribir(&e, 0, None).unwrap();
+
+        // control: tal como salen, los dos abren
+        assert!(abrir(&cif, Some(b"pass")).is_ok(), "control cifrado");
+        assert!(abrir(&claro, None).is_ok(), "control en claro");
+        assert_eq!(cif[6], 0, "V1 se escribe como 0");
+        assert_eq!(claro[6], 0, "sin cifrado el byte va en 0");
+
+        // un perfil que esta version no conoce se rechaza, y se rechaza POR ESO
+        for malo in [1u8, 2, 255] {
+            let mut m = cif.clone();
+            m[6] = malo;
+            assert_eq!(abrir(&m, Some(b"pass")).err(),
+                       Some(Error::Indice(indice::Error::PerfilKdfDesconocido(malo))),
+                       "perfil {malo} tendria que rechazarse por nombre");
+        }
+
+        // y sin cifrado el byte no puede traer nada: ahi no significa un perfil
+        let mut m = claro.clone();
+        m[6] = 1;
+        assert_eq!(abrir(&m, None).err(),
+                   Some(Error::Indice(indice::Error::ReservadoNoCero)),
+                   "sin cifrado el byte de perfil tiene que seguir siendo reservado");
     }
 
     /// Los 20 bytes que se mudaron adentro no pueden quedar como relleno

@@ -134,7 +134,7 @@ $(TARGET): $(OBJ) $(RES)
 # --- standard targets --------------------------------------------------------
 
 .PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
-        native pgo pgo-clean pja pja-tests pja-clean
+        native pgo pgo-clean pja pja-tests pja-clean pja-corpus
 
 all: $(TARGET)
 
@@ -341,6 +341,36 @@ $(PJA_LIB): $(wildcard $(PJA_DIR)/*/src/*.rs) $(wildcard $(PJA_DIR)/*/Cargo.toml
 pja: $(PJA_LIB)
 	@echo "[OK] $(PJA_LIB)"
 
+# Corpus para las pruebas de Rust del contenedor.
+#
+# Antes esas pruebas leian una ruta ABSOLUTA de la maquina de desarrollo. Pasaban
+# ahi y no podian pasar en ningun otro lado -- y una de ellas, peor, se salteaba
+# en silencio cuando el directorio no existia: verde, cero cobertura. Lo destapo
+# meter el contenedor en CI.
+#
+# El material sale de test-files/ comprimido por el packJPG DE ESTE ARBOL, que es
+# mejor que un fixture congelado: prueba contra lo que este commit produce. Se
+# generan las dos variantes de formato (normal y --parallel-stages) porque son
+# .pjg distintos y las pruebas necesitan mas de cinco.
+PJA_CORPUS_DIR = $(PJA_DIR)/pruebas/corpus
+
+pja-corpus: $(TARGET)
+	@rm -rf $(PJA_CORPUS_DIR) && mkdir -p $(PJA_CORPUS_DIR)/n $(PJA_CORPUS_DIR)/p
+	@cp ../test-files/*.jpg $(PJA_CORPUS_DIR)/n/
+	@cp ../test-files/*.jpg $(PJA_CORPUS_DIR)/p/
+	@./$(TARGET) a --no-pause -f $(PJA_CORPUS_DIR)/n/*.jpg >/dev/null 2>&1 || true
+	@./$(TARGET) a --no-pause -f --parallel-stages $(PJA_CORPUS_DIR)/p/*.jpg >/dev/null 2>&1 || true
+	@for f in $(PJA_CORPUS_DIR)/n/*.pjg; do mv "$$f" $(PJA_CORPUS_DIR)/n_`basename $$f`; done
+	@for f in $(PJA_CORPUS_DIR)/p/*.pjg; do mv "$$f" $(PJA_CORPUS_DIR)/p_`basename $$f`; done
+	@rm -rf $(PJA_CORPUS_DIR)/n $(PJA_CORPUS_DIR)/p
+	@n=`ls $(PJA_CORPUS_DIR)/*.pjg 2>/dev/null | wc -l`; \
+	 if [ "$$n" -lt 10 ]; then \
+	   echo "ERROR: el corpus quedo con $$n .pjg y las pruebas necesitan 10."; \
+	   echo "       Revisar que ../test-files/ tenga jpgs y que $(TARGET) los comprima."; \
+	   exit 1; \
+	 fi; \
+	 echo "[OK] $(PJA_CORPUS_DIR): $$n .pjg"
+
 # pjatool y test_frontera son consumidores de C++ de la frontera FFI.
 # pjatool ademas usa la libreria de packJPG, asi que necesita packJPGlib.a
 # — o sea -DBUILD_LIB. Sin eso el link se cae con undefined reference a
@@ -358,7 +388,7 @@ pja-tests: $(PJA_LIB) lib
 # solo lo que produce este Makefile.
 pja-clean:
 	@echo pja-clean...
-	@-rm -rf $(PJA_DIR)/target
+	@-rm -rf $(PJA_DIR)/target $(PJA_DIR)/pruebas
 	@-rm -f $(PJA_DIR)/test_frontera $(PJA_DIR)/pjatool
 
 clean:

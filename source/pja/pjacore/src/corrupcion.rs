@@ -12,7 +12,6 @@ mod bateria {
     use crate::indice::*;
     use std::fs;
 
-    const CORPUS: &str = "/mnt/IA_LAB/agentes/PJPG/verificacion/corpus-validos";
 
     #[derive(Default, Debug)]
     struct Cuenta {
@@ -32,10 +31,7 @@ mod bateria {
     }
 
     fn contenedor_real() -> (Vec<u8>, Contenedor) {
-        let mut rutas: Vec<_> = fs::read_dir(CORPUS).unwrap()
-            .filter_map(|e| e.ok()).map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |x| x == "pjg")).collect();
-        rutas.sort(); rutas.truncate(6);
+        let rutas = crate::corpus::pjgs(6);
         let datos: Vec<Vec<u8>> = rutas.iter().map(|p| fs::read(p).unwrap()).collect();
         let nombres: Vec<Vec<u8>> = rutas.iter()
             .map(|p| p.file_name().unwrap().to_string_lossy().as_bytes().to_vec()).collect();

@@ -33,10 +33,50 @@ pub enum Error {
     Formato,
 }
 
+/// Perfil de derivación de clave. Va identificado por un byte en la cabecera,
+/// no por sus números: un contenedor que declarara `m` y `t` crudos sería un
+/// vector de DoS —pedir 4 GiB de memoria antes de validar nada— y habría que
+/// acotarlo igual. Un identificador de perfil sólo puede valer lo que nosotros
+/// definimos, y un perfil desconocido se rechaza.
+///
+/// El perfil no se puede cambiar sin cambiar el identificador: quien abra el
+/// archivo tiene que poder derivar exactamente la misma clave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PerfilKdf {
+    /// v1: Argon2id, m = 64 MiB, t = 3, p = 1.
+    ///
+    /// Por arriba del mínimo de OWASP (19 MiB, t=2), que a 30 ms dejaba mucho
+    /// margen sin usar. Medido en esta máquina: el mínimo costaba ~30 ms y este
+    /// perfil ~100 ms. Para el usuario legítimo sigue siendo imperceptible en
+    /// una CLI; para quien prueba un diccionario, el trabajo por intento se
+    /// multiplica y la memoria requerida es lo que estorba a una GPU.
+    V1,
+}
+
+impl PerfilKdf {
+    pub fn de_byte(b: u8) -> Option<Self> {
+        match b { 0 => Some(PerfilKdf::V1), _ => None }
+    }
+    pub fn a_byte(self) -> u8 {
+        match self { PerfilKdf::V1 => 0 }
+    }
+    /// (memoria en KiB, pasadas, paralelismo)
+    fn params(self) -> (u32, u32, u32) {
+        match self { PerfilKdf::V1 => (64 * 1024, 3, 1) }
+    }
+}
+
 /// Argon2id sobre la contraseña. No es un hash rápido a propósito.
 pub fn derivar_clave(pass: &[u8], sal: &[u8; TAM_SAL]) -> Result<[u8; 32], Error> {
+    derivar_clave_con(PerfilKdf::V1, pass, sal)
+}
+
+pub fn derivar_clave_con(perfil: PerfilKdf, pass: &[u8], sal: &[u8; TAM_SAL])
+    -> Result<[u8; 32], Error>
+{
     use argon2::{Argon2, Algorithm, Version, Params};
-    let params = Params::new(19 * 1024, 2, 1, Some(32)).map_err(|_| Error::Formato)?;
+    let (m, t, p) = perfil.params();
+    let params = Params::new(m, t, p, Some(32)).map_err(|_| Error::Formato)?;
     let a2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut clave = [0u8; 32];
     a2.hash_password_into(pass, sal, &mut clave).map_err(|_| Error::Formato)?;

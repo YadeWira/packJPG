@@ -93,6 +93,15 @@ jobs:
           cargo --version
           gcc --version | head -1
 
+      - name: Corpus for the Rust tests
+        working-directory: source
+        run: |
+          # Las pruebas necesitan .pjg reales. Se generan con el packJPG DE ESTE
+          # COMMIT, no con un fixture congelado, asi prueban contra lo que este
+          # arbol produce. El target falla si quedan menos de 10.
+          make -j$(nproc)
+          make pja-corpus
+
       - name: Rust test suite
         run: |
           # `cargo test` compila contra std; el Makefile construye el staticlib

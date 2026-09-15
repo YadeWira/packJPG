@@ -68,7 +68,10 @@ pub fn escribir(entradas: &[Entrada], flags: u8) -> Result<(Vec<u8>, Avisos), Er
     out.extend_from_slice(&MAGIA);
     out.push(VERSION);
     out.push(flags);
-    out.extend_from_slice(&[0, 0]);
+    // kdf(1) + reservado(1). El perfil sólo va cuando hay cifrado; sin cifrado
+    // ese byte tiene que ser cero y `leer_cabecera` lo exige.
+    out.push( if flags & FLAG_CIFRADO != 0 { crate::cifrado::PerfilKdf::V1.a_byte() } else { 0 } );
+    out.push(0);
     out.extend_from_slice(&(idx.len() as u32).to_le_bytes());
     out.extend_from_slice(&[0u8; 16]);          // hueco del hash
     out.extend_from_slice(&idx);
@@ -162,19 +165,14 @@ mod reales {
     use std::fs;
     use std::path::Path;
 
-    const CORPUS: &str = "/mnt/IA_LAB/agentes/PJPG/verificacion/corpus-validos";
-
     #[test] fn round_trip_con_pjg_reales() {
-        let dir = Path::new(CORPUS);
-        if !dir.exists() { eprintln!("corpus ausente, prueba omitida"); return; }
-
-        let mut rutas: Vec<_> = fs::read_dir(dir).unwrap()
-            .filter_map(|e| e.ok()).map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |x| x == "pjg"))
-            .collect();
-        rutas.sort();
-        rutas.truncate(25);
-        assert!(rutas.len() >= 10, "hacen falta al menos 10 .pjg reales");
+        // Antes esto arrancaba con:
+        //     if !dir.exists() { eprintln!("corpus ausente"); return; }
+        // o sea que sin corpus la prueba pasaba en verde sin probar nada. En la
+        // maquina de desarrollo el corpus estaba, asi que nunca se noto; en un
+        // checkout limpio habria sido cobertura cero y silenciosa. Falta de
+        // material es un fallo, no una omision.
+        let rutas = crate::corpus::pjgs(10);
 
         let datos: Vec<Vec<u8>> = rutas.iter().map(|p| fs::read(p).unwrap()).collect();
         let nombres: Vec<Vec<u8>> = rutas.iter()

@@ -16,7 +16,18 @@ pub const FLAG_RUTAS: u8 = 1 << 1;
 pub const FLAG_SOLIDO: u8 = 1 << 2;
 const FLAGS_CONOCIDOS: u8 = FLAG_CIFRADO | FLAG_RUTAS | FLAG_SOLIDO;
 
-/// magia(4) + version(1) + flags(1) + reservado(2) + tam_indice(4) + hash_indice(16)
+/// magia(4) + version(1) + flags(1) + kdf(1) + reservado(1) + tam_indice(4) + hash_indice(16)
+///
+/// `kdf` identifica el perfil de derivación de clave y **sólo puede ser
+/// distinto de cero con `FLAG_CIFRADO` puesto**. Existe para que subir el costo
+/// de Argon2 más adelante no vuelva ilegibles los archivos ya escritos: quien
+/// abra el contenedor tiene que derivar exactamente la misma clave que quien lo
+/// escribió, así que el parámetro es parte del formato, se quiera o no. Va como
+/// identificador y no como `m`/`t`/`p` crudos: números crudos serían pedir
+/// memoria arbitraria antes de validar nada, y habría que acotarlos igual.
+///
+/// Queda dentro de `cab[0..12]`, que es lo que cubre el hash del índice, así
+/// que voltear ese byte no pasa desapercibido.
 pub const TAM_CABECERA: usize = 4 + 1 + 1 + 2 + 4 + 16;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -39,6 +50,9 @@ pub enum Error {
     IndiceTruncado,
     /// La cabecera o el índice no coinciden con el hash declarado.
     IndiceAlterado,
+    /// El contenedor declara un perfil de derivación de clave que esta versión
+    /// no conoce. Viene de un packJPG más nuevo.
+    PerfilKdfDesconocido(u8),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,7 +101,17 @@ pub fn leer_cabecera(datos: &[u8]) -> Result<(u8, u32, [u8; 16]), Error> {
     if version > VERSION { return Err(Error::VersionFutura(version)); }
     let flags = datos[5];
     if flags & !FLAGS_CONOCIDOS != 0 { return Err(Error::FlagDesconocido); }
-    if datos[6] != 0 || datos[7] != 0 { return Err(Error::ReservadoNoCero); }
+    if datos[7] != 0 { return Err(Error::ReservadoNoCero); }
+    // El perfil de KDF sólo tiene sentido cifrando; y sólo puede valer lo que
+    // esta versión conoce. Un perfil desconocido se rechaza en vez de caer a
+    // uno por defecto: derivar con los parámetros equivocados da una clave
+    // equivocada, y eso se manifestaría como "contraseña incorrecta" sobre un
+    // archivo y una contraseña que estaban bien.
+    if flags & FLAG_CIFRADO == 0 {
+        if datos[6] != 0 { return Err(Error::ReservadoNoCero); }
+    } else if crate::cifrado::PerfilKdf::de_byte( datos[6] ).is_none() {
+        return Err(Error::PerfilKdfDesconocido( datos[6] ));
+    }
     let tam_indice = u32le(&datos[8..12]);
     let mut hash_indice = [0u8; 16];
     hash_indice.copy_from_slice(&datos[12..28]);

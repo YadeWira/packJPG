@@ -13,6 +13,7 @@
 
 extern crate alloc;
 
+#[cfg(test)] pub mod corpus;
 pub mod cifrado;
 pub mod contenedor;
 pub mod corrupcion;
