@@ -81,12 +81,16 @@ jobs:
           # warned/errored, even if others succeeded — under bash -e (GH
           # Actions' default) that would abort the script right here,
           # before the per-file skip-handling below even runs.
-          ./source/packJPG a -np -o rt_out/*.jpg || true
+          ./source/packJPG a --no-pause -f rt_out/*.jpg || true
           fail=0
+          total=0
+          skipped=0
           for f in rt_in/*.jpg; do
+            total=$((total+1))
             stem=$(basename "${f%.*}")
             pjg="rt_out/${stem}.pjg"
             if [ ! -f "$pjg" ]; then
+              skipped=$((skipped+1))
               # Was misdiagnosed as an ImageMagick JPEG quirk — it wasn't.
               # Root cause was padbit declared as bare `char` (signed on
               # x86_64, unsigned on ARM64), breaking the `padbit == -1`
@@ -96,9 +100,20 @@ jobs:
               echo "SKIP (compress warned/errored): $stem"
               continue
             fi
-            ./source/packJPG x -np -o -od/tmp "$pjg" || true
+            ./source/packJPG x --no-pause -f --output-dir=/tmp "$pjg" || true
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $stem" || { echo "FAIL: $stem"; fail=1; }
           done
+          # El SKIP de arriba existe como red de seguridad, no como resultado
+          # esperado. Sin este chequeo, un fallo TOTAL de la compresion --por
+          # ejemplo un switch que dejo de existir-- salta cada archivo, no deja
+          # ni un FAIL, y el job pasa en verde habiendo probado cero round-trips.
+          # Que es lo que iba a pasar con el corte de switches de la 6.0.
+          echo "round-trips: $total archivos, $skipped saltados"
+          if [ "$total" -eq 0 ]; then
+            echo "FAIL: no habia archivos de entrada"; fail=1
+          elif [ "$skipped" -eq "$total" ]; then
+            echo "FAIL: se saltaron TODOS ($skipped/$total) -- no se probo ningun round-trip"; fail=1
+          fi
           exit $fail
 
       - name: Round-trip (library harness)
