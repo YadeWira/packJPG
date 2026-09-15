@@ -1,5 +1,5 @@
 [workspace]
-members = ["mjgcore", "mjgfs", "mjgffi"]
+members = ["pjacore", "pjafs", "pjaffi", "gen"]
 resolver = "2"
 
 # El perfil va en la RAIZ del workspace. Puesto en el manifiesto del miembro

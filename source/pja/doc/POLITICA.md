@@ -1,4 +1,4 @@
-# Política de límites y nombres del contenedor MJG
+# Política de límites y nombres del contenedor PJA
 
 Documento de diseño, **sin código**. Decide el layout del formato, así que va
 antes del parser. Todos los números que se apoyan en medición dicen cuál.

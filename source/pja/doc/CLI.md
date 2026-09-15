@@ -39,6 +39,11 @@ son de este proyecto y **no cambian**.
 | `-e`, `--encrypt` | pedir contraseña interactiva, **sin eco**, dos veces al crear |
 | `--password-file=RUTA` | para scripts; rechaza si el archivo tiene permisos más amplios que `0600` |
 | `--keep-structure` | preservar rutas dentro del contenedor |
+| `--keep-corrupt` | al extraer, un miembro cuyo hash no coincide se renombra a `<nombre>.corrupto` en vez de borrarse |
+
+**`list` sobre un contenedor cifrado pide contraseña.** No es una decisión de
+la CLI sino del formato: el índice viaja adentro del cifrado, así que no hay
+nada que listar sin la clave. Ver `FORMATO.md` §1.
 
 **`-o` y `-C` no colisionan porque significan cosas distintas:** `-o` es un
 archivo de salida (convención de `gcc`, `curl`), `-C` es un directorio destino

@@ -17,42 +17,42 @@
 
 extern crate alloc;
 use alloc::{boxed::Box, vec::Vec};
-use mjgcore::{cifrado, contenedor, escritor::Entrada, indice};
+use pjacore::{cifrado, contenedor, escritor::Entrada, indice};
 
 mod asignador;
 
 // --- códigos de estado -----------------------------------------------------
-pub const MJG_OK: i32 = 0;
-pub const MJG_ERR_NULL: i32 = -1;
-pub const MJG_ERR_BUF_CHICO: i32 = -2;
-pub const MJG_ERR_FORMATO: i32 = -3;
-pub const MJG_ERR_LIMITE: i32 = -4;
-pub const MJG_ERR_NOMBRE: i32 = -5;
-pub const MJG_ERR_CLAVE: i32 = -6;
-pub const MJG_ERR_INDICE: i32 = -7;
-pub const MJG_ERR_RANGO: i32 = -8;
+pub const PJA_OK: i32 = 0;
+pub const PJA_ERR_NULL: i32 = -1;
+pub const PJA_ERR_BUF_CHICO: i32 = -2;
+pub const PJA_ERR_FORMATO: i32 = -3;
+pub const PJA_ERR_LIMITE: i32 = -4;
+pub const PJA_ERR_NOMBRE: i32 = -5;
+pub const PJA_ERR_CLAVE: i32 = -6;
+pub const PJA_ERR_INDICE: i32 = -7;
+pub const PJA_ERR_RANGO: i32 = -8;
 
 fn traducir(e: &contenedor::Error) -> i32 {
     use contenedor::Error as E;
     match e {
-        E::ContraseñaFaltante | E::ContraseñaSobrante => MJG_ERR_CLAVE,
-        E::Cifrado(_) => MJG_ERR_CLAVE,
-        E::ArchivoCorto => MJG_ERR_FORMATO,
+        E::ContraseñaFaltante | E::ContraseñaSobrante => PJA_ERR_CLAVE,
+        E::Cifrado(_) => PJA_ERR_CLAVE,
+        E::ArchivoCorto => PJA_ERR_FORMATO,
         E::Indice(i) => match i {
-            indice::Error::NombreInvalido(_) | indice::Error::NombreDuplicado(_) => MJG_ERR_NOMBRE,
-            indice::Error::IndiceAlterado => MJG_ERR_INDICE,
+            indice::Error::NombreInvalido(_) | indice::Error::NombreDuplicado(_) => PJA_ERR_NOMBRE,
+            indice::Error::IndiceAlterado => PJA_ERR_INDICE,
             indice::Error::DemasiadosMiembros(_) | indice::Error::CountImposible
             | indice::Error::RatioExcedido | indice::Error::PresupuestoExcedido
             | indice::Error::SumaNoCuadra | indice::Error::PayloadFueraDeRango(_)
-            | indice::Error::Desborde => MJG_ERR_LIMITE,
-            _ => MJG_ERR_FORMATO,
+            | indice::Error::Desborde => PJA_ERR_LIMITE,
+            _ => PJA_ERR_FORMATO,
         },
-        E::Escritura(_) => MJG_ERR_NOMBRE,
+        E::Escritura(_) => PJA_ERR_NOMBRE,
     }
 }
 
 /// Manejador opaco. El lado C++ nunca ve su interior.
-pub struct MjgAbierto { inner: contenedor::Abierto }
+pub struct PjaAbierto { inner: contenedor::Abierto }
 
 // --- lectura ---------------------------------------------------------------
 
@@ -60,19 +60,19 @@ pub struct MjgAbierto { inner: contenedor::Abierto }
 ///
 /// # Safety
 /// `datos` apunta a `largo` bytes legibles. `salida` recibe un manejador que
-/// **debe liberarse con `mjg_cerrar`**.
+/// **debe liberarse con `pja_cerrar`**.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_abrir(
+pub unsafe extern "C" fn pja_abrir(
     datos: *const u8, largo: usize,
     pass: *const u8, pass_largo: usize,
-    salida: *mut *mut MjgAbierto,
+    salida: *mut *mut PjaAbierto,
 ) -> i32 {
-    if datos.is_null() || salida.is_null() { return MJG_ERR_NULL; }
+    if datos.is_null() || salida.is_null() { return PJA_ERR_NULL; }
     *salida = core::ptr::null_mut();
     let d = core::slice::from_raw_parts(datos, largo);
     let p = if pass.is_null() { None } else { Some(core::slice::from_raw_parts(pass, pass_largo)) };
     match contenedor::abrir(d, p) {
-        Ok(a) => { *salida = Box::into_raw(Box::new(MjgAbierto { inner: a })); MJG_OK }
+        Ok(a) => { *salida = Box::into_raw(Box::new(PjaAbierto { inner: a })); PJA_OK }
         Err(e) => traducir(&e),
     }
 }
@@ -80,27 +80,27 @@ pub unsafe extern "C" fn mjg_abrir(
 /// Libera el manejador. Pasar nulo es válido y no hace nada.
 ///
 /// # Safety
-/// `h` viene de `mjg_abrir` y no se usa después de esta llamada.
+/// `h` viene de `pja_abrir` y no se usa después de esta llamada.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_cerrar(h: *mut MjgAbierto) {
+pub unsafe extern "C" fn pja_cerrar(h: *mut PjaAbierto) {
     if !h.is_null() { drop(Box::from_raw(h)); }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mjg_cantidad(h: *const MjgAbierto) -> i64 {
-    if h.is_null() { return MJG_ERR_NULL as i64; }
+pub unsafe extern "C" fn pja_cantidad(h: *const PjaAbierto) -> i64 {
+    if h.is_null() { return PJA_ERR_NULL as i64; }
     let a = &*h;
     a.inner.contenedor.miembros.len() as i64
 }
 
 /// Largo en bytes del nombre del miembro `i`, para que el llamador reserve.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_nombre_largo(h: *const MjgAbierto, i: usize) -> i64 {
-    if h.is_null() { return MJG_ERR_NULL as i64; }
+pub unsafe extern "C" fn pja_nombre_largo(h: *const PjaAbierto, i: usize) -> i64 {
+    if h.is_null() { return PJA_ERR_NULL as i64; }
     let a = &*h;
     match a.inner.contenedor.miembros.get(i) {
         Some(m) => m.nombre.len() as i64,
-        None => MJG_ERR_RANGO as i64,
+        None => PJA_ERR_RANGO as i64,
     }
 }
 
@@ -111,21 +111,21 @@ pub unsafe extern "C" fn mjg_nombre_largo(h: *const MjgAbierto, i: usize) -> i64
 /// # Safety
 /// `buf` apunta a `buf_largo` bytes escribibles.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_nombre(h: *const MjgAbierto, i: usize,
+pub unsafe extern "C" fn pja_nombre(h: *const PjaAbierto, i: usize,
                                     buf: *mut u8, buf_largo: usize) -> i32 {
-    if h.is_null() || buf.is_null() { return MJG_ERR_NULL; }
+    if h.is_null() || buf.is_null() { return PJA_ERR_NULL; }
     let a = &*h;
-    let m = match a.inner.contenedor.miembros.get(i) { Some(m) => m, None => return MJG_ERR_RANGO };
-    if buf_largo < m.nombre.len() { return MJG_ERR_BUF_CHICO; }
+    let m = match a.inner.contenedor.miembros.get(i) { Some(m) => m, None => return PJA_ERR_RANGO };
+    if buf_largo < m.nombre.len() { return PJA_ERR_BUF_CHICO; }
     core::ptr::copy_nonoverlapping(m.nombre.as_ptr(), buf, m.nombre.len());
-    MJG_OK
+    PJA_OK
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn mjg_payload_largo(h: *const MjgAbierto, i: usize) -> i64 {
-    if h.is_null() { return MJG_ERR_NULL as i64; }
+pub unsafe extern "C" fn pja_payload_largo(h: *const PjaAbierto, i: usize) -> i64 {
+    if h.is_null() { return PJA_ERR_NULL as i64; }
     let a = &*h;
-    match a.inner.payloads.get(i) { Some(p) => p.len() as i64, None => MJG_ERR_RANGO as i64 }
+    match a.inner.payloads.get(i) { Some(p) => p.len() as i64, None => PJA_ERR_RANGO as i64 }
 }
 
 /// Copia el payload `.pjg` del miembro `i`. Ya pasó por todas las validaciones
@@ -134,14 +134,14 @@ pub unsafe extern "C" fn mjg_payload_largo(h: *const MjgAbierto, i: usize) -> i6
 /// # Safety
 /// `buf` apunta a `buf_largo` bytes escribibles.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_payload(h: *const MjgAbierto, i: usize,
+pub unsafe extern "C" fn pja_payload(h: *const PjaAbierto, i: usize,
                                      buf: *mut u8, buf_largo: usize) -> i32 {
-    if h.is_null() || buf.is_null() { return MJG_ERR_NULL; }
+    if h.is_null() || buf.is_null() { return PJA_ERR_NULL; }
     let a = &*h;
-    let p = match a.inner.payloads.get(i) { Some(p) => p, None => return MJG_ERR_RANGO };
-    if buf_largo < p.len() { return MJG_ERR_BUF_CHICO; }
+    let p = match a.inner.payloads.get(i) { Some(p) => p, None => return PJA_ERR_RANGO };
+    if buf_largo < p.len() { return PJA_ERR_BUF_CHICO; }
     core::ptr::copy_nonoverlapping(p.as_ptr(), buf, p.len());
-    MJG_OK
+    PJA_OK
 }
 
 /// Hash BLAKE3-128 del JPEG original declarado para el miembro `i`.
@@ -149,30 +149,30 @@ pub unsafe extern "C" fn mjg_payload(h: *const MjgAbierto, i: usize,
 /// # Safety
 /// `buf` apunta a al menos 16 bytes escribibles.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_hash(h: *const MjgAbierto, i: usize,
+pub unsafe extern "C" fn pja_hash(h: *const PjaAbierto, i: usize,
                                   buf: *mut u8, buf_largo: usize) -> i32 {
-    if h.is_null() || buf.is_null() { return MJG_ERR_NULL; }
-    if buf_largo < 16 { return MJG_ERR_BUF_CHICO; }
+    if h.is_null() || buf.is_null() { return PJA_ERR_NULL; }
+    if buf_largo < 16 { return PJA_ERR_BUF_CHICO; }
     let a = &*h;
-    let m = match a.inner.contenedor.miembros.get(i) { Some(m) => m, None => return MJG_ERR_RANGO };
+    let m = match a.inner.contenedor.miembros.get(i) { Some(m) => m, None => return PJA_ERR_RANGO };
     core::ptr::copy_nonoverlapping(m.hash.as_ptr(), buf, 16);
-    MJG_OK
+    PJA_OK
 }
 
-/// Hash BLAKE3-128 de un buffer, para verificar contra `mjg_hash` tras decodificar.
+/// Hash BLAKE3-128 de un buffer, para verificar contra `pja_hash` tras decodificar.
 ///
 /// # Safety
 /// `datos` apunta a `largo` bytes legibles; `buf` a 16 escribibles.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_hash128(datos: *const u8, largo: usize,
+pub unsafe extern "C" fn pja_hash128(datos: *const u8, largo: usize,
                                      buf: *mut u8, buf_largo: usize) -> i32 {
-    if buf.is_null() { return MJG_ERR_NULL; }
-    if buf_largo < 16 { return MJG_ERR_BUF_CHICO; }
-    if datos.is_null() && largo != 0 { return MJG_ERR_NULL; }
+    if buf.is_null() { return PJA_ERR_NULL; }
+    if buf_largo < 16 { return PJA_ERR_BUF_CHICO; }
+    if datos.is_null() && largo != 0 { return PJA_ERR_NULL; }
     let d = if largo == 0 { &[][..] } else { core::slice::from_raw_parts(datos, largo) };
     let h = blake3::hash(d);
     core::ptr::copy_nonoverlapping(h.as_bytes().as_ptr(), buf, 16);
-    MJG_OK
+    PJA_OK
 }
 
 // --- escritura ------------------------------------------------------------
@@ -180,7 +180,7 @@ pub unsafe extern "C" fn mjg_hash128(datos: *const u8, largo: usize,
 /// Entrada para escribir un contenedor. Los punteros son del llamador y sólo
 /// tienen que sobrevivir a la llamada: nada se guarda.
 #[repr(C)]
-pub struct MjgEntradaC {
+pub struct PjaEntradaC {
     pub nombre: *const u8,
     pub nombre_largo: usize,
     pub payload: *const u8,
@@ -191,7 +191,7 @@ pub struct MjgEntradaC {
     pub tam_orig: u64,
 }
 
-unsafe fn recolectar<'a>(ents: *const MjgEntradaC, n: usize) -> Option<Vec<Entrada<'a>>> {
+unsafe fn recolectar<'a>(ents: *const PjaEntradaC, n: usize) -> Option<Vec<Entrada<'a>>> {
     if ents.is_null() && n != 0 { return None; }
     let mut v = Vec::with_capacity(n);
     for i in 0..n {
@@ -208,13 +208,13 @@ unsafe fn recolectar<'a>(ents: *const MjgEntradaC, n: usize) -> Option<Vec<Entra
 }
 
 /// Cuántos bytes va a ocupar el contenedor, para que el llamador reserve.
-/// Valida todo: si devuelve un error, `mjg_escribir` va a dar el mismo.
+/// Valida todo: si devuelve un error, `pja_escribir` va a dar el mismo.
 ///
 /// # Safety
 /// `ents` apunta a `n` entradas válidas.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_escribir_largo(ents: *const MjgEntradaC, n: usize, flags: u8) -> i64 {
-    let v = match recolectar(ents, n) { Some(v) => v, None => return MJG_ERR_NULL as i64 };
+pub unsafe extern "C" fn pja_escribir_largo(ents: *const PjaEntradaC, n: usize, flags: u8) -> i64 {
+    let v = match recolectar(ents, n) { Some(v) => v, None => return PJA_ERR_NULL as i64 };
     match contenedor::escribir(&v, flags, None) {
         Ok((bytes, _)) => bytes.len() as i64,
         Err(e) => traducir(&e) as i64,
@@ -226,22 +226,22 @@ pub unsafe extern "C" fn mjg_escribir_largo(ents: *const MjgEntradaC, n: usize, 
 /// # Safety
 /// `buf` apunta a `buf_largo` bytes escribibles.
 #[no_mangle]
-pub unsafe extern "C" fn mjg_escribir(ents: *const MjgEntradaC, n: usize, flags: u8,
+pub unsafe extern "C" fn pja_escribir(ents: *const PjaEntradaC, n: usize, flags: u8,
                                       buf: *mut u8, buf_largo: usize) -> i32 {
-    if buf.is_null() { return MJG_ERR_NULL; }
-    let v = match recolectar(ents, n) { Some(v) => v, None => return MJG_ERR_NULL };
+    if buf.is_null() { return PJA_ERR_NULL; }
+    let v = match recolectar(ents, n) { Some(v) => v, None => return PJA_ERR_NULL };
     match contenedor::escribir(&v, flags, None) {
         Ok((bytes, _)) => {
-            if buf_largo < bytes.len() { return MJG_ERR_BUF_CHICO; }
+            if buf_largo < bytes.len() { return PJA_ERR_BUF_CHICO; }
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
-            MJG_OK
+            PJA_OK
         }
         Err(e) => traducir(&e),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn mjg_version() -> u32 { 1 }
+pub extern "C" fn pja_version() -> u32 { 1 }
 
 // --- panic y personality ---------------------------------------------------
 #[cfg(not(test))]

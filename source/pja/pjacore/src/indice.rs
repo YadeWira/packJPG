@@ -6,9 +6,9 @@
 use crate::limites::*;
 use crate::nombres::{self, Veredicto};
 
-#[cfg(not(test))] use alloc::{vec::Vec, string::String};
+#[cfg(not(test))] use alloc::vec::Vec;
 
-pub const MAGIA: [u8; 4] = [b'M', b'J', b'G', 0x01];
+pub const MAGIA: [u8; 4] = [b'P', b'J', b'A', 0x01];
 pub const VERSION: u8 = 1;
 
 pub const FLAG_CIFRADO: u8 = 1 << 0;

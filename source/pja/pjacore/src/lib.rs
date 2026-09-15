@@ -1,5 +1,5 @@
 #![cfg_attr(not(test), no_std)]
-//! Núcleo del contenedor MJG.
+//! Núcleo del contenedor PJA.
 //!
 //! `no_std` a propósito: la biblioteca estándar de Rust en Windows importa
 //! `WaitOnAddress` de `api-ms-win-core-synch-l1-2-0.dll`, que existe desde

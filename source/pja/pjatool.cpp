@@ -1,7 +1,7 @@
-// mjgtool — integracion del contenedor con packJPG, via la libreria.
+// pjatool — integracion del contenedor con packJPG, via la libreria.
 //
 // No toca el codec ni el CLI del repo: usa pjglib_convert_stream2mem para
-// comprimir y descomprimir en memoria, y mjgcore para el contenedor. Es la
+// comprimir y descomprimir en memoria, y pjacore para el contenedor. Es la
 // demostracion punta a punta antes de tocar packjpg.cpp.
 #include <cstdio>
 #include <cstdlib>
@@ -10,7 +10,7 @@
 #include <vector>
 #include <array>
 #include "packjpglib.h"
-#include "mjgcore.h"
+#include "pjacore.h"
 
 static std::vector<uint8_t> leer(const std::string& r) {
     FILE* f = fopen(r.c_str(), "rb");
@@ -57,7 +57,7 @@ static int crear(const std::string& destino, const std::vector<std::string>& jpg
         std::vector<uint8_t> jpg = leer(r);
         if (jpg.empty()) { printf("  %-28s no se pudo leer\n", base(r).c_str()); continue; }
         std::array<uint8_t,16> h{};
-        mjg_hash128(jpg.data(), jpg.size(), h.data(), h.size());
+        pja_hash128(jpg.data(), jpg.size(), h.data(), h.size());
         std::string err;
         std::vector<uint8_t> pjg = convertir(jpg, err);
         if (pjg.empty()) { printf("  %-28s %s\n", base(r).c_str(), err.c_str()); continue; }
@@ -70,7 +70,7 @@ static int crear(const std::string& destino, const std::vector<std::string>& jpg
     if (payloads.empty()) { printf("nada que empaquetar\n"); return 1; }
 
     // El escritor del contenedor vive en Rust; se le pasan punteros con largo.
-    std::vector<MjgEntradaC> ents(payloads.size());
+    std::vector<PjaEntradaC> ents(payloads.size());
     for (size_t i = 0; i < payloads.size(); i++) {
         ents[i].nombre = (const uint8_t*)nombres[i].data();
         ents[i].nombre_largo = nombres[i].size();
@@ -79,11 +79,11 @@ static int crear(const std::string& destino, const std::vector<std::string>& jpg
         memcpy(ents[i].hash, hashes[i].data(), 16);
         ents[i].tam_orig = 0;
     }
-    int64_t n = mjg_escribir_largo(ents.data(), ents.size(), 0);
-    if (n < 0) { printf("mjg_escribir_largo: %ld\n", (long)n); return 1; }
+    int64_t n = pja_escribir_largo(ents.data(), ents.size(), 0);
+    if (n < 0) { printf("pja_escribir_largo: %ld\n", (long)n); return 1; }
     std::vector<uint8_t> out(n);
-    int32_t rc = mjg_escribir(ents.data(), ents.size(), 0, out.data(), out.size());
-    if (rc != MJG_OK) { printf("mjg_escribir: %d\n", rc); return 1; }
+    int32_t rc = pja_escribir(ents.data(), ents.size(), 0, out.data(), out.size());
+    if (rc != PJA_OK) { printf("pja_escribir: %d\n", rc); return 1; }
     if (!escribir(destino, out.data(), out.size())) { printf("no se pudo escribir\n"); return 1; }
     printf("\n%s: %zu miembros, %zu bytes\n", destino.c_str(), payloads.size(), out.size());
     return 0;
@@ -92,27 +92,27 @@ static int crear(const std::string& destino, const std::vector<std::string>& jpg
 static int extraer(const std::string& origen, const std::string& dir) {
     std::vector<uint8_t> datos = leer(origen);
     if (datos.empty()) { printf("no se pudo leer %s\n", origen.c_str()); return 1; }
-    MjgAbierto* h = nullptr;
-    int32_t rc = mjg_abrir(datos.data(), datos.size(), nullptr, 0, &h);
-    if (rc != MJG_OK) { printf("mjg_abrir: %d\n", rc); return 1; }
+    PjaAbierto* h = nullptr;
+    int32_t rc = pja_abrir(datos.data(), datos.size(), nullptr, 0, &h);
+    if (rc != PJA_OK) { printf("pja_abrir: %d\n", rc); return 1; }
 
-    int64_t n = mjg_cantidad(h);
+    int64_t n = pja_cantidad(h);
     int malos = 0;
     for (int64_t i = 0; i < n; i++) {
-        std::vector<uint8_t> nombre(mjg_nombre_largo(h, i));
-        mjg_nombre(h, i, nombre.data(), nombre.size());
+        std::vector<uint8_t> nombre(pja_nombre_largo(h, i));
+        pja_nombre(h, i, nombre.data(), nombre.size());
         std::string nom((const char*)nombre.data(), nombre.size());
 
-        std::vector<uint8_t> pjg(mjg_payload_largo(h, i));
-        mjg_payload(h, i, pjg.data(), pjg.size());
+        std::vector<uint8_t> pjg(pja_payload_largo(h, i));
+        pja_payload(h, i, pjg.data(), pjg.size());
 
         std::string err;
         std::vector<uint8_t> jpg = convertir(pjg, err);
         if (jpg.empty()) { printf("  %-28s %s\n", nom.c_str(), err.c_str()); malos++; continue; }
 
         uint8_t decl[16], calc[16];
-        mjg_hash(h, i, decl, sizeof decl);
-        mjg_hash128(jpg.data(), jpg.size(), calc, sizeof calc);
+        pja_hash(h, i, decl, sizeof decl);
+        pja_hash128(jpg.data(), jpg.size(), calc, sizeof calc);
         bool coincide = memcmp(decl, calc, 16) == 0;
         // El hash es del JPEG ORIGINAL: verifica lo que el programa promete
         // -- que la reconstruccion sea identica -- y no un proxy.
@@ -122,15 +122,15 @@ static int extraer(const std::string& origen, const std::string& dir) {
         std::string salida = dir + "/" + nom;
         if (!escribir(salida, jpg.data(), jpg.size())) { printf("    no se pudo escribir\n"); malos++; }
     }
-    mjg_cerrar(h);
+    pja_cerrar(h);
     printf("\n%ld miembros, %d con problemas\n", (long)n, malos);
     return malos ? 1 : 0;
 }
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        printf("uso:\n  mjgtool crear  <salida.pjg> <foto.jpg>...\n"
-               "  mjgtool extraer <contenedor.pjg> <directorio>\n");
+        printf("uso:\n  pjatool crear  <salida.pjg> <foto.jpg>...\n"
+               "  pjatool extraer <contenedor.pjg> <directorio>\n");
         return 2;
     }
     std::string cmd = argv[1];
