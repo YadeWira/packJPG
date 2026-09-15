@@ -49,16 +49,15 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 ## Usage
 
 ```
-packJPG <subcommand> [switches] [filename(s)]
+packJPG <command> [switches] [filename(s)]
 ```
 
-### Subcommands
+### Commands
 
-| Subcommand | Description |
+| Command | Description |
 |---|---|
 | `a` | compress JPEG files to PJG (archive) |
 | `x` | decompress PJG files back to JPEG (extract) |
-| `mix` | auto-detect and process both directions (use with caution) |
 | `list` | display info about PJG files without decompressing (header only — see below) |
 | `stats` | show JPEG file info (size, dimensions, color mode) without compressing |
 
@@ -88,7 +87,6 @@ packJPG a *.jpg                       # compress everything in cwd
 packJPG a -th 0 -f --no-pause -o out/ *.jpg   # all cores, overwrite, no pause, into out/
 packJPG a -r photos/                  # recurse into photos/
 packJPG x *.pjg                       # decompress
-packJPG mix *.*                       # auto-detect each file
 packJPG list *.pjg                    # show version + size, no decompress
 packJPG - < sail.pjg > sail.jpg       # stream
 ```
@@ -115,13 +113,6 @@ version byte is rejected with the same message the decoder would give — `list`
 and `x` share one header reader, so `list` never accepts a file `x` refuses at
 that stage.
 
-### `mix` — mixed mode
-
-Auto-detects each file and compresses or decompresses accordingly.
-
-> **Warning:** running `mix` on a folder that was already compressed
-> will decompress the PJG files back, undoing previous work. A summary
-> warning is printed at the end if both directions were used.
 
 ### `list` — list PJG info
 

@@ -47,6 +47,23 @@ idénticos tanto en modo normal como en paralelo.
 > con packMP3 y packPNG. Este rework se aparta de ella, así que la convención
 > hay que renegociarla antes de que salga la 6.0.
 
+**Se retira el comando `mix`.** No cambiaba el procesamiento: el códec detecta
+el tipo por magia archivo por archivo, y `a`/`x` son filtros que saltean el tipo
+contrario; `mix` era «sin filtro», y su único efecto real era imprimir una
+advertencia que desaconsejaba usarlo. El trabajo seguro ya se consigue con los
+globs del shell, que separan lo que `mix` mezclaba. Pasarlo ahora nombra el
+reemplazo en vez de decir «unknown». `a`, `x`, `list` y `stats` no cambian.
+
+**Y se les dice «comandos», no «subcomandos».** Puramente terminológico: con los
+switches en forma larga, `packJPG a foto.jpg` se lee como `git commit`. Nada del
+parseo depende de la palabra.
+
+Eso destapó un hueco en la verificación: la batería tenía 43 celdas y **ninguna
+cubría comandos**, así que un cambio en esa capa no lo agarraba nada. Ahora son
+**51 celdas**, con `a`/`x`/`list`/`stats`, `mix` retirado, un comando
+inexistente, la invocación sin comando y la palabra «Commands» en la ayuda.
+Control: 51/51 acá, **3/51 contra v5.0f**.
+
 Otros cambios sin publicar en esta línea:
 
 - `-sfth` leía cada tamaño declarado y nunca chequeaba haberlo recibido. Es el

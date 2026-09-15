@@ -17,8 +17,28 @@ significado de `-o` es el único del rework que no rompe ruidosamente por sí
 solo, así que necesita esa guarda.
 
 La mayoría de los switches actuales vienen del packJPG original y arrastran
-nombres que no se adivinan. Los subcomandos (`a`, `x`, `mix`, `list`, `stats`)
-son de este proyecto y **no cambian**.
+nombres que no se adivinan. Los **comandos** (`a`, `x`, `list`, `stats`) son de
+este proyecto y **no cambian** — salvo `mix`, que se retiró (ver abajo).
+
+Se dejó de decirles «subcomandos»: con los switches en forma larga estilo GNU,
+`packJPG a foto.jpg` se lee como `git commit`, y **comando** es la palabra más
+honesta. Es sólo terminología; nada del parseo depende de ella.
+
+## 0. `mix` se retira
+
+No cambiaba el procesamiento: el códec detecta el tipo por magia archivo por
+archivo, y `a`/`x` son **filtros** que saltean el tipo contrario. `mix` era «sin
+filtro», y su único efecto real era imprimir al final una advertencia que
+desaconsejaba usarlo:
+
+    Running -mix on already-processed files can undo previous work.
+    Use 'a' or 'x' for safer operation.
+
+El trabajo seguro ya se consigue con los globs del shell —`a *.jpg` y después
+`x *.pjg`—, que separan justamente lo que `mix` mezclaba. Lo único que `mix`
+podía hacer y los globs no es cuando la extensión miente sobre el contenido, o
+sea el caso peligroso. Tampoco estaba en el estándar acordado con packMP3 y
+packPNG, que cubre `a`/`x`/`list`.
 
 ---
 

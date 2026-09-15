@@ -984,8 +984,7 @@ INTERN bool wait_exit  = true;	// pause after finished yes / no
 INTERN bool dry_run    = false;	// simulate without writing output yes/no
 INTERN bool compress_only   = false;	// -c: only compress JPG files
 INTERN bool decompress_only = false;	// -x: only decompress PJG files
-INTERN bool mix_mode        = false;	// -mix: auto-detect with warning
-INTERN bool subcmd_given    = false;	// a subcommand was explicitly provided
+INTERN bool cmd_dado        = false;	// a command was explicitly provided
 INTERN bool module_mode = false;	// machine-friendly output: OK/ERROR + time only
 INTERN char* outdir    = NULL;	// output directory (NULL = same as input)
 INTERN char* outname   = NULL;	// -o with a file destination: exact output path (one input only)
@@ -1198,7 +1197,7 @@ int main( int argc, char** argv )
 	// check if user input is wrong, show help screen if it is
 	if ( ( file_cnt == 0 ) ||
 		( ( !developer ) && ( (action != A_COMPRESS && action != A_LIST && action != A_STATS) || (!auto_set) || (verify_lv > 1) ) ) ||
-		( ( !developer ) && ( !subcmd_given ) && ( !pipe_on ) ) ) {
+		( ( !developer ) && ( !cmd_dado ) && ( !pipe_on ) ) ) {
 		show_help();
 		#if defined(_WIN32) || defined(WIN32)
 		std::_Exit( -1 );	// see the matching comment at the end of main()
@@ -1454,11 +1453,6 @@ int main( int argc, char** argv )
 	}
 	
 	// show statistics
-	if ( !module_mode && mix_mode && acc_jpg_cnt > 0 && acc_pjg_cnt > 0 && ( verbosity >= 0 ) ) {
-		fprintf( msgout, "\n%s[WARNING]%s Mixed mode: compressed %i JPG and decompressed %i PJG files.\n", COL_BYELLOW, COL_RESET, acc_jpg_cnt, acc_pjg_cnt );
-		fprintf( msgout, "  Running -mix on already-processed files can undo previous work.\n" );
-		fprintf( msgout, "  Use 'a' (compress only) or 'x' (decompress only) for safer operation.\n" );
-	}
 	if ( module_mode ) {
 		// machine-friendly output for external tools (e.g. FreeArc)
 		total = std::chrono::duration<double>( end - begin ).count();
@@ -2133,34 +2127,41 @@ INTERN void initialize_options( int argc, char** argv )
 	
 	
 	// read in arguments
-	// Check for pipe mode early (before subcommand check)
+	// Check for pipe mode early (before command check)
 	for ( int pi = 1; pi < argc; pi++ ) {
-		if ( strcmp(argv[pi], "-") == 0 ) { subcmd_given = true; break; }
+		if ( strcmp(argv[pi], "-") == 0 ) { cmd_dado = true; break; }
 	}
 
-	// First argument can be a subcommand: a, x, mix, list, stats
+	// First argument can be a command: a, x, list, stats
 	if ( argc > 1 ) {
-		const char* subcmd = argv[1];
-		if ( strcmp(subcmd, "a") == 0 ) {
+		const char* cmd = argv[1];
+		if ( strcmp(cmd, "a") == 0 ) {
 			compress_only = true;
-			subcmd_given = true;
+			cmd_dado = true;
 			argv++; argc--;
-		} else if ( strcmp(subcmd, "x") == 0 ) {
+		} else if ( strcmp(cmd, "x") == 0 ) {
 			decompress_only = true;
-			subcmd_given = true;
+			cmd_dado = true;
 			argv++; argc--;
-		} else if ( strcmp(subcmd, "mix") == 0 ) {
-			mix_mode = true;
-			subcmd_given = true;
-			argv++; argc--;
-		} else if ( strcmp(subcmd, "list") == 0 ) {
+		} else if ( strcmp(cmd, "mix") == 0 ) {
+			// Retirado en la 6.0. No cambiaba el procesamiento: el codec
+			// detecta el tipo por magia archivo por archivo, y 'a'/'x' son
+			// filtros que saltean el tipo contrario. 'mix' era "sin filtro",
+			// y su unico efecto real era imprimir al final una advertencia
+			// que desaconsejaba usarlo. El trabajo seguro ya se consigue con
+			// los globs del shell, que separan lo que 'mix' mezclaba.
+			fprintf( stderr, "\nError: 'mix' no longer exists -- use 'a' to compress or 'x' to decompress\n" );
+			fprintf( stderr, "  packJPG a *.jpg     compress the JPEGs\n" );
+			fprintf( stderr, "  packJPG x *.pjg     decompress the rest\n\n" );
+			return;
+		} else if ( strcmp(cmd, "list") == 0 ) {
 			action = A_LIST;
-			subcmd_given = true;
+			cmd_dado = true;
 			argv++; argc--;
-		} else if ( strcmp(subcmd, "stats") == 0 ) {
+		} else if ( strcmp(cmd, "stats") == 0 ) {
 			action = A_STATS;
 			compress_only = true;  // only process JPG files
-			subcmd_given = true;
+			cmd_dado = true;
 			argv++; argc--;
 		}
 	}
@@ -3008,12 +3009,11 @@ INTERN void show_help( void )
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Website: %s\n", website );
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "Usage: %s <subcommand> [switches] [filename(s)]\n", appname );
+	fprintf( msgout, "Usage: %s <command> [switches] [filename(s)]\n", appname );
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "Subcommands:\n" );
+	fprintf( msgout, "Commands:\n" );
 	fprintf( msgout, " a         compress only: process JPG files, skip PJG\n" );
 	fprintf( msgout, " x         decompress only: process PJG files, skip JPG\n" );
-	fprintf( msgout, " mix       mixed mode: auto-detect (warns if both directions used)\n" );
 	fprintf( msgout, " list      list PJG file info without decompressing\n" );
 	fprintf( msgout, " stats     show JPEG file info (size, dimensions, color) without compressing\n" );
 	fprintf( msgout, "\n" );
@@ -3175,7 +3175,7 @@ INTERN void process_file( void )
 				execute( dump_pgm );
 				break;
 			case A_LIST:
-				// the "list" subcommand only works on .pjg files
+				// the "list" command only works on .pjg files
 				snprintf( errormessage, MSG_SIZE, "'list' is only supported for PJG files" );
 				errorlevel = 2;
 				break;
@@ -3464,7 +3464,7 @@ INTERN bool check_file( void )
         if (pipe_on) {
             str_out = std::make_unique<StreamWriter>();
         } else if ( action == A_LIST ) {
-            // no output file for the list subcommand
+            // no output file for the list command
         } else if ( dry_run ) {
             str_out = std::make_unique<MemoryWriter>(); // write to memory, discard
         } else if ( compress_only ) {
