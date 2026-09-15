@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    # '6.0' entre comillas: sin ellas YAML lo lee como el numero 6.0 y la rama
+    # nunca matchea. La linea de trabajo de la 6.0 tiene que pasar por CI --y
+    # sobre todo por el job ARM64 de cross-platform, que es el unico host no
+    # x86_64 y el que encontro el bug de `padbit`-- antes de tocar master.
+    branches: [ master, '6.0' ]
     tags:     [ '[0-9]*', 'v[0-9]*' ]
   pull_request:
     branches: [ master ]
