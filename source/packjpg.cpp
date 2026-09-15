@@ -9834,6 +9834,14 @@ INTERN inline char* create_filename( const char* base, const char* extension )
 #if !defined(BUILD_LIB)
 INTERN inline char* unique_filename( const char* base, const char* extension )
 {
+	// -o with a file destination names the output, so there is no uniquifying
+	// to do: the parser already refused a name that exists unless -f was
+	// given. Without this branch the name is silently ignored and the output
+	// lands next to the input -- rc stays 0 and nothing says so.
+	if ( outname != NULL && extension != NULL ) {
+		return create_filename( base, extension );
+	}
+
 	// If outdir is set, start from create_filename which applies outdir,
 	// then add underscores until the name is unique.
 	char* filename;
