@@ -85,7 +85,7 @@ written to stdout (handy for piping through `jpegtran` etc.).
 
 ```
 packJPG a *.jpg                       # compress everything in cwd
-packJPG a -th0 -o -np -odout/ *.jpg   # all cores, overwrite, no pause, output to dout/
+packJPG a -th 0 -f --no-pause -o out/ *.jpg   # all cores, overwrite, no pause, into out/
 packJPG a -r photos/                  # recurse into photos/
 packJPG x *.pjg                       # decompress
 packJPG mix *.*                       # auto-detect each file
@@ -107,7 +107,7 @@ The output says so rather than leaving it implied:
 ```
   version : v4.0
   packed  : 16.7 KB
-  checked : header only - run `x` or `-ver` to verify the payload
+  checked : header only - run `x` or `--verify` to verify the payload
 ```
 
 A header that is truncated, has an unknown code or carries an incompatible
@@ -140,7 +140,7 @@ photos/lena.pjg
   version : v4.0d
   packed  : 288.1 KB
 
-photos/lena_fast.pjg         (compressed with -sfth)
+photos/lena_fast.pjg         (compressed with --parallel-stages)
   version : v4.0d (parallel)
   packed  : 288.2 KB
 ```
@@ -148,41 +148,72 @@ photos/lena_fast.pjg         (compressed with -sfth)
 
 ## Command-line switches
 
+**The switch names changed in this version, and the old ones were removed, not
+aliased.** Passing an old one prints the name that replaced it. The one to
+watch is `-o`: it used to mean *overwrite* and now means *output path*.
+Overwrite is `-f`.
+
 | Switch | Description |
 |---|---|
-| `-ver` | verify files after processing |
-| `-v?` | level of verbosity; 0, 1 or 2 (default 0) |
-| `-vp` | progress bar mode (replaces per-file table) |
-| `-np` | no pause after processing files |
+| `-o PATH` | where the output goes — see below |
+| `--output-dir=DIR` | same, but only ever a directory (created if needed) |
+| `-f`, `--force` | overwrite existing files |
+| `-r`, `--recursive` | recurse into subdirectories |
+| `-n`, `--dry-run` | simulate without writing output files |
+| `-v` | more detail; repeat for more (`-v -v`) |
+| `--verbose=N` | same, as a number; 0, 1 or 2 (default 0) |
+| `--progress` | progress bar mode (replaces per-file table) |
+| `--porcelain` | machine-friendly output: OK/ERROR + elapsed seconds |
 | `--no-color` | disable ANSI color output (also respected via `NO_COLOR` env var) |
-| `-o` | overwrite existing files |
-| `-od<path>` | write output files to directory `<path>` (created if needed) |
-| `-th<n>` | number of worker threads; 0 = auto-detect (default: 1) |
-| `-sfth` | parallel single-file compression using 3 threads (Y/Cb/Cr) |
-| `-r` | recurse into subdirectories |
-| `-fs` | preserve the source folder structure under `-od` (use with `-r`); without it every output lands flat in the target directory |
-| `-dry` | dry run: simulate without writing output files |
-| `-module` | machine-friendly output: OK/ERROR + elapsed seconds |
-| `-maxout<MB>` | when decoding, refuse to reconstruct a JPEG larger than `<MB>` megabytes (decompression-bomb guard; default 256 MB, 0 = unlimited) |
-| `-p` | proceed on warnings |
-| `-d` | discard meta-info |
+| `--no-pause` | no pause after processing files |
+| `--verify` | verify files after processing |
+| `--proceed` | proceed on warnings |
+| `--discard-meta` | discard meta-info |
+| `--keep-structure` | preserve the source folder structure under `-o` (use with `-r`); without it every output lands flat in the target directory |
+| `-th N`, `--threads=N` | number of worker threads; 0 = auto-detect (default: 1) |
+| `--parallel-stages` | parallel single-file compression using 3 threads (Y/Cb/Cr) |
+| `--max-output=SIZE` | when decoding, refuse to reconstruct a JPEG larger than `SIZE` (`K`/`M`/`G`, bare number = MB; decompression-bomb guard, default `256M`, `0` = unlimited) |
 
-Most of these switches — subcommands `a`/`x`/`list`, `-od`/`-r`/`-fs`/`-dry`/`-ver`/`-np`/`-o`/`-module`/`-th<n>`/`-v<n>` — follow a shared CLI convention coordinated with the sibling lossless-recompressor projects [packMP3](https://github.com/YadeWira/packMP3) and [packPNG](https://github.com/YadeWira/packPNG). Release binaries also share the `<name>_<platform>_<arch>[.exe]` naming pattern across all three.
+Values are never glued to their switch: `-th 4` or `--threads=4`, never `-th4`.
+Gluing is what forced `sscanf()` patterns that also matched things nobody meant,
+and it is why `-t` could never be given a meaning at all.
 
-### `-p` / `-d` / `-ver` — what they trade off
+### `-o` works like the destination of `cp`
+
+| the argument of `-o` | read as |
+|---|---|
+| exists and is a directory | destination directory |
+| ends in `/` | destination directory, created if needed |
+| anything else | the output **file name** |
+
+```
+packJPG a foto.jpg                 ->  foto.pjg
+packJPG a foto.jpg -o pana.pjg     ->  pana.pjg
+packJPG x foto.pjg -o CARPETA/     ->  CARPETA/foto.jpg
+```
+
+With a file name, **only one input is allowed** — otherwise fifty inputs would
+write over the same output and the last one would win, in silence. And a name
+that already exists is refused unless you pass `-f`, which is what stops
+`-o a.jpg b.jpg` (old spelling for *overwrite, two inputs*) from destroying
+`a.jpg`.
+
+> **Cross-project note.** The previous switch set — `-od`/`-r`/`-fs`/`-dry`/`-ver`/`-np`/`-o`/`-module`/`-th<n>`/`-v<n>` — followed a CLI convention coordinated with the sibling lossless-recompressor projects [packMP3](https://github.com/YadeWira/packMP3) and [packPNG](https://github.com/YadeWira/packPNG). This rework diverges from it, so the convention needs renegotiating before 6.0 ships. Release binaries still share the `<name>_<platform>_<arch>[.exe]` naming pattern across all three.
+
+### `--proceed` / `--discard-meta` / `--verify` — what they trade off
 
 By default packJPG cancels on warnings to guarantee bit-exact round-trip.
 
-* `-p` accepts non-spec-compliant JPEG quirks (inefficient Huffman
+* `--proceed` accepts non-spec-compliant JPEG quirks (inefficient Huffman
   tables, RST marker mismatches, padding-bit deviations, EOI garbage).
   The reconstructed JPEG will be **visually identical but may not be
   byte-equal** to the original.
-* `-d` discards meta-info (EXIF, JFIF comments, etc.) for smaller
+* `--discard-meta` discards meta-info (EXIF, JFIF comments, etc.) for smaller
   output. Reconstruction is no longer byte-equal.
-* `-ver` does a full encode → decode → byte-compare per file. Files
+* `--verify` does a full encode → decode → byte-compare per file. Files
   that fail verification are not written.
 
-`-ver` should never be combined with `-p` or `-d` — those flags
+`--verify` should never be combined with `--proceed` or `--discard-meta` — those flags
 intentionally drop byte-equality, so verification will always fail.
 
 
@@ -192,50 +223,50 @@ packJPG has two orthogonal threading modes that compose:
 
 | Flag | Granularity | Effect |
 |---|---|---|
-| `-th<n>` | across files | run N files in parallel, each on 1 thread |
-| `-sfth` | within a file | encode Y/Cb/Cr in parallel (3 threads) |
-| `-th<n> -sfth` | both | run N files in parallel, each using 3 threads |
+| `-th N` | across files | run N files in parallel, each on 1 thread |
+| `--parallel-stages` | within a file | encode Y/Cb/Cr in parallel (3 threads) |
+| `-th N --parallel-stages` | both | run N files in parallel, each using 3 threads |
 
-### `-th<n>` (multi-file batch)
+### `-th N` (multi-file batch)
 
-`-th0` auto-detects core count. In MT batch mode, **verification is
+`-th 0` auto-detects core count. In MT batch mode, **verification is
 forced on automatically** — every file is encode→decode→compared
 before the output is committed.
 
 Optimal usage on a machine with N threads:
 
 ```
-packJPG a -th$((N/3)) -sfth -o -np *.jpg
+packJPG a -th $((N/3)) --parallel-stages -f --no-pause *.jpg
 ```
 
 This fills all N cores: `N/3` files in parallel, each using 3 threads.
-On an 18-core box: `-th6 -sfth` = 6 × 3 = 18 threads.
+On an 18-core box: `-th 6 --parallel-stages` = 6 × 3 = 18 threads.
 
-`-th<n>` works on every release binary (Linux and Windows, both archs) —
+`-th N` works on every release binary (Linux and Windows, both archs) —
 one codebase (`source/`), real `thread_local`.
 
 **Ctrl+C behavior.** Ctrl+C in MT batch stops workers cleanly and removes
 any partial output files.
 
-### `-sfth` (single-file parallel)
+### `--parallel-stages` (single-file parallel)
 
 Standard packJPG processes the components of a JPEG (Y, Cb, Cr)
-sequentially. `-sfth` runs them concurrently. Useful even on a single
+sequentially. `--parallel-stages` runs them concurrently. Useful even on a single
 file, unlike `-th` which only helps for batches.
 
 ```
-without -sfth :  0.23 s   1.81 MB/s   ratio 67.29 %
-with    -sfth :  0.16 s   2.54 MB/s   ratio 67.30 %
+without --parallel-stages :  0.23 s   1.81 MB/s   ratio 67.29 %
+with    --parallel-stages :  0.16 s   2.54 MB/s   ratio 67.30 %
 ```
 
 The 0.01 % ratio difference is the documented cost of giving each
 component its own arithmetic-coder context. Files remain fully
-lossless. A warning is shown if `-sfth` is used on fewer than 3 cores.
+lossless. A warning is shown if `--parallel-stages` is used on fewer than 3 cores.
 
 
 ## Other modes
 
-### `-dry` — dry run
+### `-n` / `--dry-run` — dry run
 
 Simulates processing without writing any output. Useful to preview
 ratios before committing to a batch. The codec does all the work — the
@@ -244,8 +275,8 @@ discarded, so the summary ends with an explicit marker (added in v5.0d,
 before which a dry run's output was indistinguishable from a real one):
 
 ```
-packJPG a -dry -np *.jpg
-packJPG a -dry -th0 -np *.jpg
+packJPG a -n --no-pause *.jpg
+packJPG a -n -th 0 --no-pause *.jpg
 ```
 
 ```
@@ -254,30 +285,30 @@ packJPG a -dry -th0 -np *.jpg
  dry run: no output files were written
 ```
 
-The machine-readable `-module` format is unaffected: a script that passes
-`-dry` already knows it did.
+The machine-readable `--porcelain` format is unaffected: a script that passes
+`-n` already knows it did.
 
-### `-module` — machine-friendly output
+### `--porcelain` — machine-friendly output
 
 Single-line output: `OK <seconds>` or `ERROR <code> <seconds>`.
 
 ```
-packJPG a -module -np file.jpg  ->  OK 0.72
-packJPG a -module -np bad.jpg   ->  ERROR 1 0.00
+packJPG a --porcelain file.jpg  ->  OK 0.72
+packJPG a --porcelain bad.jpg   ->  ERROR 1 0.00
 ```
 
 ### FreeArc integration
 
 packJPG works as an external compressor in FreeArc, acting as a JPEG
 preprocessor. FreeArc processes one file at a time in this mode, so
-`-sfth` is the right flag — `-th` is a no-op here.
+`--parallel-stages` is the right flag — `-th` is a no-op here.
 
 `arc.ini`:
 
 ```ini
 [External compressor:jpg]
-packcmd   = packjpg a -sfth -module -np -o $$arcdatafile$$.jpg
-unpackcmd = packjpg x -sfth -module -np -o $$arcdatafile$$.pjg
+packcmd   = packjpg a --parallel-stages --porcelain -f $$arcdatafile$$.jpg
+unpackcmd = packjpg x --parallel-stages --porcelain -f $$arcdatafile$$.pjg
 datafile   = $$arcdatafile$$.jpg
 packedfile = $$arcdatafile$$.pjg
 solid = 0
@@ -414,7 +445,7 @@ memory-safe and always terminates, but it is a resource-amplification vector.
 
 | Layer | Mechanism | Default | What it catches |
 |---|---|---|---|
-| Absolute cap | `-maxout<N>` / `pjglib_set_max_output_size()` | 256 MB | Memory exhaustion from large legitimate or malicious JPEGs |
+| Absolute cap | `--max-output=SIZE` / `pjglib_set_max_output_size()` | 256 MB | Memory exhaustion from large legitimate or malicious JPEGs |
 | Blowup ratio | built-in (not user-configurable) | 500× + 1 MB floor | Amplification attacks: tiny PJG → huge JPEG |
 
 The blowup-ratio guard rejects any decode where the reconstructed JPEG exceeds
@@ -433,8 +464,9 @@ pjglib_set_max_output_size(64u * 1024 * 1024);  // tighter: refuse >64 MB
 pjglib_set_max_output_size(0);                  // disable absolute cap (ratio guard stays active)
 ```
 
-CLI: `packjpg x -maxout64 file.pjg` (tighter) or `packjpg x -maxout0 file.pjg`
-(disable absolute cap). The `-maxout` value is in megabytes; 0 means "no limit"
+CLI: `packjpg x --max-output=64M file.pjg` (tighter) or `packjpg x --max-output=0 file.pjg`
+(disable absolute cap). A bare `--max-output` number is in megabytes, and `K`/`M`/`G`
+suffixes are accepted; 0 means "no limit"
 for the absolute cap only — the ratio guard cannot be disabled.
 
 
@@ -645,20 +677,20 @@ skipped.
 packJPG has low error tolerance compared to typical image viewers — it
 needs to understand the JPEG bitstream deeply enough to re-compress the
 DCT coefficients, and rejects files it can't perfectly reconstruct.
-The most common quirks that trigger warnings (and how `-p` works around
+The most common quirks that trigger warnings (and how `--proceed` works around
 them):
 
 * **Inefficient Huffman coding** — last AC coefficient in a block is
-  zero. Technically valid; not bit-exact reconstructable without `-p`.
+  zero. Technically valid; not bit-exact reconstructable without `--proceed`.
 * **Incorrect RST markers** — wrong positions or counters. Other
   decoders ignore them; packJPG validates.
 * **Inconsistent padding bits** — spec says 1-bits, some encoders
   write 0-bits.
 * **Garbage data after EOI**.
 
-With `-p`, packJPG accepts these and compresses anyway. The
+With `--proceed`, packJPG accepts these and compresses anyway. The
 reconstructed image is visually identical but not necessarily
-byte-equal. This is why `-p` is incompatible with `-ver`.
+byte-equal. This is why `--proceed` is incompatible with `--verify`.
 
 Compressed `.pjg` files are not always cross-version compatible — see
 the **Format and versioning policy** section for the matrix. Older

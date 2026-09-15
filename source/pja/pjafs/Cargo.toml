@@ -1,0 +1,14 @@
+[package]
+name = "pjafs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pjacore = { path = "../pjacore" }
+# default-features = false aunque pjafs SI use std.
+#
+# Cargo unifica features por workspace: si un miembro pide blake3 con "std",
+# blake3 se compila con std para TODOS, y pjaffi --que es no_std y define su
+# propio panic_handler-- deja de compilar con "duplicate lang item panic_impl".
+# El error aparece en pjaffi, que ni siquiera depende de este crate.
+blake3 = { version = "1", default-features = false }

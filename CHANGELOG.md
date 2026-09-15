@@ -1,5 +1,66 @@
 # packJPG Changelog
 
+## Unreleased — hacia 6.0 LTS
+
+> **Corte limpio en la línea de comandos: los switches viejos se quitaron, no se
+> aliasaron.** Los scripts existentes se rompen — a propósito, y con un mensaje
+> que nombra el reemplazo en vez de decir "unknown option". El que más cuidado
+> pide es `-o`: antes era *sobrescribir*, ahora es *ruta de salida*.
+> Sobrescribir es `-f`.
+
+| antes | ahora |
+|---|---|
+| `-o` | `-f`, `--force` |
+| `-od<dir>` | `-o DIR`, `--output-dir=DIR` |
+| `-p` | `--proceed` |
+| `-d` | `--discard-meta` |
+| `-ver` | `--verify` |
+| `-v2` | `-v -v`, `--verbose=2` |
+| `-vp` | `--progress` |
+| `-np` | `--no-pause` |
+| `-fs` | `--keep-structure` |
+| `-dry` | `-n`, `--dry-run` |
+| `-module` | `--porcelain` |
+| `-sfth` | `--parallel-stages` |
+| `-th4` | `-th 4`, `--threads=N` |
+| `-maxout256` | `--max-output=256M` |
+| `-r`, `--no-color` | sin cambios |
+
+Los valores ya nunca van pegados al switch. Pegarlos es lo que obligaba a
+patrones de `sscanf()` que también matcheaban cosas que nadie quiso escribir, y
+es la razón por la que `-t` nunca pudo tener significado.
+
+`-o` toma la semántica del destino de `cp`: un directorio que existe o un
+nombre terminado en `/` es directorio; cualquier otra cosa es el **nombre** de
+salida, y entonces sólo se acepta **una** entrada. Un nombre de salida que ya
+existe se rechaza salvo que se pase `-f` — eso es lo que impide que
+`-o a.jpg b.jpg`, que en la grafía vieja significaba *sobrescribir, dos
+entradas*, destruya `a.jpg`.
+
+Medido: 43 celdas que cubren cada switch retirado, cada switch nuevo, los
+valores mal puestos y las reglas de `-o`. 43/43 en este build; **1/43 contra
+v5.0f**, que es el control de que la batería discrimina. Sin regresión: los 100
+`.pjg` del corpus descomprimen byte a byte igual que v5.0f, y 40/40 recomprimen
+idénticos tanto en modo normal como en paralelo.
+
+> **Nota entre proyectos.** El set viejo seguía una convención de CLI acordada
+> con packMP3 y packPNG. Este rework se aparta de ella, así que la convención
+> hay que renegociarla antes de que salga la 6.0.
+
+Otros cambios sin publicar en esta línea:
+
+- `-sfth` leía cada tamaño declarado y nunca chequeaba haberlo recibido. Es el
+  único modo del formato con tamaños explícitos, o sea el único donde el
+  truncado es detectable sin heurística. De 220 truncados: v5.0f dejaba 11
+  salidas silenciosamente mal, ahora quedan 0.
+- Un `.pjg` truncado se aceptaba y decodificaba a otro JPEG (guarda de
+  agotamiento del decodificador aritmético).
+- El bloque de ajustes del `.pjg` se leía directo a dos campos de tamaño sin
+  validar.
+- Dos lecturas fuera de rango en el camino de compresión, alcanzables desde un
+  JPEG normal.
+- El mensaje de error de `list` nombraba un switch `-list` que ya no existe.
+
 ## v5.0f (2026-08-25) — out-of-range reads in the decoder, and a validation that was never wired
 
 > No format change and no codec change: `.pjg` output stays byte-identical to

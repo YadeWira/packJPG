@@ -1,0 +1,12 @@
+[workspace]
+members = ["pjacore", "pjafs", "pjaffi", "gen"]
+resolver = "2"
+
+# El perfil va en la RAIZ del workspace. Puesto en el manifiesto del miembro
+# se ignora en silencio, y panic="abort" no se aplica.
+[profile.release]
+panic = "abort"
+opt-level = 2
+
+[profile.dev]
+panic = "abort"
