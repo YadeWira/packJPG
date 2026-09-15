@@ -78,6 +78,108 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  # El contenedor PJA no tenia NINGUNA cobertura de CI: sus 43 pruebas de Rust y
+  # las celdas de frontera en C++ corrian solo a mano. Un job aparte del build
+  # porque necesita toolchain de Rust, que `make all` deliberadamente no pide.
+  pja:
+    name: PJA container (Rust)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          rustc --version
+          cargo --version
+          gcc --version | head -1
+
+      - name: Rust test suite
+        run: |
+          # `cargo test` compila contra std; el Makefile construye el staticlib
+          # no_std. Son dos builds distintos a proposito y los dos tienen que
+          # andar, asi que el job corre los dos.
+          out=$(cargo test --release --manifest-path source/pja/Cargo.toml 2>&1)
+          echo "$out"
+          # Contar las pruebas y no solo mirar el rc: un filtro mal puesto o un
+          # modulo que deja de compilarse en modo test da "ok. 0 passed", que es
+          # verde y no probo nada.
+          n=$(echo "$out" | grep -oE '^test result: ok\. [0-9]+ passed' | grep -oE '[0-9]+' | paste -sd+ | bc)
+          echo "pruebas de Rust que pasaron: ${n:-0}"
+          if [ "${n:-0}" -lt 40 ]; then
+            echo "FAIL: esperaba al menos 40 pruebas, corrieron ${n:-0}"; exit 1
+          fi
+
+      - name: Build (make pja / pja-tests)
+        working-directory: source
+        run: |
+          make pja
+          make pja-tests
+
+      - name: FFI boundary, plain and encrypted
+        working-directory: source
+        run: |
+          # La frontera necesita contenedores de verdad; gen los arma con .pjg
+          # reales producidos por el propio packJPG.
+          make -j$(nproc)
+          mkdir -p /tmp/pjaci && cp ../test-files/*.jpg /tmp/pjaci/ 2>/dev/null || true
+          ls /tmp/pjaci/*.jpg >/dev/null || { echo "FAIL: no hay jpgs de prueba"; exit 1; }
+          ./packJPG a --no-pause -f /tmp/pjaci/*.jpg
+          set -- $(ls /tmp/pjaci/*.pjg | head -3)
+          [ $# -eq 3 ] || { echo "FAIL: esperaba 3 .pjg, hay $#"; exit 1; }
+          ./pja/target/release/gen /tmp/claro.pja  -          "$1" "$2" "$3"
+          ./pja/target/release/gen /tmp/cif.pja    clave-ci   "$1" "$2" "$3"
+          # Los dos casos explicitos, no un lazo sobre una cadena con espacios:
+          # que "archivo clave" se parta en dos argumentos depende del shell, y
+          # donde no se parte el binario no encuentra el archivo y reporta CERO
+          # celdas con rc distinto de cero. Escribirlos derecho no tiene ese modo.
+          frontera() {
+            out=$("$@")
+            echo "$out"
+            celdas=$(echo "$out" | grep -c ' ok$')
+            echo "  celdas en verde: $celdas"
+            # El rc solo dice "hubo fallos". Que las celdas se hayan EJECUTADO es
+            # otra cosa: un binario que sale temprano puede dar cero celdas.
+            [ "$celdas" -ge 10 ] || { echo "FAIL: solo $celdas celdas, esperaba >=10"; return 1; }
+          }
+          frontera ./pja/test_frontera /tmp/claro.pja
+          frontera ./pja/test_frontera /tmp/cif.pja clave-ci
+
+      - name: Header of an encrypted container leaks nothing
+        working-directory: source
+        run: |
+          # tam_indice y hash_indice tienen que estar en cero en disco. Si no,
+          # el archivo confirma los nombres de adentro sin contrasena.
+          # -s 8 -l 20: exactamente tam_indice(4) + hash_indice(16). -c 20 evita
+          # que xxd corte la linea, que fue como se me colo la primera version:
+          # devolvia cadena VACIA y "esta todo en cero" daba verde. Lo agarro el
+          # control de abajo, no el chequeo.
+          claro=$(xxd -p -c 20 -s 8 -l 20 /tmp/claro.pja)
+          cif=$(xxd   -p -c 20 -s 8 -l 20 /tmp/cif.pja)
+          echo "sin cifrar: ${claro:-(vacio)}"
+          echo "cifrado   : ${cif:-(vacio)}"
+          [ -n "$cif" ] && [ -n "$claro" ] || { echo "FAIL: no pude leer las cabeceras"; exit 1; }
+          case "$cif" in *[!0]*) echo "FAIL: la cabecera cifrada trae datos"; exit 1 ;; esac
+          # Control positivo: sin cifrar esos mismos bytes TIENEN que traer
+          # datos. Sin esta mitad, cualquier forma de leer nada pasa el test.
+          case "$claro" in *[!0]*) : ;; *) echo "FAIL: control - sin cifrar tendria que traer datos"; exit 1 ;; esac
+          echo "OK: cifrado en cero, y el control sin cifrar no lo esta"
+
+      - name: Container round-trip (pjatool)
+        working-directory: source
+        run: |
+          rm -rf /tmp/rt_ent /tmp/rt_sal && mkdir -p /tmp/rt_ent /tmp/rt_sal
+          cp ../test-files/*.jpg /tmp/rt_ent/
+          ./pja/pjatool crear /tmp/rt.pjg /tmp/rt_ent/*.jpg
+          ./pja/pjatool extraer /tmp/rt.pjg /tmp/rt_sal
+          total=0; ok=0
+          for f in /tmp/rt_ent/*.jpg; do
+            total=$((total+1))
+            cmp -s "$f" "/tmp/rt_sal/$(basename $f)" && ok=$((ok+1)) || echo "FAIL: $(basename $f)"
+          done
+          echo "round-trip del contenedor: $ok/$total identicos"
+          [ "$total" -gt 0 ] || { echo "FAIL: no habia entradas"; exit 1; }
+          [ "$ok" -eq "$total" ] || exit 1
+
   release:
     name: Create GitHub release
     needs: build
