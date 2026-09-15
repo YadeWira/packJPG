@@ -245,6 +245,11 @@ unsigned char ArithmeticDecoder::read_bit()
 	
 	// decrement current bit position
 	cbit--;	
+	// Past the end of the input the reader feeds zeros. A valid stream needs a
+	// few of those (prefill); a truncated one needs them forever. 64 is far
+	// above the 34 measured on valid files and far below where a truncated
+	// stream stops. Latch and let decode_ari turn it into a rejection.
+	if ( exhausted_ && !corrupt_ && ++fabricated_bits_ > 64 ) corrupt_ = true;
 	// return bit at cbit position
 	return BITN( bbyte, cbit );
 }

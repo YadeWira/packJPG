@@ -576,6 +576,12 @@ struct huffCodes {
 };
 
 struct huffTree {
+	// Puesto por jpg_build_huffcodes cuando la DHT viola la propiedad de
+	// prefijo. El 256 de l[]/r[] no es capacidad sino frontera de significado:
+	// el arbol se camina con while(node < 256) y devuelve node - 256, asi que
+	// agrandar los arreglos no arreglaria nada -- cambiaria la lectura fuera de
+	// rango por simbolos inventados en silencio.
+	bool overflow;
 	unsigned short l[ 256 ];
 	unsigned short r[ 256 ];
 };
@@ -5847,6 +5853,28 @@ INTERN bool pjg_read_header_codes( pjg_header_info* info )
 				errorlevel = 2;
 				return false;
 			}
+			// Both fields are raw bytes from the file and both are used as sizes:
+			// segm_cnt-1 indexes segm_tables[49][50], and nois_trs is a shift
+			// width. Unchecked, 0 and 255 read outside the table, and a shift of
+			// 32 or more is undefined -- while values as low as 15 allocate a
+			// model big enough to hang the decode for half a minute. The CLI
+			// clamps both (-t to 0..10, -s to 1..49); the file never did.
+			for ( int i = 0; i < 4; i++ ) {
+				if ( info->segm_cnt[ i ] < 1 || info->segm_cnt[ i ] > 49 ) {
+					snprintf( errormessage, MSG_SIZE,
+						"corrupt stream: segment count %i out of range (1..49) for component %i",
+						(int) info->segm_cnt[ i ], i );
+					errorlevel = 2;
+					return false;
+				}
+				if ( info->nois_trs[ i ] > 10 ) {
+					snprintf( errormessage, MSG_SIZE,
+						"corrupt stream: noise threshold %i out of range (0..10) for component %i",
+						(int) info->nois_trs[ i ], i );
+					errorlevel = 2;
+					return false;
+				}
+			}
 			info->has_settings = true;
 		}
 		else if ( hcode == 0x01 ) {
@@ -5986,11 +6014,27 @@ INTERN bool unpack_pjg( void )
 	}
 
 	if ( parallel_fmt ) {
-		// -sfth format: bounded header blob + parallel component streams
-		uint8_t hle[4] = {}; str_in->read( hle, 4 );
+		// -sfth format: bounded header blob + parallel component streams.
+		// Every size here is declared in the stream, so a short read is a
+		// truncation we can name instead of decoding zeros as if they were
+		// data. Each read is checked against the count it asked for.
+		const unsigned int sfth_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
+		uint8_t hle[4] = {};
+		if ( str_in->read( hle, 4 ) != 4 ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth header size)" );
+			errorlevel = 2; return false;
+		}
 		uint32_t hsz = (uint32_t)hle[0] | ((uint32_t)hle[1]<<8) |
 		               ((uint32_t)hle[2]<<16) | ((uint32_t)hle[3]<<24);
-		std::vector<uint8_t> hblob( hsz ); str_in->read( hblob.data(), hsz );
+		if ( hsz > sfth_cap ) {
+			snprintf( errormessage, MSG_SIZE, "sfth header blob too large: %u bytes (limit %u)", hsz, sfth_cap );
+			errorlevel = 2; return false;
+		}
+		std::vector<uint8_t> hblob( hsz );
+		if ( str_in->read( hblob.data(), hsz ) != hsz ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth header blob, %u bytes declared)", hsz );
+			errorlevel = 2; return false;
+		}
 		{
 			MemoryReader hmr( hblob ); ArithmeticDecoder hdec( hmr );
 			if ( !pjg_decode_generic( &hdec, &hdrdata, &hdrs ) ) return false;
@@ -6002,26 +6046,37 @@ INTERN bool unpack_pjg( void )
 			if ( disc_meta ) if ( !jpg_rebuild_header() ) return false;
 			if ( !jpg_setup_imginfo() ) return false;
 		} // hdec destroyed — stream aligned after hblob
-		uint8_t ncmps = 0; str_in->read_byte( &ncmps );
+		uint8_t ncmps = 0;
+		if ( !str_in->read_byte( &ncmps ) ) {
+			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth component count)" );
+			errorlevel = 2; return false;
+		}
 		if ( (int)ncmps != cmpc ) {
 			snprintf( errormessage, MSG_SIZE, "sfth cmp count mismatch (%i vs %i)", (int)ncmps, cmpc );
 			errorlevel = 2; return false;
 		}
 		std::vector<uint32_t> csizes( cmpc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
-			uint8_t le[4] = {}; str_in->read( le, 4 );
+			uint8_t le[4] = {};
+			if ( str_in->read( le, 4 ) != 4 ) {
+				snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth size of component %i)", cmp );
+				errorlevel = 2; return false;
+			}
 			csizes[cmp] = (uint32_t)le[0]|((uint32_t)le[1]<<8)|((uint32_t)le[2]<<16)|((uint32_t)le[3]<<24);
 		}
 		std::vector<std::vector<uint8_t>> cbufs( cmpc );
 		for ( cmp = 0; cmp < cmpc; cmp++ ) {
 			{
-				unsigned int csiz_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
-				if ( csizes[cmp] > csiz_cap ) {
-					snprintf( errormessage, MSG_SIZE, "sfth component stream too large: %u bytes (limit %u)", csizes[cmp], csiz_cap );
+				if ( csizes[cmp] > sfth_cap ) {
+					snprintf( errormessage, MSG_SIZE, "sfth component stream too large: %u bytes (limit %u)", csizes[cmp], sfth_cap );
 					errorlevel = 2; return false;
 				}
 			}
-						cbufs[cmp].resize( csizes[cmp] ); str_in->read( cbufs[cmp].data(), csizes[cmp] );
+			cbufs[cmp].resize( csizes[cmp] );
+			if ( str_in->read( cbufs[cmp].data(), csizes[cmp] ) != csizes[cmp] ) {
+				snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth component %i, %u bytes declared)", cmp, csizes[cmp] );
+				errorlevel = 2; return false;
+			}
 		}
 		// v4.0 sfth pipeline: cross-comp reads colldata[0][bpos] during Cb/Cr
 		// decode. AC bands partition is disjoint (ac_high=7×7 inner, ac_low=
@@ -6315,6 +6370,12 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				// build huffman codes & trees
 				jpg_build_huffcodes( &(segment[ hpos + 0 ]), &(segment[ hpos + 16 ]),
 					&(hcodes[ lval ][ rval ]), &(htrees[ lval ][ rval ]) );
+				if ( htrees[ lval ][ rval ].overflow ) {
+					snprintf( errormessage, MSG_SIZE,
+						"invalid dht: table %i/%i is not a prefix code", lval, rval );
+					errorlevel = 2;
+					return false;
+				}
 				htset[ lval ][ rval ] = 1;
 				hpos += skip;
 			}
@@ -6390,7 +6451,7 @@ INTERN bool jpg_parse_jfif( unsigned char type, unsigned int len, unsigned char*
 				return false;
 			}
 			for ( i = 0; i < cs_cmpc; i++ ) {
-				for ( cmp = 0; ( segment[ hpos ] != cmpnfo[ cmp ].jid ) && ( cmp < cmpc ); cmp++ );
+				for ( cmp = 0; ( cmp < cmpc ) && ( segment[ hpos ] != cmpnfo[ cmp ].jid ); cmp++ );
 				if ( cmp == cmpc ) {
 					snprintf( errormessage, MSG_SIZE, "component id mismatch in start-of-scan" );
 					errorlevel = 2;
@@ -7327,6 +7388,7 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 	int i, j, k;
 	
 	
+	ht->overflow = false;
 	// fill with zeroes
 	memset( hc->clen, 0, 256 * sizeof( short ) );
 	memset( hc->cval, 0, 256 * sizeof( short ) );
@@ -7371,6 +7433,11 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 		node = 0;   		   		
 		// go through each code & store path
 		for ( j = hc->clen[ i ] - 1; j > 0; j-- ) {
+			// node >= 256 no es un id de nodo: es la marca de hoja que dejo
+			// otro simbolo (i + 256). Llegar aca significa que un codigo es
+			// prefijo de otro -- una DHT que viola la propiedad de prefijo --
+			// y seguir indexaria l[]/r[] fuera de rango.
+			if ( node >= 256 ) { ht->overflow = true; return; }
 			if ( BITN( hc->cval[ i ], j ) == 1 ) {
 				if ( ht->r[ node ] == 0 )
 					 ht->r[ node ] = nextfree++;
@@ -7384,6 +7451,10 @@ INTERN void jpg_build_huffcodes( unsigned char *clen, unsigned char *cval,	huffC
 		}
 		// last link is number of targetvalue + 256
 		if ( hc->clen[ i ] > 0 ) {
+			// Segundo sitio, y hace falta: con clen[i] == 1 el bucle de arriba
+			// no se ejecuta nunca (j arranca en 0 y la condicion es j > 0), asi
+			// que el camino llega aca directo con el node heredado.
+			if ( node >= 256 ) { ht->overflow = true; return; }
 			if ( BITN( hc->cval[ i ], 0 ) == 1 )
 				ht->r[ node ] = i + 256;
 			else
