@@ -50,16 +50,39 @@ de un miembro se ignora en silencio.
 
 ## Probar
 
-```sh
-cargo test                                  # 43 pruebas
-cargo build --release
-g++ -std=c++17 -O2 -Iinclude test_frontera.cpp target/release/libpjaffi.a -o frontera
+Desde `source/`, con el Makefile:
 
-# la frontera necesita un contenedor de verdad; el gen los arma
-./target/release/gen /tmp/claro.pja   -           a.pjg b.pjg c.pjg
-./target/release/gen /tmp/cif.pja     secreta123  a.pjg b.pjg c.pjg
-./frontera /tmp/claro.pja
-./frontera /tmp/cif.pja secreta123
+```sh
+make pja          # compila el workspace de Rust -> target/release/libpjaffi.a
+make pja-tests    # + test_frontera y pjatool (este ultimo necesita packJPGlib.a)
+make pja-clean    # borra target/ de cargo, que `make clean` NO toca a proposito
+```
+
+`pja` **no** es parte de `make all`: quien sólo quiere packJPG no necesita una
+toolchain de Rust, y no se la vamos a pedir. Si `cargo` no está, `make pja`
+falla con una instrucción en vez de con «command not found».
+
+Las pruebas de Rust van aparte, porque `cargo test` compila con `std` y el
+Makefile construye el `staticlib` `no_std`:
+
+```sh
+cargo test --release --manifest-path pja/Cargo.toml     # 43 pruebas
+```
+
+La prueba de frontera necesita un contenedor de verdad; `gen` los arma:
+
+```sh
+./pja/target/release/gen /tmp/claro.pja  -           a.pjg b.pjg c.pjg
+./pja/target/release/gen /tmp/cif.pja    secreta123  a.pjg b.pjg c.pjg
+./pja/test_frontera /tmp/claro.pja
+./pja/test_frontera /tmp/cif.pja secreta123
+```
+
+Y el round-trip entero, contenedor incluido:
+
+```sh
+./pja/pjatool crear   cont.pjg  ent/*.jpg
+./pja/pjatool extraer cont.pjg  sal/
 ```
 
 **Al agregar un miembro al workspace, cuidado con las features de `blake3`.**
@@ -72,8 +95,6 @@ que ni siquiera depende del crate que lo causó.
 
 - engancharlo a la CLI (`--archive`, `-o`, `-e`, `--keep-structure`,
   `--keep-corrupt`) — va junto con el rework de switches de `doc/CLI.md`
-- que el `Makefile` sepa de `source/pja/`; hoy el core se compila con `cargo`
-  aparte y `pjatool.cpp` necesita los objetos de packJPG con `-DBUILD_LIB`
 - modo sólido, condicionado a conseguir material real: en el corpus no hay ni
   una ráfaga, y lo medido dice que la predicción sólo paga con bloques
   alineados

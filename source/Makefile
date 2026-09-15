@@ -134,7 +134,7 @@ $(TARGET): $(OBJ) $(RES)
 # --- standard targets --------------------------------------------------------
 
 .PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
-        native pgo pgo-clean
+        native pgo pgo-clean pja pja-tests pja-clean
 
 all: $(TARGET)
 
@@ -160,13 +160,27 @@ pgo: pgo-clean
 	@mkdir -p /tmp/packjpg_pgo_work
 	@cp $(PGO_WORKLOAD)/*.jpg /tmp/packjpg_pgo_work/ 2>/dev/null || \
 	   { echo "ERROR: no jpgs in $(PGO_WORKLOAD)"; exit 1; }
-	@cd /tmp/packjpg_pgo_work && $(CURDIR)/$(TARGET) a -np -o ./*.jpg \
+	@cd /tmp/packjpg_pgo_work && $(CURDIR)/$(TARGET) a --no-pause -f ./*.jpg \
 	    >/dev/null 2>&1 || true
+	@# El `|| true` de arriba es correcto --packJPG sale != 0 si CUALQUIER
+	@# archivo del lote avisa-- pero se traga tambien un fallo total. Sin
+	@# .pjg no hay carga de trabajo, y la fase 2 se compila con un perfil
+	@# vacio: mas lento que no hacer PGO, y en silencio.
+	@n=`ls /tmp/packjpg_pgo_work/*.pjg 2>/dev/null | wc -l`; \
+	 if [ "$$n" -eq 0 ]; then \
+	   echo "ERROR: la carga de trabajo no produjo ni un .pjg -- perfil vacio"; \
+	   exit 1; \
+	 fi; echo "[PGO] $$n .pjg generados"
 	@echo "[PGO] Workload phase 2: decode the just-encoded .pjg files"
 	@cd /tmp/packjpg_pgo_work && find . -maxdepth 1 -name '*.jpg' -delete \
-	    && $(CURDIR)/$(TARGET) x -np -o ./*.pjg >/dev/null 2>&1 || true
+	    && $(CURDIR)/$(TARGET) x --no-pause -f ./*.pjg >/dev/null 2>&1 || true
+	@n=`ls /tmp/packjpg_pgo_work/*.jpg 2>/dev/null | wc -l`; \
+	 if [ "$$n" -eq 0 ]; then \
+	   echo "ERROR: la fase de decodificacion no reconstruyo ni un .jpg"; \
+	   exit 1; \
+	 fi; echo "[PGO] $$n .jpg reconstruidos"
 	@echo "[PGO] Phase 2: rebuild with -fprofile-use"
-	@rm -f *.o $(TARGET)
+	@rm -f *.o lib_*.o $(TARGET)
 	$(MAKE) all "CXXFLAGS=$(CXXFLAGS) -fprofile-use -Wno-missing-profile" \
 	            "LDFLAGS=$(LDFLAGS) -fprofile-use"
 	@rm -rf /tmp/packjpg_pgo_work
@@ -175,8 +189,24 @@ pgo: pgo-clean
 pgo-clean:
 	@rm -f *.o *.gcda $(TARGET) $(TARGET).exe
 
-lib: CXXFLAGS += -DBUILD_LIB
-lib: $(OBJ)
+# Los objetos de la libreria se compilan APARTE, con el prefijo lib_.
+#
+# Antes `lib` reusaba $(OBJ) con un CXXFLAGS especifico del target. Los .o no
+# recuerdan con que flags se compilaron, asi que un `make all` seguido de
+# `make lib` archivaba los objetos del CLI --sin -DBUILD_LIB-- y producia un
+# packJPGlib.a con CERO simbolos pjglib_*. Sin error, sin warning: el fallo
+# aparece recien en el link del consumidor, como "undefined reference to
+# pjglib_init_streams", que no dice nada sobre la causa.
+#
+# build_lib_pkg.sh ya hacia `make clean && make lib` para esquivarlo, y CI corre
+# sobre checkout limpio, asi que nadie lo estaba pisando. Lo destapo `make
+# pja-tests`, que necesita la .a y no puede exigir un arbol limpio.
+LIBOBJ = $(OBJ:%.o=lib_%.o)
+
+lib_%.o: %.cpp $(DEPS)
+	$(CXX) -c -o $@ $< $(CXXFLAGS) -DBUILD_LIB
+
+lib: $(LIBOBJ)
 	@# Same thread-model rule as the dll target below. No check for a "mingw"
 	@# name is needed and none is made: native drivers (g++, clang++) report
 	@# "Thread model: posix", so this can only ever fire on a win32-model
@@ -212,8 +242,17 @@ lib: $(OBJ)
 	          echo "         make lib CXX=$(CXX)-posix"; \
 	          exit 1 ;; \
 	 esac
-	ar r $(TARGET)lib.a $(OBJ)
+	ar r $(TARGET)lib.a $(LIBOBJ)
 	ranlib $(TARGET)lib.a
+	@# La .a sin simbolos pjglib_* es el modo de falla de arriba. Verificarlo
+	@# aca cuesta nada y convierte un fallo silencioso en uno inmediato.
+	@n=`nm $(TARGET)lib.a 2>/dev/null | grep -c "T pjglib" || true`; \
+	 if [ "$$n" -lt 1 ]; then \
+	   echo "ERROR: $(TARGET)lib.a no exporta ningun simbolo pjglib_*."; \
+	   echo "       Se compilo sin -DBUILD_LIB. Proba 'make clean' y de nuevo."; \
+	   rm -f $(TARGET)lib.a; exit 1; \
+	 fi; \
+	 echo "[OK] $(TARGET)lib.a ($$n simbolos pjglib_*)"
 
 # Build the static lib and the test harnesses. Tests:
 #   lib_roundtrip_test  — mem-to-mem round-trip byte-equality
@@ -278,8 +317,53 @@ so:
 	@echo "[OK] $(SONAME) — exported symbols:"
 	@nm -D --defined-only $(SONAME) | awk '{print "      "$$3}' | grep pjglib_ || true
 
+# --- contenedor PJA (Rust) ---------------------------------------------------
+# Deliberadamente FUERA de `all`. El codec se compila sin Rust instalado y va a
+# seguir siendo asi: quien solo quiera packJPG no necesita una toolchain mas.
+# `make pja` es el opt-in.
+#
+# CARGO se puede pisar (make pja CARGO=/ruta/cargo). Si no esta, el target
+# falla con una instruccion, no con "command not found" a 40 lineas de
+# profundidad.
+CARGO    ?= cargo
+PJA_DIR   = pja
+PJA_LIB   = $(PJA_DIR)/target/release/libpjaffi.a
+
+$(PJA_LIB): $(wildcard $(PJA_DIR)/*/src/*.rs) $(wildcard $(PJA_DIR)/*/Cargo.toml) $(PJA_DIR)/Cargo.toml
+	@command -v $(CARGO) >/dev/null 2>&1 || { \
+	  echo "ERROR: no encuentro '$(CARGO)'. El contenedor PJA se compila con"; \
+	  echo "       la toolchain de Rust (https://rustup.rs), que NO hace falta"; \
+	  echo "       para packJPG en si. Instalala, o pasa la ruta:"; \
+	  echo "         make pja CARGO=/ruta/a/cargo"; \
+	  exit 1; }
+	$(CARGO) build --release --manifest-path $(PJA_DIR)/Cargo.toml
+
+pja: $(PJA_LIB)
+	@echo "[OK] $(PJA_LIB)"
+
+# pjatool y test_frontera son consumidores de C++ de la frontera FFI.
+# pjatool ademas usa la libreria de packJPG, asi que necesita packJPGlib.a
+# — o sea -DBUILD_LIB. Sin eso el link se cae con undefined reference a
+# pjglib_init_streams, que no dice nada sobre la causa.
+pja-tests: $(PJA_LIB) lib
+	$(CXX) $(CXXFLAGS) -I$(PJA_DIR)/include $(PJA_DIR)/test_frontera.cpp \
+	    $(PJA_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/test_frontera
+	$(CXX) $(CXXFLAGS) -DBUILD_LIB -I. -I$(PJA_DIR)/include $(PJA_DIR)/pjatool.cpp \
+	    $(TARGET)lib.a $(PJA_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/pjatool
+	@echo "[OK] pja tests: $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
+	@echo "     las pruebas de Rust van aparte: $(CARGO) test --release --manifest-path $(PJA_DIR)/Cargo.toml"
+
+# Aparte de `clean` a proposito: target/ de cargo son cientos de megas de
+# dependencias compiladas y borrarlo cuesta minutos de rebuild. `clean` saca
+# solo lo que produce este Makefile.
+pja-clean:
+	@echo pja-clean...
+	@-rm -rf $(PJA_DIR)/target
+	@-rm -f $(PJA_DIR)/test_frontera $(PJA_DIR)/pjatool
+
 clean:
 	@echo clean...
+	@-rm -f $(PJA_DIR)/test_frontera $(PJA_DIR)/pjatool
 	@-rm -f *.o *.a $(TARGET) $(TARGET).exe $(TARGET).dll *.so \
 	        bin/$(TARGET)_linux_x64 \
 	        bin/$(TARGET)_win_x64.exe \
