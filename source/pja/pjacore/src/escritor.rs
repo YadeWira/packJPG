@@ -7,6 +7,7 @@ use crate::limites::*;
 use crate::nombres::{self, Veredicto};
 
 #[cfg(not(test))] use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ErrorEscritura {
@@ -36,6 +37,12 @@ pub fn escribir(entradas: &[Entrada], flags: u8) -> Result<(Vec<u8>, Avisos), Er
         return Err(ErrorEscritura::DemasiadosMiembros);
     }
     let mut avisos: Avisos = Vec::new();
+    // Mismo arreglo que en indice::validar: antes era un bucle sobre
+    // entradas[..i] por cada entrada, cuadratico. Aca la entrada no es hostil
+    // --son los archivos del propio usuario--, pero el caso de uso real es una
+    // coleccion grande: medido, 60.000 archivos tardaban 8,1 s solo en buscar
+    // duplicados. El orden de los errores no cambia.
+    let mut vistos: BTreeSet<&[u8]> = BTreeSet::new();
 
     for (i, e) in entradas.iter().enumerate() {
         let v = if flags & FLAG_RUTAS != 0 { nombres::ruta(e.nombre) }
@@ -48,9 +55,7 @@ pub fn escribir(entradas: &[Entrada], flags: u8) -> Result<(Vec<u8>, Avisos), Er
         if (e.payload.len() as u64) < MIN_PAYLOAD {
             return Err(ErrorEscritura::PayloadFueraDeRango(i));
         }
-        for otra in &entradas[..i] {
-            if otra.nombre == e.nombre { return Err(ErrorEscritura::NombreDuplicado(i)); }
-        }
+        if !vistos.insert(e.nombre) { return Err(ErrorEscritura::NombreDuplicado(i)); }
     }
 
     let mut idx: Vec<u8> = Vec::new();
@@ -147,6 +152,23 @@ mod pruebas {
         let corto = vec![0u8; 4];
         assert_eq!(escribir(&[ent(b"a.jpg", &corto)], 0).err(),
                    Some(ErrorEscritura::PayloadFueraDeRango(0)));
+    }
+
+    #[test] fn los_duplicados_no_son_cuadraticos() {
+        let n = 200_000usize;
+        let noms: Vec<Vec<u8>> = (0..n).map(|i| format!("aaaa{:08}.jpg", i).into_bytes()).collect();
+        let pay = vec![0u8; 12];
+        let es: Vec<Entrada> = noms.iter().map(|x| Entrada { nombre: x, tam_orig: 24, payload: &pay, hash: [0; 16] }).collect();
+        let t = std::time::Instant::now();
+        assert!(escribir(&es, 0).is_ok());
+        let s = t.elapsed().as_secs_f64();
+        assert!(s < 10.0, "escribir tardo {s:.1} s con {n} nombres distintos");
+    }
+
+    #[test] fn el_duplicado_se_reporta_en_el_mismo_indice() {
+        let p = vec![1u8; 32];
+        let es = [ent(b"a", &p), ent(b"b", &p), ent(b"c", &p), ent(b"b", &p), ent(b"a", &p)];
+        assert_eq!(escribir(&es, 0).err(), Some(ErrorEscritura::NombreDuplicado(3)));
     }
 
     #[test] fn contenedor_vacio_es_valido_y_se_lee() {
