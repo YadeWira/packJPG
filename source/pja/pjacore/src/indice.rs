@@ -7,6 +7,7 @@ use crate::limites::*;
 use crate::nombres::{self, Veredicto};
 
 #[cfg(not(test))] use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 
 pub const MAGIA: [u8; 4] = [b'P', b'J', b'A', 0x01];
 pub const VERSION: u8 = 1;
@@ -174,6 +175,16 @@ pub fn validar(ms: &[Miembro], flags: u8, tam_archivo: u64, tam_indice: u64)
 {
     let mut suma_payload: u64 = 0;
     let mut suma_orig: u64 = 0;
+    // Nombres ya vistos. Antes esto era un bucle sobre ms[..i] por cada miembro:
+    // cuadratico, con un tope de 1.048.576 miembros. Medido el 25/09/2026 con un
+    // archivo real armado a mano (hash del indice bien calculado, que no es
+    // secreto): 60.000 nombres distintos en 2,82 MB tardaban 7,1 s en
+    // leer_indice, y llevado al tope serian ~39 minutos con nombres cortos y
+    // ~2,4 horas con nombres de 250 B -- todo ANTES de que el limite 3 note que
+    // las sumas no cuadran. Exactamente la bomba que esta capa existe para parar.
+    // BTreeSet porque es no_std (alloc); el orden de los errores no cambia: el
+    // duplicado se reporta en el primer i cuyo nombre ya aparecio antes.
+    let mut vistos: BTreeSet<&[u8]> = BTreeSet::new();
 
     for (i, m) in ms.iter().enumerate() {
         // Limite 6: ningun payload vacio ni imposible.
@@ -189,13 +200,18 @@ pub fn validar(ms: &[Miembro], flags: u8, tam_archivo: u64, tam_indice: u64)
         if let Veredicto::Rechazo(_) = v { return Err(Error::NombreInvalido(i)); }
 
         // Duplicados: se rechazan al abrir, no al extraer.
-        for otro in &ms[..i] {
-            if otro.nombre == m.nombre { return Err(Error::NombreDuplicado(i)); }
-        }
+        if !vistos.insert(&m.nombre[..]) { return Err(Error::NombreDuplicado(i)); }
     }
 
-    // Limite 3: la suma tiene que dar el archivo exacto.
-    if suma_payload + tam_indice + TAM_CABECERA as u64 != tam_archivo {
+    // Limite 3: la suma tiene que dar el archivo exacto. Con suma chequeada: en
+    // release, `+` a secas da la vuelta en silencio y el resultado podria
+    // coincidir con tam_archivo por casualidad. (Hace falta un archivo de mas de
+    // 16 TiB para alcanzarlo, pero el port a Pascal con overflow checks lanzaria
+    // excepcion ahi, y los dos tienen que dar lo mismo.)
+    let total = suma_payload.checked_add(tam_indice)
+        .and_then(|x| x.checked_add(TAM_CABECERA as u64))
+        .ok_or(Error::Desborde)?;
+    if total != tam_archivo {
         return Err(Error::SumaNoCuadra);
     }
     // Limite 4: el ratio, que escala solo.
@@ -328,6 +344,40 @@ mod pruebas {
         // Y con el hash recalculado se lee: el chequeo mira el indice, no un byte fijo.
         resellar(&mut c);
         assert!(leer_indice(&c).is_ok());
+    }
+
+    /// Nombres distintos que obligaban a comparar todos contra todos. Con la
+    /// version cuadratica, 200.000 miembros son ~85 s en la maquina donde se
+    /// midio; con el conjunto, una fraccion de segundo. El margen de 10 s es
+    /// para que la prueba no sea fragil en un runner lento, no una cota fina.
+    #[test] fn los_duplicados_no_son_cuadraticos() {
+        let n = 200_000usize;
+        let ms: Vec<Miembro> = (0..n).map(|i| {
+            let mut nom = b"aaaa".to_vec();
+            nom.extend_from_slice(format!("{:08}", i).as_bytes());
+            Miembro { nombre: nom, tam_orig: 100, tam_payload: 100, hash: [0; 16], m_flags: 0 }
+        }).collect();
+        let t = std::time::Instant::now();
+        let r = validar(&ms, 0, 1u64 << 40, 50);
+        let s = t.elapsed().as_secs_f64();
+        assert_eq!(r, Err(Error::SumaNoCuadra), "tiene que llegar al limite 3");
+        assert!(s < 10.0, "validar tardo {s:.1} s con {n} nombres distintos");
+    }
+
+    /// Y el duplicado se sigue reportando en el MISMO indice que antes: el
+    /// primero cuyo nombre ya aparecio, no el segundo de la pareja.
+    #[test] fn el_duplicado_se_reporta_en_el_mismo_indice() {
+        let m = |n: &[u8]| Miembro { nombre: n.to_vec(), tam_orig: 100, tam_payload: 100, hash: [0; 16], m_flags: 0 };
+        let ms = vec![m(b"a"), m(b"b"), m(b"c"), m(b"b"), m(b"a")];
+        assert_eq!(validar(&ms, 0, 1u64 << 40, 50), Err(Error::NombreDuplicado(3)));
+    }
+
+    #[test] fn la_suma_del_limite_3_no_da_la_vuelta() {
+        // un solo payload enorme (limite 6 lo deja pasar con tam_archivo = MAX):
+        // suma_payload no desborda, pero sumarle el indice y la cabecera si.
+        let ms = vec![Miembro { nombre: b"a".to_vec(), tam_orig: 1, tam_payload: u64::MAX - 10,
+                                hash: [0; 16], m_flags: 0 }];
+        assert_eq!(validar(&ms, 0, u64::MAX, 50), Err(Error::Desborde));
     }
 
     #[test] fn la_suma_no_desborda_antes_de_comparar() {

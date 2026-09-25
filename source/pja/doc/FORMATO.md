@@ -134,7 +134,17 @@ determinista con su resultado esperado.
 | `Σ tam_orig` = 2^63 | rechaza por regla 4, **sin desbordar la suma** |
 | `tam_payload` = 0 | rechaza por regla 6 |
 | `nombre_len` pasa el fin del índice | rechaza |
-| dos entradas con el mismo nombre | rechaza al abrir |
+| dos entradas con el mismo nombre | rechaza al abrir, en el índice del **primero** cuyo nombre ya apareció |
+| 1.048.576 nombres **distintos** (el tope), sumas que no cuadran | rechaza por regla 3 **en tiempo casi lineal**: 49 MB en 0,49 s |
+| `Σ tam_payload + tam_índice + 28` pasa 2^64 | rechaza por desborde, **no** da la vuelta |
+
+La penúltima fila salió de medir, no de pensar. El chequeo de duplicados era un
+bucle contra todos los anteriores: cuadrático. Con un archivo armado a mano
+—cabecera válida y el hash del índice bien calculado, que no es secreto—,
+60.000 nombres distintos en 2,82 MB tardaban **7,1 s**, y llevado al tope se
+estimaban **~39 minutos** con nombres cortos y **~2,4 horas** con nombres de
+250 B. Todo **antes** de que la regla 3 notara que las sumas no cuadraban: la
+bomba que esta capa existe para parar, pasando por adentro de la capa.
 
 ### 4.3 Nombres
 
