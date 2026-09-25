@@ -134,7 +134,7 @@ $(TARGET): $(OBJ) $(RES)
 # --- standard targets --------------------------------------------------------
 
 .PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
-        native pgo pgo-clean pja pja-tests pja-clean pja-corpus
+        native pgo pgo-clean pja pja-tests pja-clean pja-corpus pja-pas-tests
 
 all: $(TARGET)
 
@@ -383,12 +383,46 @@ pja-tests: $(PJA_LIB) lib
 	@echo "[OK] pja tests: $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
 	@echo "     las pruebas de Rust van aparte: $(CARGO) test --release --manifest-path $(PJA_DIR)/Cargo.toml"
 
+# --- capa Pascal del contenedor (port desde Rust) ----------------------------
+# Opt-in como `pja`: packJPG en si no necesita FreePascal.
+#
+# El criterio de aceptacion del port es DIFERENCIAL: las mismas entradas pasan
+# por la version Rust (la referencia, `cargo run --example`) y por la de Pascal,
+# y tienen que dar lo mismo linea por linea. Las pruebas unitarias portadas
+# solo prueban que el Pascal hace lo que uno CREE que hace el Rust.
+FPC_PAS ?= fpc
+PAS_DIR  = $(PJA_DIR)/pas
+PAS_OUT  = $(PAS_DIR)/build
+
+pja-pas-tests: $(PJA_LIB)
+	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
+	  echo "ERROR: no encuentro '$(FPC_PAS)'. La capa Pascal se compila con"; \
+	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
+	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
+	  echo "         make pja-pas-tests FPC_PAS=/ruta/a/fpc"; \
+	  exit 1; }
+	@mkdir -p $(PAS_OUT)
+	$(FPC_PAS) -O2 -Fu$(PAS_DIR) -Fi$(PAS_DIR) -FE$(PAS_OUT) $(PAS_DIR)/pruebas/prueba_nombres.pas
+	$(FPC_PAS) -O2 -Fu$(PAS_DIR) -Fi$(PAS_DIR) -FE$(PAS_OUT) $(PAS_DIR)/diferencial/dif_nombres.pas
+	$(PAS_OUT)/prueba_nombres
+	$(CARGO) build --release --manifest-path $(PJA_DIR)/Cargo.toml --example dif_nombres
+	python3 $(PAS_DIR)/diferencial/corpus.py $(PAS_OUT)/corpus.hex
+	$(PJA_DIR)/target/release/examples/dif_nombres $(PAS_OUT)/corpus.hex > $(PAS_OUT)/rust.txt
+	$(PAS_OUT)/dif_nombres $(PAS_OUT)/corpus.hex > $(PAS_OUT)/pascal.txt
+	@# Contar, no solo comparar: dos archivos vacios son "iguales".
+	@n=`wc -l < $(PAS_OUT)/corpus.hex`; r=`wc -l < $(PAS_OUT)/rust.txt`; p=`wc -l < $(PAS_OUT)/pascal.txt`; \
+	 if [ "$$n" -lt 100000 ] || [ "$$r" -ne "$$n" ] || [ "$$p" -ne "$$n" ]; then \
+	   echo "FALLA: corpus $$n lineas, rust $$r, pascal $$p -- tienen que coincidir y ser >= 100000"; exit 1; fi; \
+	 d=`paste -d'|' $(PAS_OUT)/rust.txt $(PAS_OUT)/pascal.txt | awk -F'|' '$$1 != $$2' | wc -l`; \
+	 echo "diferencial nombres: $$d distintas de $$n entradas"; \
+	 [ "$$d" -eq 0 ] || { paste -d'|' $(PAS_OUT)/corpus.hex $(PAS_OUT)/rust.txt $(PAS_OUT)/pascal.txt | awk -F'|' '$$2 != $$3' | head -5; exit 1; }
+
 # Aparte de `clean` a proposito: target/ de cargo son cientos de megas de
 # dependencias compiladas y borrarlo cuesta minutos de rebuild. `clean` saca
 # solo lo que produce este Makefile.
 pja-clean:
 	@echo pja-clean...
-	@-rm -rf $(PJA_DIR)/target $(PJA_DIR)/pruebas
+	@-rm -rf $(PJA_DIR)/target $(PJA_DIR)/pruebas $(PAS_OUT)
 	@-rm -f $(PJA_DIR)/test_frontera $(PJA_DIR)/pjatool
 
 clean:

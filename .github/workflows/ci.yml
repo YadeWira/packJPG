@@ -173,6 +173,18 @@ jobs:
           case "$claro" in *[!0]*) : ;; *) echo "FAIL: control - sin cifrar tendria que traer datos"; exit 1 ;; esac
           echo "OK: cifrado en cero, y el control sin cifrar no lo esta"
 
+      - name: Pascal port (unit tests + differential against Rust)
+        working-directory: source
+        run: |
+          # La capa del contenedor se esta portando de Rust a FreePascal (Rust
+          # para 32 bits / Windows 7 es Tier 3). El criterio de aceptacion es
+          # diferencial: las mismas entradas por la version Rust y por la de
+          # Pascal, linea por linea. El target cuenta lineas y celdas y falla
+          # si no coinciden -- dos salidas vacias no pasan por "iguales".
+          sudo apt-get install -y -qq fpc > /dev/null
+          fpc -iV
+          make pja-pas-tests
+
       - name: Container round-trip (pjatool)
         working-directory: source
         run: |

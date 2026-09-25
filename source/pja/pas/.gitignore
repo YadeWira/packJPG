@@ -1,0 +1,9 @@
+*.o
+*.ppu
+*.a
+*.exe
+pruebas/prueba_nombres
+diferencial/dif_nombres
+diferencial/corpus.hex
+diferencial/*.txt
+build/

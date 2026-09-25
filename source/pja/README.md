@@ -1,10 +1,55 @@
-# Contenedor PJA — núcleo en Rust
+# Contenedor PJA
 
 Prototipo del contenedor multi-JPEG con integridad y cifrado. **No está
 enganchado a la CLI todavía**: `pjatool.cpp` es la demostración punta a punta
 que usa `pjglib` y esta biblioteca.
 
-## Por qué Rust, y por qué sólo acá
+## Port a FreePascal, en curso
+
+**Decisión del 25/09/2026: esta capa pasa de Rust a FreePascal.** Rust para
+Windows 7 es **Tier 3 en todos los targets**, y `i686-pc-windows-gnu` (MinGW 32
+bits, lo que usa este proyecto) es Tier 2 y exige Windows 10. packJPG declara
+soporte desde Windows 7 SP1 y publica binarios de 32 bits. FreePascal tiene
+`i386-win32` como destino principal desde siempre.
+
+El **cifrado no se escribe en Pascal**: va en C, con Monocypher 4 y la
+implementación oficial de BLAKE3. Medido antes de empezar: dan exactamente lo
+mismo que las primitivas Rust de hoy, byte a byte, en Linux 32/64 y en Windows 7
+real de 32/64 bits. El formato en disco no cambia.
+
+El código Rust **se queda como referencia** hasta que el port termine: cada
+módulo portado se da por bueno cuando da lo mismo que su versión Rust sobre el
+mismo corpus, línea por línea (`make pja-pas-tests`).
+
+| módulo | estado |
+|---|---|
+| `limites` | portado |
+| `nombres` | portado — 52 pruebas + diferencial de 150.605 entradas, 0 distintas, en 64 **y 32 bits** |
+| `indice`, `escritor`, `contenedor`, `corrupcion` | pendiente |
+| `cifrado` | pendiente — pasa a C (Monocypher + BLAKE3) |
+| `pjafs` (rutas al extraer) | pendiente |
+| frontera FFI | pendiente — en Windows va como DLL (ver abajo) |
+
+Tres reglas del port, las tres medidas y no obvias — están en `pas/pja.inc`:
+
+- **`{$R+}` no controla accesos por puntero.** `p[10]` con `p: PByte` lee fuera
+  de rango sin ningún error. La validación trabaja sólo sobre arreglos; lo que
+  llega por la frontera como puntero y largo se copia a un arreglo primero.
+- **Con `{$Q+}`, `for i := 0 to n - 1` con `n` sin signo y `n = 0` lanza
+  `EIntOverflow`.** Largos e índices con signo; recorridos con `High()`.
+- **Cada función exportada es una cáscara** sin variables administradas ni
+  `try`, que chequea que el runtime esté inicializado antes de llamar a la
+  implementación. Sin eso, olvidarse la inicialización apaga `{$R+}` en
+  silencio, y FPC arma el marco de excepciones en el prólogo antes de que
+  cualquier chequeo corra.
+
+Enlace, medido: en Linux el código Pascal va **adentro** del ejecutable; en
+Windows va como **DLL**, porque metido en el `.exe` obliga a apagar la sección de
+relocaciones y el ejecutable entero pierde ASLR. La DLL de FPC, en Windows 10
+19044, dio **0 de 20** cuelgues con hilos creados antes del `LoadLibrary`,
+contra un control con la DLL de packJPG v5.0d que colgó 3 de 6.
+
+## Por qué Rust, y por qué sólo acá (la decisión original, reemplazada por el port)
 
 De los nueve defectos medidos en v5.0e, **cinco los previene el lenguaje** y
 están concentrados en los parsers, no en el códec. Por eso el perímetro de
