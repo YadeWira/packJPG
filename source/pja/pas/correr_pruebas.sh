@@ -21,14 +21,15 @@ done
 LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")
 
 echo "== compilar"
-for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice \
-            diferencial/dif_nombres diferencial/dif_indice; do
+for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor \
+            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor; do
   $FPC -O2 -Fu"$PAS" -Fi"$PAS" -Fo"$OUT/c" -FU"$OUT" -FE"$OUT" -Fl"$LIBGCC" "$PAS/$prog.pas" > "$OUT/fpc.log" 2>&1 \
     || { cat "$OUT/fpc.log"; exit 1; }
 done
 
 echo "== referencias Rust"
-$CARGO build --release --manifest-path "$PJA/Cargo.toml" --example dif_nombres --example dif_indice --example kat_cripto
+$CARGO build --release --manifest-path "$PJA/Cargo.toml" \
+  --example dif_nombres --example dif_indice --example dif_escritor --example kat_cripto
 EX=$PJA/target/release/examples
 "$EX/kat_cripto" "$OUT/kat" > /dev/null
 
@@ -36,6 +37,10 @@ echo "== pruebas portadas"
 "$OUT/prueba_nombres" | tail -1
 "$OUT/prueba_cripto" "$OUT/kat" | tail -1
 "$OUT/prueba_indice" | tail -1
+# .pjg reales para el round-trip: los genera `make pja-corpus` con el packJPG de este arbol
+CORPUS=$PJA/pruebas/corpus
+ls "$CORPUS"/*.pjg > /dev/null 2>&1 || { echo "FALLA: no hay .pjg en $CORPUS (make pja-corpus)"; exit 1; }
+"$OUT/prueba_escritor" "$CORPUS" | tail -1
 
 diferencial() {   # nombre, cantidad minima de entradas, comando rust, comando pascal
   local n=$1 min=$2 corpus=$3 rust=$4 pas=$5
@@ -59,3 +64,6 @@ diferencial nombres 100000 "$OUT/corpus_nombres.hex" "$EX/dif_nombres" "$OUT/dif
 "$EX/dif_indice" generar "$OUT/corpus_indice.hex" 2> /dev/null
 rust_indice()   { "$EX/dif_indice" leer "$1"; }
 diferencial indice 20000 "$OUT/corpus_indice.hex" rust_indice "$OUT/dif_indice"
+"$EX/dif_escritor" generar "$OUT/corpus_escritor.txt" 2> /dev/null
+rust_escritor() { "$EX/dif_escritor" leer "$1"; }
+diferencial escritor 10000 "$OUT/corpus_escritor.txt" rust_escritor "$OUT/dif_escritor"

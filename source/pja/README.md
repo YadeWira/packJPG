@@ -27,7 +27,8 @@ mismo corpus, línea por línea (`make pja-pas-tests`).
 | `nombres` | portado — 52 pruebas + diferencial de 150.605 entradas, 0 distintas, en 64 **y 32 bits** |
 | `indice` | portado — 25 pruebas + diferencial de 20.644 contenedores hostiles, 0 distintas, en 64 y 32 bits; 12/13 mutantes detectados, el 13.º equivalente con prueba |
 | BLAKE3 | en C (1.8.7 oficial, `pas/c/`), detrás de `pja_cripto.h`; 11 pruebas desde Pascal contra los vectores del Rust |
-| `escritor`, `contenedor`, `corrupcion` | pendiente |
+| `escritor` | portado — 30 pruebas (con round-trip de 10 `.pjg` reales) + diferencial de 10.579 conjuntos, **archivo byte a byte igual al del Rust**, 0 distintos, en 64 y 32 bits; 12/12 mutantes reales detectados |
+| `contenedor`, `corrupcion` | pendiente |
 | `cifrado` | pendiente — pasa a C (Monocypher + BLAKE3) |
 | `pjafs` (rutas al extraer) | pendiente |
 | frontera FFI | pendiente — en Windows va como DLL (ver abajo) |

@@ -178,80 +178,17 @@ begin
   Result := R(eNinguno);
 end;
 
-{ ---- duplicados en O(n log n) ----
-  El Rust de referencia usa un BTreeSet que inserta en orden y reporta el
-  primer i cuyo nombre ya aparecio. Equivalente: ordenar los indices por
-  (nombre, indice) y tomar, entre todos los grupos de nombres iguales, el menor
-  de los SEGUNDOS de cada grupo. Una sola pasada de ordenamiento, sin
-  estructuras que dependan del comparador por defecto de la RTL (que en arreglos
-  dinamicos compararia punteros, no contenido). }
-function Comparar(const a, b: TBytes): Integer;
-var i, n: SizeInt;
-begin
-  n := Length(a); if Length(b) < n then n := Length(b);
-  for i := 0 to n - 1 do
-    if a[i] <> b[i] then Exit(Integer(a[i]) - Integer(b[i]));
-  Result := Length(a) - Length(b);
-end;
-
-function PrimerDuplicado(const ms: TMiembros): SizeInt;
-var
-  idx, tmp: array of SizeInt;
-  n, ancho, ini, med, fin, i, j, k, grupoIni, c: SizeInt;
-
-  function Menor(x, y: SizeInt): Boolean;
-  var d: Integer;
-  begin
-    d := Comparar(ms[x].nombre, ms[y].nombre);
-    Result := (d < 0) or ((d = 0) and (x < y));
-  end;
-
-begin
-  Result := -1;
-  n := Length(ms);
-  if n < 2 then Exit;
-  SetLength(idx, n); SetLength(tmp, n);
-  for i := 0 to n - 1 do idx[i] := i;
-  { mergesort de abajo hacia arriba: sin recursion, estable, O(n log n) }
-  ancho := 1;
-  while ancho < n do begin
-    ini := 0;
-    while ini < n do begin
-      med := ini + ancho; if med > n then med := n;
-      fin := ini + 2 * ancho; if fin > n then fin := n;
-      i := ini; j := med; k := ini;
-      while (i < med) and (j < fin) do begin
-        if Menor(idx[j], idx[i]) then begin tmp[k] := idx[j]; Inc(j); end
-        else begin tmp[k] := idx[i]; Inc(i); end;
-        Inc(k);
-      end;
-      while i < med do begin tmp[k] := idx[i]; Inc(i); Inc(k); end;
-      while j < fin do begin tmp[k] := idx[j]; Inc(j); Inc(k); end;
-      ini := fin;
-    end;
-    for i := 0 to n - 1 do idx[i] := tmp[i];
-    ancho := ancho * 2;
-  end;
-  { grupos de nombres iguales, ya ordenados por indice adentro de cada grupo }
-  grupoIni := 0;
-  for i := 1 to n do
-    if (i = n) or (Comparar(ms[idx[i]].nombre, ms[idx[grupoIni]].nombre) <> 0) then begin
-      if i - grupoIni >= 2 then begin
-        c := idx[grupoIni + 1];
-        if (Result < 0) or (c < Result) then Result := c;
-      end;
-      grupoIni := i;
-    end;
-end;
-
 function Validar(const ms: TMiembros; flags: Byte; tamArchivo, tamIndice: QWord): TResultado;
 var
   i, dup: SizeInt;
   sumaPayload, sumaOrig, total, techo: QWord;
   v: TVeredicto;
+  noms: TListaNombres;
 begin
   sumaPayload := 0; sumaOrig := 0;
-  dup := PrimerDuplicado(ms);
+  noms := nil; SetLength(noms, Length(ms));
+  for i := 0 to High(ms) do noms[i] := ms[i].nombre;   { refcount, no copia }
+  dup := PrimerDuplicado(noms);
   for i := 0 to High(ms) do begin
     { Limite 6: ningun payload vacio ni imposible. }
     if (ms[i].tam_payload < MIN_PAYLOAD) or (ms[i].tam_payload > tamArchivo) then

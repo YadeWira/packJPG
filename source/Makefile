@@ -394,7 +394,7 @@ FPC_PAS ?= fpc
 PAS_DIR  = $(PJA_DIR)/pas
 PAS_OUT  = $(PAS_DIR)/build
 
-pja-pas-tests: $(PJA_LIB)
+pja-pas-tests: $(PJA_LIB) pja-corpus
 	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
 	  echo "ERROR: no encuentro '$(FPC_PAS)'. La capa Pascal se compila con"; \
 	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
