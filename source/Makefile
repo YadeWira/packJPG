@@ -401,21 +401,7 @@ pja-pas-tests: $(PJA_LIB)
 	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
 	  echo "         make pja-pas-tests FPC_PAS=/ruta/a/fpc"; \
 	  exit 1; }
-	@mkdir -p $(PAS_OUT)
-	$(FPC_PAS) -O2 -Fu$(PAS_DIR) -Fi$(PAS_DIR) -FE$(PAS_OUT) $(PAS_DIR)/pruebas/prueba_nombres.pas
-	$(FPC_PAS) -O2 -Fu$(PAS_DIR) -Fi$(PAS_DIR) -FE$(PAS_OUT) $(PAS_DIR)/diferencial/dif_nombres.pas
-	$(PAS_OUT)/prueba_nombres
-	$(CARGO) build --release --manifest-path $(PJA_DIR)/Cargo.toml --example dif_nombres
-	python3 $(PAS_DIR)/diferencial/corpus.py $(PAS_OUT)/corpus.hex
-	$(PJA_DIR)/target/release/examples/dif_nombres $(PAS_OUT)/corpus.hex > $(PAS_OUT)/rust.txt
-	$(PAS_OUT)/dif_nombres $(PAS_OUT)/corpus.hex > $(PAS_OUT)/pascal.txt
-	@# Contar, no solo comparar: dos archivos vacios son "iguales".
-	@n=`wc -l < $(PAS_OUT)/corpus.hex`; r=`wc -l < $(PAS_OUT)/rust.txt`; p=`wc -l < $(PAS_OUT)/pascal.txt`; \
-	 if [ "$$n" -lt 100000 ] || [ "$$r" -ne "$$n" ] || [ "$$p" -ne "$$n" ]; then \
-	   echo "FALLA: corpus $$n lineas, rust $$r, pascal $$p -- tienen que coincidir y ser >= 100000"; exit 1; fi; \
-	 d=`paste -d'|' $(PAS_OUT)/rust.txt $(PAS_OUT)/pascal.txt | awk -F'|' '$$1 != $$2' | wc -l`; \
-	 echo "diferencial nombres: $$d distintas de $$n entradas"; \
-	 [ "$$d" -eq 0 ] || { paste -d'|' $(PAS_OUT)/corpus.hex $(PAS_OUT)/rust.txt $(PAS_OUT)/pascal.txt | awk -F'|' '$$2 != $$3' | head -5; exit 1; }
+	FPC=$(FPC_PAS) CARGO=$(CARGO) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) bash $(PAS_DIR)/correr_pruebas.sh
 
 # Aparte de `clean` a proposito: target/ de cargo son cientos de megas de
 # dependencias compiladas y borrarlo cuesta minutos de rebuild. `clean` saca

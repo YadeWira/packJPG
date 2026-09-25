@@ -25,12 +25,14 @@ mismo corpus, línea por línea (`make pja-pas-tests`).
 |---|---|
 | `limites` | portado |
 | `nombres` | portado — 52 pruebas + diferencial de 150.605 entradas, 0 distintas, en 64 **y 32 bits** |
-| `indice`, `escritor`, `contenedor`, `corrupcion` | pendiente |
+| `indice` | portado — 25 pruebas + diferencial de 20.644 contenedores hostiles, 0 distintas, en 64 y 32 bits; 12/13 mutantes detectados, el 13.º equivalente con prueba |
+| BLAKE3 | en C (1.8.7 oficial, `pas/c/`), detrás de `pja_cripto.h`; 11 pruebas desde Pascal contra los vectores del Rust |
+| `escritor`, `contenedor`, `corrupcion` | pendiente |
 | `cifrado` | pendiente — pasa a C (Monocypher + BLAKE3) |
 | `pjafs` (rutas al extraer) | pendiente |
 | frontera FFI | pendiente — en Windows va como DLL (ver abajo) |
 
-Tres reglas del port, las tres medidas y no obvias — están en `pas/pja.inc`:
+Reglas del port, todas medidas y no obvias — las tres primeras están en `pas/pja.inc`:
 
 - **`{$R+}` no controla accesos por puntero.** `p[10]` con `p: PByte` lee fuera
   de rango sin ningún error. La validación trabaja sólo sobre arreglos; lo que
@@ -42,6 +44,12 @@ Tres reglas del port, las tres medidas y no obvias — están en `pas/pja.inc`:
   implementación. Sin eso, olvidarse la inicialización apaga `{$R+}` en
   silencio, y FPC arma el marco de excepciones en el prólogo antes de que
   cualquier chequeo corra.
+- **Pascal no distingue mayúsculas, y el Rust sí.** Al portar `indice`, una
+  variable local `version` tapó a la constante `VERSION`: la comparación quedó
+  `version > version`, siempre falsa, y ninguna versión futura se rechazaba. El
+  compilador no avisa. Lo agarró el diferencial (63 de 63 `VersionFutura`), y
+  ahora `pas/colisiones.py` corta el build antes de compilar si reaparece un
+  choque así.
 
 Enlace, medido: en Linux el código Pascal va **adentro** del ejecutable; en
 Windows va como **DLL**, porque metido en el `.exe` obliga a apagar la sección de
