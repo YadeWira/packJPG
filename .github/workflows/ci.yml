@@ -181,6 +181,8 @@ jobs:
           # diferencial: las mismas entradas por la version Rust y por la de
           # Pascal, linea por linea. El target cuenta lineas y celdas y falla
           # si no coinciden -- dos salidas vacias no pasan por "iguales".
+          # sin update el indice del runner puede estar viejo y el espejo da 404
+          sudo apt-get update -qq
           sudo apt-get install -y -qq fpc > /dev/null
           fpc -iV
           make pja-pas-tests
