@@ -16,7 +16,7 @@ unit pjaindice;
 
 interface
 
-uses SysUtils, pjalimites, pjanombres, pjacripto;
+uses SysUtils, pjalimites, pjanombres, pjacripto, pjacifrado;
 
 const
   MAGIA: array[0..3] of Byte = (Ord('P'), Ord('J'), Ord('A'), $01);
@@ -30,8 +30,7 @@ const
   { magia(4) + version(1) + flags(1) + kdf(1) + reservado(1) + tam_indice(4) + hash_indice(16) }
   TAM_CABECERA = 28;
 
-  { Perfiles de derivacion de clave conocidos. Hoy uno solo: 0 = Argon2id
-    64 MiB, t=3, p=1. Vive aca mientras cifrado no este portado. }
+  { El byte que identifica al perfil V1 en la cabecera (ver pjacifrado). }
   PERFIL_KDF_V1 = 0;
 
 type
@@ -148,6 +147,7 @@ function LeerCabecera(const datos: TBytes; out flags: Byte; out tamIndice: LongW
                       out hashDecl: THash16): TResultado;
 var
   i: Integer;
+  perfil: TPerfilKdf;
   ver: Byte;   { NO `version`: Pascal no distingue mayusculas, y una variable
                  `version` tapa a la constante VERSION. Pasaba: la comparacion
                  quedaba `version > version`, siempre falsa, y ninguna version
@@ -169,7 +169,7 @@ begin
     una contrasena que estaban bien. }
   if (flags and FLAG_CIFRADO) = 0 then begin
     if datos[6] <> 0 then Exit(R(eReservadoNoCero));
-  end else if datos[6] <> PERFIL_KDF_V1 then
+  end else if not PerfilDeByte(datos[6], perfil) then
     Exit(R(ePerfilKdfDesconocido, datos[6]));
   tamIndice := U32(datos, 8);
   Move(datos[12], hashDecl[0], 16);

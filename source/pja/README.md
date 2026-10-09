@@ -29,7 +29,7 @@ mismo corpus, línea por línea (`make pja-pas-tests`).
 | BLAKE3 | en C (1.8.7 oficial, `pas/c/`), detrás de `pja_cripto.h`; 11 pruebas desde Pascal contra los vectores del Rust |
 | `escritor` | portado — 30 pruebas (con round-trip de 10 `.pjg` reales) + diferencial de 10.579 conjuntos, **archivo byte a byte igual al del Rust**, 0 distintos, en 64 y 32 bits; 12/12 mutantes reales detectados |
 | `contenedor`, `corrupcion` | pendiente |
-| `cifrado` | pendiente — pasa a C (Monocypher + BLAKE3) |
+| `cifrado` | portado — el esquema por trozos en Pascal, las primitivas (XChaCha20-Poly1305, Argon2id) en C con Monocypher 4.0.3; 33 pruebas con KAT del Rust (Argon2id y cifrado **byte a byte** en los bordes de 64 KiB) + diferencial de 2.219 casos (claves, cifrados y contenedores alterados), 0 distintos, en 64 y 32 bits; 13/13 mutantes reales detectados, 2 equivalentes con prueba |
 | `pjafs` (rutas al extraer) | pendiente |
 | frontera FFI | pendiente — en Windows va como DLL (ver abajo) |
 
@@ -45,6 +45,12 @@ Reglas del port, todas medidas y no obvias — las tres primeras están en `pas/
   implementación. Sin eso, olvidarse la inicialización apaga `{$R+}` en
   silencio, y FPC arma el marco de excepciones en el prólogo antes de que
   cualquier chequeo corra.
+- **En i386, `Int64` no es ordinal**: no sirve de variable de `for`, y el error
+  aparece recién al compilar para 32 bits. Contadores en `SizeInt`; posiciones
+  en bytes en `Int64`.
+- **`for s in ['corto', 'mas_largo']` recorta los literales** al largo del
+  primero (`'trozo_justo'` llegó como `'trozo'`). Recorrer un arreglo constante
+  declarado.
 - **Pascal no distingue mayúsculas, y el Rust sí.** Al portar `indice`, una
   variable local `version` tapó a la constante `VERSION`: la comparación quedó
   `version > version`, siempre falsa, y ninguna versión futura se rechazaba. El

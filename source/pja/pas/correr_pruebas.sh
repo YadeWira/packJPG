@@ -13,23 +13,23 @@ mkdir -p "$OUT/c"
 echo "== identificadores que chocan sin distinguir mayusculas"
 python3 "$PAS/colisiones.py" "$PAS"
 
-echo "== cripto en C (BLAKE3 1.8.7 portable + la frontera pja_cripto)"
-for f in pja_cripto blake3/blake3 blake3/blake3_dispatch blake3/blake3_portable; do
+echo "== cripto en C (BLAKE3 1.8.7 portable, Monocypher 4.0.3 + la frontera pja_cripto)"
+for f in pja_cripto blake3/blake3 blake3/blake3_dispatch blake3/blake3_portable monocypher/monocypher; do
   $CC -O2 -std=c99 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 \
       -I"$PAS/c" -c "$PAS/c/$f.c" -o "$OUT/c/$(basename "$f").o"
 done
 LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")
 
 echo "== compilar"
-for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor \
-            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor; do
+for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor pruebas/prueba_cifrado \
+            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor diferencial/dif_cifrado; do
   $FPC -O2 -Fu"$PAS" -Fi"$PAS" -Fo"$OUT/c" -FU"$OUT" -FE"$OUT" -Fl"$LIBGCC" "$PAS/$prog.pas" > "$OUT/fpc.log" 2>&1 \
     || { cat "$OUT/fpc.log"; exit 1; }
 done
 
 echo "== referencias Rust"
 $CARGO build --release --manifest-path "$PJA/Cargo.toml" \
-  --example dif_nombres --example dif_indice --example dif_escritor --example kat_cripto
+  --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example kat_cripto
 EX=$PJA/target/release/examples
 "$EX/kat_cripto" "$OUT/kat" > /dev/null
 
@@ -37,6 +37,7 @@ echo "== pruebas portadas"
 "$OUT/prueba_nombres" | tail -1
 "$OUT/prueba_cripto" "$OUT/kat" | tail -1
 "$OUT/prueba_indice" | tail -1
+"$OUT/prueba_cifrado" "$OUT/kat" | tail -1
 # .pjg reales para el round-trip: los genera `make pja-corpus` con el packJPG de este arbol
 CORPUS=$PJA/pruebas/corpus
 ls "$CORPUS"/*.pjg > /dev/null 2>&1 || { echo "FALLA: no hay .pjg en $CORPUS (make pja-corpus)"; exit 1; }
@@ -67,3 +68,9 @@ diferencial indice 20000 "$OUT/corpus_indice.hex" rust_indice "$OUT/dif_indice"
 "$EX/dif_escritor" generar "$OUT/corpus_escritor.txt" 2> /dev/null
 rust_escritor() { "$EX/dif_escritor" leer "$1"; }
 diferencial escritor 10000 "$OUT/corpus_escritor.txt" rust_escritor "$OUT/dif_escritor"
+# cifrado: el corpus es un directorio (corpus.txt + los contenedores base); las
+# dos puntas reciben el directorio, y el conteo de lineas va contra corpus.txt
+"$EX/dif_cifrado" generar "$OUT/corpus_cifrado" 2> /dev/null
+rust_cifrado()   { "$EX/dif_cifrado" leer "$(dirname "$1")"; }
+pascal_cifrado() { "$OUT/dif_cifrado" "$(dirname "$1")"; }
+diferencial cifrado 2000 "$OUT/corpus_cifrado/corpus.txt" rust_cifrado pascal_cifrado
