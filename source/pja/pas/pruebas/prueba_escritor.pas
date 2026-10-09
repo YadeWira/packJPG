@@ -19,7 +19,7 @@ function Igual(const a, b: TBytes): Boolean;
 begin Result := (Length(a) = Length(b)) and ((Length(a) = 0) or CompareMem(@a[0], @b[0], Length(a))); end;
 function Tramo(const x: TBytes; ini, n: QWord): TBytes; begin Result := Copy(x, SizeInt(ini), SizeInt(n)); end;
 function Leer(const f: string): TBytes; var s: TFileStream;
-begin s := TFileStream.Create(f, fmOpenRead); try Result := nil; SetLength(Result, s.Size); if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
+begin s := TFileStream.Create(f, fmOpenRead or fmShareDenyNone); try Result := nil; SetLength(Result, s.Size); if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
 
 var es: TEntradas; bytes: TBytes; av: TAvisos; c: TContenedor; fl: Byte; ti: LongWord; hd: THash16;
     offs: TDesplazamientos; a, bb: TBytes; i, n, total: SizeInt; t0: QWord; sr: TSearchRec; dir: string;

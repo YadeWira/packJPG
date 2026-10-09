@@ -28,7 +28,8 @@ mismo corpus, línea por línea (`make pja-pas-tests`).
 | `indice` | portado — 25 pruebas + diferencial de 20.644 contenedores hostiles, 0 distintas, en 64 y 32 bits; 12/13 mutantes detectados, el 13.º equivalente con prueba |
 | BLAKE3 | en C (1.8.7 oficial, `pas/c/`), detrás de `pja_cripto.h`; 11 pruebas desde Pascal contra los vectores del Rust |
 | `escritor` | portado — 30 pruebas (con round-trip de 10 `.pjg` reales) + diferencial de 10.579 conjuntos, **archivo byte a byte igual al del Rust**, 0 distintos, en 64 y 32 bits; 12/12 mutantes reales detectados |
-| `contenedor`, `corrupcion` | pendiente |
+| `contenedor` | portado — 42 pruebas con `.pjg` reales (incluido el ataque de confirmación de nombres, con su control positivo) + diferencial de 13.596 casos (`escribir` con y sin cifrado, `abrir` de contenedores dañados y **resellados**: dañados por dentro y cifrados después, para llegar al camino que corre tras autenticar), 0 distintos, en 64 y 32 bits; 14/14 mutantes reales detectados, 1 equivalente (borrar la clave derivada, que el Rust no hace) |
+| `corrupcion` | pendiente |
 | `cifrado` | portado — el esquema por trozos en Pascal, las primitivas (XChaCha20-Poly1305, Argon2id) en C con Monocypher 4.0.3; 33 pruebas con KAT del Rust (Argon2id y cifrado **byte a byte** en los bordes de 64 KiB) + diferencial de 2.219 casos (claves, cifrados y contenedores alterados), 0 distintos, en 64 y 32 bits; 13/13 mutantes reales detectados, 2 equivalentes con prueba |
 | `pjafs` (rutas al extraer) | pendiente |
 | frontera FFI | pendiente — en Windows va como DLL (ver abajo) |
@@ -51,6 +52,11 @@ Reglas del port, todas medidas y no obvias — las tres primeras están en `pas/
 - **`for s in ['corto', 'mas_largo']` recorta los literales** al largo del
   primero (`'trozo_justo'` llegó como `'trozo'`). Recorrer un arreglo constante
   declarado.
+- **En Unix, `TFileStream.Create(f, fmOpenRead)` toma un `flock` exclusivo.**
+  Una segunda apertura del mismo archivo —aun en el mismo proceso— falla con
+  `EAGAIN` ("Try again"). Se vio corriendo mutantes en paralelo sobre el mismo
+  corpus. Para leer: `fmOpenRead or fmShareDenyNone`. Va a importar cuando la
+  librería abra `.pja`: dos packJPG leyendo el mismo archivo chocarían.
 - **Pascal no distingue mayúsculas, y el Rust sí.** Al portar `indice`, una
   variable local `version` tapó a la constante `VERSION`: la comparación quedó
   `version > version`, siempre falsa, y ninguna versión futura se rechazaba. El

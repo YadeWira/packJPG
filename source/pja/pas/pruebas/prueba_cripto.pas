@@ -9,7 +9,7 @@ begin Inc(celdas); if ok then Writeln('  ', q:56, '  ok') else begin Inc(fallas)
 function Hex(const h: THash16): string; var i: Integer;
 begin Result := ''; for i := 0 to 15 do Result := Result + LowerCase(IntToHex(h[i], 2)); end;
 function Leer(const f: string): TBytes; var s: TFileStream;
-begin s := TFileStream.Create(f, fmOpenRead); try SetLength(Result, s.Size); if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
+begin s := TFileStream.Create(f, fmOpenRead or fmShareDenyNone); try SetLength(Result, s.Size); if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
 var d, nom, esp: string; t: TextFile; b, a1, a2: TBytes; h: THash16; i, corte: Integer;
     lanzo: Boolean;
 begin

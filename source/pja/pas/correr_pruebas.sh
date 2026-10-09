@@ -21,15 +21,15 @@ done
 LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")
 
 echo "== compilar"
-for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor pruebas/prueba_cifrado \
-            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor diferencial/dif_cifrado; do
+for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor pruebas/prueba_cifrado pruebas/prueba_contenedor \
+            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor diferencial/dif_cifrado diferencial/dif_contenedor; do
   $FPC -O2 -Fu"$PAS" -Fi"$PAS" -Fo"$OUT/c" -FU"$OUT" -FE"$OUT" -Fl"$LIBGCC" "$PAS/$prog.pas" > "$OUT/fpc.log" 2>&1 \
     || { cat "$OUT/fpc.log"; exit 1; }
 done
 
 echo "== referencias Rust"
 $CARGO build --release --manifest-path "$PJA/Cargo.toml" \
-  --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example kat_cripto
+  --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example dif_contenedor --example kat_cripto
 EX=$PJA/target/release/examples
 "$EX/kat_cripto" "$OUT/kat" > /dev/null
 
@@ -42,11 +42,16 @@ echo "== pruebas portadas"
 CORPUS=$PJA/pruebas/corpus
 ls "$CORPUS"/*.pjg > /dev/null 2>&1 || { echo "FALLA: no hay .pjg en $CORPUS (make pja-corpus)"; exit 1; }
 "$OUT/prueba_escritor" "$CORPUS" | tail -1
+"$OUT/prueba_contenedor" "$CORPUS" | tail -1
 
 diferencial() {   # nombre, cantidad minima de entradas, comando rust, comando pascal
   local n=$1 min=$2 corpus=$3 rust=$4 pas=$5
-  "$rust" "$corpus" > "$OUT/$n.rust.txt"
-  "$pas"  "$corpus" > "$OUT/$n.pascal.txt"
+  # las dos puntas son independientes: en paralelo. `wait PID` devuelve el rc
+  # de cada una, asi que set -e sigue cortando si alguna falla.
+  local pr pp
+  "$rust" "$corpus" > "$OUT/$n.rust.txt" & pr=$!
+  "$pas"  "$corpus" > "$OUT/$n.pascal.txt" & pp=$!
+  wait $pr; wait $pp
   local c r p d
   c=$(wc -l < "$corpus"); r=$(wc -l < "$OUT/$n.rust.txt"); p=$(wc -l < "$OUT/$n.pascal.txt")
   if [ "$c" -lt "$min" ] || [ "$r" -ne "$c" ] || [ "$p" -ne "$c" ]; then
@@ -74,3 +79,9 @@ diferencial escritor 10000 "$OUT/corpus_escritor.txt" rust_escritor "$OUT/dif_es
 rust_cifrado()   { "$EX/dif_cifrado" leer "$(dirname "$1")"; }
 pascal_cifrado() { "$OUT/dif_cifrado" "$(dirname "$1")"; }
 diferencial cifrado 2000 "$OUT/corpus_cifrado/corpus.txt" rust_cifrado pascal_cifrado
+# contenedor: lo mismo, y la linea K (la clave de las E) no produce salida
+"$EX/dif_contenedor" generar "$OUT/corpus_contenedor" 2> /dev/null
+grep -v '^K ' "$OUT/corpus_contenedor/corpus.txt" > "$OUT/corpus_contenedor/casos.txt"
+rust_contenedor()   { "$EX/dif_contenedor" leer "$(dirname "$1")"; }
+pascal_contenedor() { "$OUT/dif_contenedor" "$(dirname "$1")"; }
+diferencial contenedor 10000 "$OUT/corpus_contenedor/casos.txt" rust_contenedor pascal_contenedor

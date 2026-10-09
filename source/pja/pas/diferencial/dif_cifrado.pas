@@ -22,7 +22,7 @@ begin Result := nil; SetLength(Result, largo);
   for k := 0 to largo - 1 do Result[k] := Byte(((semilla * 31) + QWord(k) * 7) and $FF); end;
 function B3(const b: TBytes): string; begin Result := AHex(Blake3_128(b)); end;
 function Leer(const f: string): TBytes; var s: TFileStream;
-begin s := TFileStream.Create(f, fmOpenRead); try Result := nil; SetLength(Result, s.Size);
+begin s := TFileStream.Create(f, fmOpenRead or fmShareDenyNone); try Result := nil; SetLength(Result, s.Size);
   if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
 
 type TTrozo = record ini, lar: SizeInt; end;

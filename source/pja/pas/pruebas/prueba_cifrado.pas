@@ -20,7 +20,7 @@ function B(const s: RawByteString): TBytes; begin Result := nil; SetLength(Resul
 function Igual(const a, b: TBytes): Boolean;
 begin Result := (Length(a) = Length(b)) and ((Length(a) = 0) or CompareMem(@a[0], @b[0], Length(a))); end;
 function Leer(const f: string): TBytes; var s: TFileStream;
-begin s := TFileStream.Create(f, fmOpenRead); try Result := nil; SetLength(Result, s.Size);
+begin s := TFileStream.Create(f, fmOpenRead or fmShareDenyNone); try Result := nil; SetLength(Result, s.Size);
   if s.Size > 0 then s.ReadBuffer(Result[0], s.Size); finally s.Free; end; end;
 function DeHex(const s: string): TBytes; var i: SizeInt;
 begin Result := nil; SetLength(Result, Length(s) div 2);

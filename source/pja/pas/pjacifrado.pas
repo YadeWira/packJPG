@@ -55,6 +55,10 @@ function Cifrar(const clave: TClave; const nonceBase: TNonce; const datos: TByte
                 out salida: TBytes): TResultadoCifrado;
 function Descifrar(const clave: TClave; const nonceBase: TNonce; const datos: TBytes;
                    out salida: TBytes): TResultadoCifrado;
+{ Lo mismo sobre datos[ini..]: el contenedor descifra despues de su prefijo sin
+  copiar el archivo entero. ini fuera de [0, Length] es error de programa. }
+function Descifrar(const clave: TClave; const nonceBase: TNonce; const datos: TBytes;
+                   ini: SizeInt; out salida: TBytes): TResultadoCifrado;
 
 { Expuestas para las pruebas del esquema (nonce distinto por trozo). }
 function NonceDe(const base: TNonce; i: QWord): TNonce;
@@ -155,6 +159,12 @@ end;
 
 function Descifrar(const clave: TClave; const nonceBase: TNonce; const datos: TBytes;
                    out salida: TBytes): TResultadoCifrado;
+begin
+  Result := Descifrar(clave, nonceBase, datos, 0, salida);
+end;
+
+function Descifrar(const clave: TClave; const nonceBase: TNonce; const datos: TBytes;
+                   ini: SizeInt; out salida: TBytes): TResultadoCifrado;
 var
   p, largo, n: Int64;
   i: QWord;
@@ -165,8 +175,10 @@ begin
   { El claro nunca es mas largo que el cifrado: se reserva una vez y se recorta
     al final. Crecer de a un trozo (SetLength(salida, n + Length(pt)) en el
     lazo) copiaba todo lo acumulado en cada trozo: 64 MiB tardaban 20 s. }
-  salida := nil; SetLength(salida, Length(datos)); n := 0;
-  p := 0; i := 0; viElUltimo := False;
+  if (ini < 0) or (ini > Length(datos)) then
+    raise ERangeError.CreateFmt('Descifrar: inicio %d fuera de [0, %d]', [ini, Length(datos)]);
+  salida := nil; SetLength(salida, Length(datos) - ini); n := 0;
+  p := ini; i := 0; viElUltimo := False;
   while p < Length(datos) do begin
     if p + 4 > Length(datos) then begin salida := nil; Exit(RC(ecFormato)); end;
     largo := Int64(datos[p]) or (Int64(datos[p + 1]) shl 8) or (Int64(datos[p + 2]) shl 16)
