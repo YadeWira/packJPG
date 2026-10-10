@@ -22,14 +22,16 @@ LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")
 
 echo "== compilar"
 for prog in pruebas/prueba_nombres pruebas/prueba_cripto pruebas/prueba_indice pruebas/prueba_escritor pruebas/prueba_cifrado pruebas/prueba_contenedor \
-            diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor diferencial/dif_cifrado diferencial/dif_contenedor; do
+            pruebas/prueba_corrupcion diferencial/dif_nombres diferencial/dif_indice diferencial/dif_escritor diferencial/dif_cifrado \
+            diferencial/dif_contenedor diferencial/dif_corrupcion; do
   $FPC -O2 -Fu"$PAS" -Fi"$PAS" -Fo"$OUT/c" -FU"$OUT" -FE"$OUT" -Fl"$LIBGCC" "$PAS/$prog.pas" > "$OUT/fpc.log" 2>&1 \
     || { cat "$OUT/fpc.log"; exit 1; }
 done
 
 echo "== referencias Rust"
 $CARGO build --release --manifest-path "$PJA/Cargo.toml" \
-  --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example dif_contenedor --example kat_cripto
+  --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example dif_contenedor --example dif_corrupcion \
+  --example kat_cripto
 EX=$PJA/target/release/examples
 "$EX/kat_cripto" "$OUT/kat" > /dev/null
 
@@ -43,6 +45,7 @@ CORPUS=$PJA/pruebas/corpus
 ls "$CORPUS"/*.pjg > /dev/null 2>&1 || { echo "FALLA: no hay .pjg en $CORPUS (make pja-corpus)"; exit 1; }
 "$OUT/prueba_escritor" "$CORPUS" | tail -1
 "$OUT/prueba_contenedor" "$CORPUS" | tail -1
+"$OUT/prueba_corrupcion" "$CORPUS" | tail -1
 
 diferencial() {   # nombre, cantidad minima de entradas, comando rust, comando pascal
   local n=$1 min=$2 corpus=$3 rust=$4 pas=$5
@@ -85,3 +88,9 @@ grep -v '^K ' "$OUT/corpus_contenedor/corpus.txt" > "$OUT/corpus_contenedor/caso
 rust_contenedor()   { "$EX/dif_contenedor" leer "$(dirname "$1")"; }
 pascal_contenedor() { "$OUT/dif_contenedor" "$(dirname "$1")"; }
 diferencial contenedor 10000 "$OUT/corpus_contenedor/casos.txt" rust_contenedor pascal_contenedor
+# corrupcion: el contenedor real se arma en cada punta desde los mismos .pjg;
+# la primera linea compara ese contenedor, las demas cada celda de dano
+"$EX/dif_corrupcion" generar "$CORPUS" "$OUT/corpus_corrupcion.txt" 2> /dev/null
+rust_corrupcion()   { "$EX/dif_corrupcion" leer "$CORPUS" "$1"; }
+pascal_corrupcion() { "$OUT/dif_corrupcion" "$CORPUS" "$1"; }
+diferencial corrupcion 50000 "$OUT/corpus_corrupcion.txt" rust_corrupcion pascal_corrupcion
