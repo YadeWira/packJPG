@@ -181,12 +181,15 @@ bomba que esta capa existe para parar, pasando por adentro de la capa.
 | caso | esperado |
 |---|---|
 | destino con enlace simbólico que sale afuera | rechaza tras resolver |
-| ruta resuelta pasa `MAX_PATH` en Windows | rechaza con mensaje, **no trunca** |
+| enlace (simbólico o duro) con el nombre del miembro | sin sobrescribir: el destino ya existe (un enlace colgante **ocupa** el nombre); con sobrescribir: se reemplaza la entrada, **nunca se escribe a través** |
+| nombre ilegal sólo en Windows (`CON.jpg`, `foto?.jpg`, `foto.`), extrayendo en Windows | rechaza |
+| ruta resuelta pasa `MAX_PATH` en Windows (en unidades UTF-16, sobre la ruta resuelta aunque el destino sea relativo) | rechaza con mensaje, **no trunca** |
 | el destino ya existe | rechaza salvo que se pida sobrescribir |
 | hash no coincide tras decodificar | **se borra el archivo**, se nombra el miembro, se sigue con los demás, y el código de salida es != 0 |
 | lo mismo, con `--keep-corrupt` | se renombra a `<nombre>.corrupto`; si ya existe, `.corrupto.1`, `.corrupto.2`… |
 | lo mismo, y el renombre falla | **se borra igual** y se devuelve error |
 | falla la escritura a mitad de camino | se borra lo escrito antes de devolver el error |
+| no se pudo crear el archivo | **no se borra nada**: lo que haya ahí no lo escribimos nosotros |
 
 ---
 

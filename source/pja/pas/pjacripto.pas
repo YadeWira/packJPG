@@ -51,7 +51,9 @@ implementation
 {$L blake3_dispatch.o}
 {$L blake3_portable.o}
 {$L monocypher.o}
-{$linklib c}
+{ malloc/memcpy/strlen/_assert del C: libc en Unix; en Windows msvcrt, que es la
+  que trae todo Windows desde 7 (la libc.a de Linux ni siquiera es COFF). }
+{$ifdef MSWINDOWS}{$linklib msvcrt}{$else}{$linklib c}{$endif}
 { libgcc: BLAKE3 cuenta bits con __builtin_popcountll, que sin -mpopcnt GCC
   resuelve llamando a __popcountdi2 de libgcc. -mpopcnt no es opcion: esa
   instruccion no existe en CPUs viejas de 32 bits. El build pasa la ruta con -Fl. }
