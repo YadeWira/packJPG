@@ -203,6 +203,18 @@ jobs:
           [ "$total" -gt 0 ] || { echo "FAIL: no habia entradas"; exit 1; }
           [ "$ok" -eq "$total" ] || exit 1
 
+  # .pjg con un bit alterado que rompian el decodificador (puntero nulo y
+  # lecturas fuera del heap). Una lectura fuera de rango no hace caer un build
+  # normal: solo se ve con los sanitizers, asi que este job compila con ellos.
+  codec-asan:
+    name: Codec under ASan/UBSan (corrupt .pjg regressions)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Corrupt .pjg are rejected cleanly
+        working-directory: source
+        run: test/pjg_corruptos.sh
+
   release:
     name: Create GitHub release
     needs: build

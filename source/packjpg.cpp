@@ -5527,6 +5527,17 @@ INTERN bool recode_jpeg( void )
 		delete huffw;
 	}
 
+	// A header without a single SOS leaves the loop above before scnp was ever
+	// allocated (it is only allocated inside it), and the store below wrote
+	// through NULL. The header travels inside the .pjg, so one flipped bit is
+	// enough: found by flipping bits through the .pja end-to-end test
+	// (2026-10-12), SIGSEGV on a 421-byte .pjg. The fuzzer had not reached it.
+	if ( scnp == NULL ) {
+		snprintf( errormessage, MSG_SIZE, "corrupt data: the JPEG header has no scan" );
+		errorlevel = 2;
+		return false;
+	}
+
 	// store last scan & restart positions
 	scnp[ scnc ] = hufs;
 	if ( !jpg_arith_coded && rstp != NULL )
@@ -9354,22 +9365,39 @@ INTERN bool pjg_unoptimize_header( void )
 	unsigned int spos; // sub position	
 	int i;
 	
+	// The header comes out of the .pjg, so every length in it is a claim. Every
+	// later walker of hdrdata (recode_jpeg, merge_jpeg, jpg_setup_imginfo,
+	// jpg_parse_jfif...) trusts the segment lengths, and this function trusted
+	// the table lengths inside them -- including for WRITES: the standard-table
+	// reinsertion and the DQT diff undo wrote past hdrdata, and a table number
+	// up to 255 indexed std_huff_lengths[4]. Found with ASan by flipping single
+	// bits of real .pjg files through the .pja end-to-end test (2026-10-12).
+	// Checked once here, since every decode path passes through: each segment
+	// inside hdrs, each table inside its segment.
+	#define PJG_HDR_CORRUPT(what) do { \
+		snprintf( errormessage, MSG_SIZE, "corrupt header: %s at %u", what, hpos ); \
+		errorlevel = 2; return false; } while ( 0 )
 	
 	// search for DHT (0xFFC4) & DQT (0xFFDB) marker segments
 	// header parser loop
 	while ( (int)hpos + 4 <= hdrs ) {
 		type = hdrdata[ hpos + 1 ];
 		len = 2 + B_SHORT( hdrdata[ hpos + 2 ], hdrdata[ hpos + 3 ] );
+		if ( len < 4 ) PJG_HDR_CORRUPT( "segment length below its own size" );
+		if ( (size_t) hpos + len > (size_t) hdrs ) PJG_HDR_CORRUPT( "segment past the end of the header" );
+		fpos = hpos + len; // end position
 
 		if ( type == 0xC4 ) { // for DHT
-			fpos = hpos + len; // reassign length to end position
 			hpos += 4; // skip marker & length
 			while ( hpos < fpos ) {			
 				hpos++;
+				if ( hpos + 16 > fpos ) PJG_HDR_CORRUPT( "huffman table counts past the segment" );
 				// table found - check if modified
 				if ( hdrdata[ hpos ] > 2 ) {	
 					// reinsert the standard table
 					i = hdrdata[ hpos + 1 ];
+					if ( i >= 4 ) PJG_HDR_CORRUPT( "standard huffman table number" );
+					if ( hpos + std_huff_lengths[ i ] > fpos ) PJG_HDR_CORRUPT( "standard huffman table past the segment" );
 					for ( spos = 0; spos < std_huff_lengths[ i ]; spos++ ) {
 						hdrdata[ hpos + spos ] = std_huff_tables[ i ][ spos ];
 					}
@@ -9378,20 +9406,22 @@ INTERN bool pjg_unoptimize_header( void )
 				skip = 16;
 				for ( i = 0; i < 16; i++ )		
 					skip += ( int ) hdrdata[ hpos + i ];				
+				if ( hpos + skip > fpos ) PJG_HDR_CORRUPT( "huffman table past the segment" );
 				hpos += skip;
 			}
 		}
 		else if ( type == 0xDB ) { // for DQT
-			fpos = hpos + len; // reassign length to end position
 			hpos += 4; // skip marker & length
 			while ( hpos < fpos ) {
 				i = LBITS( hdrdata[ hpos ], 4 );				
 				hpos++;
 				// table found
 				if ( i == 1 ) { // get out for 16 bit precision
+					if ( hpos + 128 > fpos ) PJG_HDR_CORRUPT( "quantization table past the segment" );
 					hpos += 128;
 					continue;
 				}
+				if ( hpos + 64 > fpos ) PJG_HDR_CORRUPT( "quantization table past the segment" );
 				// undo diff coding for 8 bit precision
 				for ( spos = 1; spos < 64; spos++ )
 					hdrdata[ hpos + spos ] += hdrdata[ hpos + spos - 1 ];
@@ -9399,10 +9429,9 @@ INTERN bool pjg_unoptimize_header( void )
 				hpos += 64;
 			}
 		}
-		else { // skip segment
-			hpos += len;
-		}		
+		hpos = fpos; // the tables can't overshoot it anymore, and the rest skips the segment
 	}
+	#undef PJG_HDR_CORRUPT
 	
 	
 	return true;
