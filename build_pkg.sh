@@ -112,11 +112,21 @@ fi
 echo ""
 echo "==> Compiling packJPG (Linux x64)"
 
-(cd "$SRC_DIR" && $CXX $CFLAGS $JLS_DEFINE \
+# The .pja core (FreePascal), as in build_all.sh: since 6.0 'a' writes .pja,
+# and a package built without it would refuse 'a' unless --pjg. This script
+# used to rebuild the binary without it, over the one build_all.sh had left
+# in dist/ -- found by CI, where the smoke test then ran on this one.
+command -v fpc &>/dev/null || fail "fpc not found: packJPG 6.0 needs FreePascal 3.2 for .pja (apt install fpc)"
+(cd "$SRC_DIR" && make pja > /dev/null) || fail "make pja (the .pja core) failed"
+
+(cd "$SRC_DIR" && $CXX $CFLAGS $JLS_DEFINE -DHAVE_PJA -Ipja/include \
     -o "../$BINARY" \
-    $SRC $JLS_SRC $JLS_LIBS \
+    $SRC $JLS_SRC $JLS_LIBS pja/pas/build/libpjaffi_pas.a -ldl \
     && strip --strip-unneeded "../$BINARY")
-ok "$BINARY"
+# grep -c and not -q: -q stops at the first hit, strings gets SIGPIPE, and
+# under pipefail the check failed on a good binary
+[ "$(strings "$BINARY" | grep -c "Wrapping PJG into PJA")" -ge 1 ] || fail "$BINARY was built without the .pja core"
+ok "$BINARY (with .pja)"
 
 # ─── .tar.gz ─────────────────────────────────────────────────────────────────
 
