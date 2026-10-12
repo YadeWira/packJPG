@@ -123,8 +123,19 @@ begin
   f := EscribirVerificado(d + '/f.jpg', B('x'), H16('x'), sfBorrar, False, des);
   Ch(not f.Ok, 'no escribe: ' + f.Texto);
   Ch(Leer(d + '/f.jpg') = 'del usuario', 'el archivo del usuario queda intacto');
+  f := EscribirVerificado(d + '/f.jpg', B('malo'), H16('otro'), sfBorrar, True, des);
+  Ch(f.Ok and (des.tipo = deBorrado) and (Leer(d + '/f.jpg') = 'del usuario'),
+     'con sobrescribir y hash ajeno: el del usuario queda intacto');
+  f := EscribirVerificado(d + '/f.jpg', B('malo'), H16('otro'), sfConservar, True, des);
+  Ch(f.Ok and (des.tipo = deConservado) and (Leer(d + '/f.jpg') = 'del usuario')
+     and (Leer(d + '/f.jpg.corrupto') = 'malo'), '  y con conservar, tambien: va a .corrupto');
   f := EscribirVerificado(d + '/f.jpg', B('x'), H16('x'), sfBorrar, True, des);
   Ch(f.Ok and (Leer(d + '/f.jpg') = 'x'), 'con sobrescribir: lo reemplaza');
+  Ch(not Existe(d + '/f.jpg.pja-tmp0'), '  sin dejar el temporal');
+  Poner(d + '/g.jpg.pja-tmp0', 'ocupado');
+  f := EscribirVerificado(d + '/g.jpg', B('y'), H16('y'), sfBorrar, True, des);
+  Ch(f.Ok and (Leer(d + '/g.jpg') = 'y') and (Leer(d + '/g.jpg.pja-tmp0') = 'ocupado'),
+     '  con el temporal 0 ocupado, usa otro y no lo toca');
   ForceDirectories(d + '/carpeta.jpg');
   f := EscribirVerificado(d + '/carpeta.jpg', B('x'), H16('x'), sfBorrar, True, des);
   Ch((not f.Ok) and DirectoryExists(d + '/carpeta.jpg'), 'sobre un directorio, ni con sobrescribir: ' + f.Texto);
@@ -187,5 +198,5 @@ begin
   Writeln;
   Writeln(celdas, ' celdas, ', fallas, ' fallas');
   {$ifdef MSWINDOWS} if (fallas > 0) or (celdas < 30) then Halt(1);
-  {$else} if (fallas > 0) or (celdas < 35) then Halt(1); {$endif}
+  {$else} if (fallas > 0) or (celdas < 39) then Halt(1); {$endif}
 end.

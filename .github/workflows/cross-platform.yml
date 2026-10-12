@@ -34,7 +34,7 @@ jobs:
           # arithmetic coder). x86_64 builds cannot catch that class.
           - os: ubuntu-24.04-arm
             label: Linux ARM64
-            install: sudo apt-get update -q && sudo apt-get install -y libjpeg-turbo-progs imagemagick
+            install: sudo apt-get update -q && sudo apt-get install -y libjpeg-turbo-progs imagemagick fpc
 
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,7 @@ jobs:
           done
           ls -la rt_in
 
-      - name: Round-trip (CLI, v4.0 default)
+      - name: Round-trip (CLI, .pja default since 6.0)
         run: |
           cp rt_in/*.jpg rt_out/
           # `|| true`: packJPG exits non-zero when ANY file in the batch
@@ -92,7 +92,7 @@ jobs:
           for f in rt_in/*.jpg; do
             total=$((total+1))
             stem=$(basename "${f%.*}")
-            pjg="rt_out/${stem}.pjg"
+            pjg="rt_out/${stem}.pja"
             if [ ! -f "$pjg" ]; then
               skipped=$((skipped+1))
               # Was misdiagnosed as an ImageMagick JPEG quirk — it wasn't.

@@ -44,6 +44,7 @@ extern "C" {
 #define PJA_ERR_INTERNO    -9   /* defecto nuestro: una excepcion adentro */
 #define PJA_ERR_NO_INIT   -10   /* falto pja_iniciar */
 #define PJA_ERR_ALEATORIO -11   /* el sistema no dio bytes aleatorios para la sal */
+#define PJA_ERR_IO        -12   /* pja_guardar: no se pudo escribir (ver *codigo) */
 /* (*) Con la contraseña equivocada falla el primer trozo, y un primer trozo
  *     alterado falla igual: el AEAD no los distingue. Los dos dan CLAVE. */
 
@@ -95,6 +96,33 @@ int32_t pja_escribir(const uint8_t* payload, size_t payload_largo,
                      const uint8_t hash[16], uint64_t tam_orig,
                      const uint8_t* pass, size_t pass_largo,
                      uint8_t* buf, size_t buf_largo);
+
+/* --- guardar la salida ---
+ *
+ * Escribe `datos` en `ruta` (UTF-8, sin NUL; en Windows se pasa a UTF-16) y
+ * verifica que su BLAKE3-128 sea `esperado` ANTES de dejarlo con ese nombre:
+ *
+ *   - el archivo se CREA (O_EXCL / CREATE_NEW): nunca se escribe a traves de
+ *     un enlace simbolico o duro que ya tenga ese nombre, y uno colgante
+ *     tambien ocupa el nombre;
+ *   - con `sobrescribir`, lo que haya se borra antes (un directorio, no);
+ *   - si el hash no coincide, el archivo se BORRA, o con `conservar` queda
+ *     como <ruta>.corrupto (o .corrupto.1, .2...): nunca con su nombre;
+ *   - una escritura que falla a la mitad no deja nada; si no se pudo crear,
+ *     no se borra nada (lo que haya ahi no lo escribimos nosotros);
+ *   - crea los directorios que falten.
+ *
+ * *desenlace: PJA_GUARDADO_*. *codigo: errno o GetLastError si fallo (-1 si
+ * el error no vino del sistema). `ruta_final` (opcional) recibe la ruta
+ * donde quedo el archivo, terminada en NUL y recortada al buffer;
+ * *ruta_final_usado, su largo completo. */
+#define PJA_GUARDADO_VERIFICADO 0
+#define PJA_GUARDADO_BORRADO    1   /* el hash no coincidia: no queda nada */
+#define PJA_GUARDADO_CONSERVADO 2   /* no coincidia: quedo en ruta_final */
+int32_t pja_guardar(const char* ruta, size_t ruta_largo, const uint8_t* datos, size_t largo,
+                    const uint8_t esperado[16], int32_t conservar, int32_t sobrescribir,
+                    int32_t* desenlace, int32_t* codigo,
+                    char* ruta_final, size_t ruta_final_largo, size_t* ruta_final_usado);
 
 #ifdef __cplusplus
 }

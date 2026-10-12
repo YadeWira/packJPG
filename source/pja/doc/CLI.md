@@ -65,32 +65,48 @@ packPNG, que cubre `a`/`x`/`list`.
 
 ## 2. Switches nuevos: el formato `.pja`
 
-Un `.pja` es un JPEG por archivo (`FORMATO.md`). El contenedor de varios
-archivos que esta sección describía antes (`--archive`, `-C`, rutas adentro)
-se descartó el 12/10/2026.
+**Aplicado (12/10/2026).** Un `.pja` es un JPEG por archivo (`FORMATO.md`), y es
+**lo que escribe `a` por defecto**. El contenedor de varios archivos que esta
+sección describía antes (`--archive`, `-C`, rutas adentro) se descartó.
 
 | switch | qué hace |
 |---|---|
-| `--pja` | comprimir a `.pja` en vez de `.pjg`: el JPEG con su tamaño y su hash, verificados al extraer |
-| `-e`, `--encrypt` | `.pja` cifrado; pide la contraseña interactiva, **sin eco**, dos veces al crear |
+| `--pjg` | escribir el `.pjg` pelado, como antes de la 6.0 (sin hash ni cifrado) |
+| `-e`, `--encrypt` | cifrar; pide la contraseña **sin eco**, dos veces al crear. Con `x`, la pide sin mirar antes si algún `.pja` está cifrado |
 | `--password=TEXTO` | la contraseña en la línea de comandos (ver §3) |
-| `--password-stdin` | la contraseña por la entrada estándar (patrón de docker) |
-| `--password-file=RUTA` | para scripts; rechaza si el archivo tiene permisos más amplios que `0600` |
-| `--keep-corrupt` | al extraer, un JPEG cuyo hash no coincide se renombra a `<nombre>.corrupto` en vez de borrarse |
+| `--password-stdin` | la contraseña por la primera línea de la entrada estándar (patrón de docker) |
+| `--password-file=RUTA` | para scripts; en Unix rechaza si otros usuarios pueden leer el archivo |
+| `--keep-corrupt` | al extraer, un JPEG que no verifica se guarda como `<nombre>.corrupto` en vez de borrarse |
 
-Extraer no necesita switch: el `.pja` se reconoce por la magia, y si está
-cifrado se pide la contraseña.
+Extraer no necesita switch: el `.pja` se reconoce por la magia, y si alguno de
+los archivos está cifrado y no se dio contraseña, `x` la pide una sola vez, en
+el hilo principal, antes de arrancar (con `-th`, un prompt por archivo se
+mezclaría con la barra). Sin terminal, cada archivo cifrado lo reporta.
 
 ```
-crear:     packJPG a --pja -e foto.jpg       -> foto.pja, cifrado
-extraer:   packJPG x foto.pja                -> foto.jpg, si el hash coincide
+crear:     packJPG a -e foto.jpg       -> foto.pja, cifrado
+extraer:   packJPG x foto.pja          -> foto.jpg, si el tamaño y el hash coinciden
 ```
 
-**Sin decidir:** si `--pja` pasa a ser el formato por defecto de `a`, con el
-`.pjg` como opción. A favor: la verificación del hash detecta los `.pjg`
-alterados que decodifican a otro JPEG válido (entre el 1 % y el 21 % de los
-bits volteados, medido). En contra: 24 bytes por archivo, y los `.pjg` que ya
-consumen packPDF y los demás.
+**Por qué `.pja` por defecto** (decisión de Wira, 12/10): la verificación del
+tamaño y del hash detecta los `.pjg` alterados que decodifican a otro JPEG
+válido sin ningún error, entre el 1 % y el 21 % de los bits volteados
+(medido). Cuesta 32 bytes por archivo sin cifrar. Lo que queda afuera: packPDF
+y los demás consumen `.pjg` por la librería, que sigue igual.
+
+**Lo que hace `x` con un `.pja`, en orden:** autentica si está cifrado;
+rechaza un tamaño declarado mayor que `--max-output` **antes** de decodificar;
+decodifica con ese tamaño como tope; verifica tamaño **y** hash por separado
+(el hash es del contenido: un tamaño declarado alterado con el contenido
+intacto también se rechaza); y recién ahí escribe, creando el archivo sin
+seguir enlaces. Con `-f`, a un temporal y `rename` encima: lo que ya había
+solo se reemplaza por algo que verificó. Nada que falle borra un archivo que
+no escribió esta corrida.
+
+**Build:** el ejecutable enlaza el núcleo FreePascal (estático en Linux,
+`pjaffi_x64.dll`/`pjaffi_x86.dll` al lado del `.exe` en Windows). `make PJA=0`
+compila sin él, y entonces `a` exige `--pjg` en vez de caer en silencio al
+formato viejo.
 
 ### 2.1 `-o`, con semántica de `cp`
 
@@ -116,19 +132,22 @@ archivo y ganaría el último, en silencio. Es la misma regla que aplica `cp`.
 `--output-dir=` queda como forma larga que **sólo** acepta directorios, para
 scripts que prefieran ser inequívocos.
 
-## 3. `--password` en la línea de comandos
+## 3. `--password` en la línea de comandos (aplicado)
 
 **Existe, por decisión del 15/09/2026:** el usuario decide qué usar. La
 exposición es real (el historial del shell, `ps` y `/proc/<pid>/cmdline` para
 cualquier usuario de la máquina), así que va con mitigaciones y con
 alternativas mejores al lado, no en su lugar:
 
-- el argumento se **borra de `argv` apenas se parsea**. Medido en Linux:
-  sobrescribirlo in situ cambia lo que muestra `/proc/self/cmdline`. Queda una
+- el argumento se **borra de `argv` apenas se parsea**. Medido en Linux con
+  el CLI corriendo: `/proc/<pid>/cmdline` muestra `--password=xxxxxxxxxxxxxxx`. Queda una
   ventana entre el `exec` y el borrado, y no ayuda con el historial del shell.
   **En Windows no está medido**: la línea de comandos vive en el PEB y
   sobrescribir el `argv` de la CRT puede no cambiar lo que ven WMI o Process
-  Explorer.
+  Explorer. En Windows la contraseña de `argv` (página ANSI) se pasa a UTF-8,
+  igual que la del prompt: la misma contraseña da los mismos bytes en todas
+  las plataformas (medido: un `.pja` cifrado en Linux con "clave ñ" abre en
+  Windows 7 y 10).
 - `--password-stdin`, `--password-file=` y el prompt sin eco no tienen esa
   exposición.
 

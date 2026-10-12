@@ -418,11 +418,28 @@ static bool force_no_color = false;  // set by --no-color flag
     #define BULLET "\xe2\x80\xa2"
 #endif
 
+#if defined(_WIN32) || defined(WIN32)
+// The console code pages belong to the console, not to this process: set to
+// UTF-8 here, they stayed UTF-8 after packJPG exited, and the .cmd that called
+// it read its following lines as UTF-8 -- every non-ASCII name or password
+// after the first packJPG call was garbled (found testing the .pja CLI on
+// Windows 10, 12/10/2026). Put back on every way out.
+static UINT consola_cp_salida = 0, consola_cp_entrada = 0;
+static void restaurar_consola( void )
+{
+	if ( consola_cp_salida  != 0 ) SetConsoleOutputCP( consola_cp_salida );
+	if ( consola_cp_entrada != 0 ) SetConsoleCP( consola_cp_entrada );
+}
+#endif
+
 static void init_colors( void )
 {
 #if defined(_WIN32) || defined(WIN32)
 	// Switch console to UTF-8 so multi-byte characters (•, ✓, ░, █ …) render
 	// correctly regardless of --no-color. No-op when output isn't a console.
+	consola_cp_salida  = GetConsoleOutputCP();
+	consola_cp_entrada = GetConsoleCP();
+	atexit( restaurar_consola );
 	SetConsoleOutputCP( CP_UTF8 );
 	SetConsoleCP( CP_UTF8 );
 	if ( force_no_color ) return;
@@ -468,6 +485,16 @@ static std::filesystem::path safe_path( const char* s )
 #include "pjpgtbl.h"
 #include "dct8x8.h"
 #include "jpegls.h"
+// The .pja format (source/pja): the CLI writes and reads it through the
+// FreePascal core behind pjacore.h. The library (BUILD_LIB) does not.
+#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+#include "pjacore.h"
+#include <sys/stat.h>
+#if !defined(_WIN32) && !defined(WIN32)
+#include <termios.h>
+extern char** environ;   // for pja_iniciar: the static core starts the FreePascal runtime with it
+#endif
+#endif
 
 #if defined BUILD_DLL // define BUILD_LIB from the compiler options if you want to compile a DLL!
 	#define BUILD_LIB
@@ -606,6 +633,12 @@ INTERN void execute( bool (*function)() );
 	----------------------------------------------- */
 #if !defined( BUILD_LIB )
 INTERN bool check_file( void );
+#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+static bool resolver_contrasena( void );
+INTERN bool abrir_pja( void );
+INTERN bool pack_pja( void );
+INTERN bool guardar_pja( void );
+#endif
 INTERN bool swap_streams( void );
 INTERN bool compare_output( void );
 #endif
@@ -995,6 +1028,22 @@ INTERN bool disc_meta  = false;	// discard meta-info yes / no
 INTERN bool developer  = false;	// allow developers functions yes/no
 INTERN bool recursive  = false;	// recurse into subdirectories yes/no
 INTERN bool fs_mode    = false;	// -fs: preserve source folder structure under -od when -r expands a dir
+// .pja (doc/FORMATO.md in source/pja). The default output of 'a' since 6.0.
+INTERN bool salida_pjg    = false;	// --pjg: write the bare .pjg stream, as before 6.0
+INTERN bool pja_cifrar    = false;	// -e/--encrypt, or any password source while compressing
+INTERN bool pja_pedir     = false;	// -e: ask for the password interactively
+INTERN bool keep_corrupt  = false;	// --keep-corrupt: a JPEG that fails its hash stays as .corrupto
+INTERN std::string pja_pass;		// resolved once, in the main thread, before any worker
+INTERN bool pja_hay_pass  = false;
+INTERN bool pja_pass_stdin = false;	// --password-stdin
+INTERN const char* pja_pass_archivo = NULL;	// --password-file=
+INTERN int  pja_fuentes   = 0;		// how many password sources were given (only one is allowed)
+THREAD_LOCAL bool     es_pja = false;	// this file's .pja: the input of x, or the output of a
+THREAD_LOCAL uint64_t pja_tam = 0;		// declared size of the original JPEG
+THREAD_LOCAL uint64_t pja_tam_archivo = 0;	// size of the .pja itself (for the ratio)
+THREAD_LOCAL unsigned char pja_hash_decl[ 16 ];
+THREAD_LOCAL bool     salida_escrita = false;	// the output file was created by THIS run
+THREAD_LOCAL bool     pja_es_cifrado = false;	// the .pja being read is encrypted
 THREAD_LOCAL bool auto_set   = true;	// automatic find best settings yes/no
 THREAD_LOCAL int  action = A_COMPRESS;// what to do with JPEG/PJG files
 
@@ -1137,6 +1186,7 @@ INTERN const char*  website      = "https://github.com/YadeWira/packJPG";
 [[maybe_unused]] INTERN const char*	copyright    = "2006-2026 Yade Bravo & Matthias Stirner";
 INTERN const char*  pjg_ext      = "pjg";
 INTERN const char*  jpg_ext      = "jpg";
+INTERN const char*  pja_ext      = "pja";
 #endif
 INTERN const char   pjg_magic[] = { 'J', 'S' };
 
@@ -1149,6 +1199,17 @@ INTERN const char   pjg_magic[] = { 'J', 'S' };
 // build; only the public setter/getter below are library-only. Process-wide,
 // set during single-threaded init (same contract as the thread-config knobs).
 INTERN unsigned int pjg_max_output_size = 256 * 1024 * 1024;
+// A .pja declares the size of its JPEG, and that size becomes the cap for that
+// one file: the decoder cannot reconstruct more than the file said, whatever
+// the .pjg inside claims. Per thread, because workers decode different files
+// at once and pjg_max_output_size is process-wide. 0 = no per-file cap.
+THREAD_LOCAL unsigned int tope_pja = 0;
+static inline unsigned int tope_salida( void )
+{
+	if ( tope_pja == 0 ) return pjg_max_output_size;
+	if ( pjg_max_output_size == 0 ) return tope_pja;
+	return ( tope_pja < pjg_max_output_size ) ? tope_pja : pjg_max_output_size;
+}
 // Blowup-ratio bomb guard: output must not exceed input * 500 + 1 MB.
 // Always active — the amplification vector is inherent to lossless
 // compression and is present in upstream packJPG too.
@@ -1183,6 +1244,19 @@ int main( int argc, char** argv )
 	
 	errorlevel = 0;
 	
+	#if defined(HAVE_PJA)
+	// The .pja core first, before any other pja_*: linked statically there is
+	// no loader to start the FreePascal runtime, and without it the core's
+	// range checks are off in silence (so every call refuses with NO_INIT).
+	#if defined(_WIN32) || defined(WIN32)
+	if ( pja_iniciar( argc, argv, NULL ) != PJA_OK ) {
+	#else
+	if ( pja_iniciar( argc, argv, environ ) != PJA_OK ) {
+	#endif
+		fprintf( stderr, "\nError: the .pja core did not start\n\n" );
+		return -1;
+	}
+	#endif
 	
 	// read options from command line
 	initialize_options( argc, argv );
@@ -1200,10 +1274,23 @@ int main( int argc, char** argv )
 		( ( !developer ) && ( !cmd_dado ) && ( !pipe_on ) ) ) {
 		show_help();
 		#if defined(_WIN32) || defined(WIN32)
+		restaurar_consola();
 		std::_Exit( -1 );	// see the matching comment at the end of main()
 		#endif
 		return -1;
 	}
+	
+	#if defined(HAVE_PJA)
+	// once, in this thread, before any worker: a prompt from a worker would
+	// be one per file and interleaved with the progress bar
+	if ( !resolver_contrasena() ) {
+		#if defined(_WIN32) || defined(WIN32)
+		restaurar_consola();
+		std::_Exit( -1 );
+		#endif
+		return -1;
+	}
+	#endif
 	
 	// display warning if not using automatic settings
 	if ( !auto_set ) {
@@ -1467,8 +1554,8 @@ int main( int argc, char** argv )
 		fprintf( msgout, " " );
 		bool prev = false;
 		if ( acc_jpg_cnt > 0 )  { fprintf( msgout, "compressed: %i JPG",    acc_jpg_cnt  ); prev = true; }
-		if ( acc_pjg_cnt > 0 )  { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "decompressed: %i PJG", acc_pjg_cnt  ); prev = true; }
-		if ( acc_list_cnt > 0 ) { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "listed: %i PJG",       acc_list_cnt ); }
+		if ( acc_pjg_cnt > 0 )  { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "decompressed: %i PJA/PJG", acc_pjg_cnt  ); prev = true; }
+		if ( acc_list_cnt > 0 ) { if ( prev ) fprintf( msgout, "  " ); fprintf( msgout, "listed: %i PJA/PJG",       acc_list_cnt ); }
 		fprintf( msgout, "\n" );
 	}
 	// A -dry run is otherwise indistinguishable from a real one: identical
@@ -1547,6 +1634,7 @@ int main( int argc, char** argv )
 	// harmless to correctness (the crash is strictly post-completion), but
 	// ugly and returns the wrong process exit behavior under Wine/Windows.
 	// x86_64 doesn't hit this (native TLS vs. i686's emutls, most likely).
+	restaurar_consola();
 	std::_Exit( ( error_cnt > 0 ) ? 1 : 0 );
 	#endif
 
@@ -2089,7 +2177,7 @@ static bool is_supported_input( const std::filesystem::path& p )
 {
 	auto ext = p.extension().string();
 	for ( auto& ch : ext ) ch = (char)tolower( (unsigned char)ch );
-	return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg" || ext == ".jls";
+	return ext == ".jpg" || ext == ".jpeg" || ext == ".pjg" || ext == ".pja" || ext == ".jls";
 }
 
 static void collect_files_recursive( const std::filesystem::path& dir,
@@ -2342,6 +2430,36 @@ INTERN void initialize_options( int argc, char** argv )
 			long long bytes = n * mult;
 			if ( bytes > 4095LL * 1024 * 1024 ) bytes = 4095LL * 1024 * 1024;
 			pjg_max_output_size = (unsigned int) bytes;   // 0 stays 0 = unlimited
+		}
+		else if ( strcmp( *argv, "--pjg" ) == 0 ) {
+			salida_pjg = true;
+		}
+		else if ( strcmp( *argv, "--keep-corrupt" ) == 0 ) {
+			keep_corrupt = true;
+		}
+		else if ( strcmp( *argv, "-e" ) == 0 || strcmp( *argv, "--encrypt" ) == 0 ) {
+			pja_pedir = true;
+		}
+		else if ( strcmp( *argv, "--password-stdin" ) == 0 ) {
+			pja_pass_stdin = true;
+			pja_fuentes++;
+		}
+		else if ( largo( *argv, "--password-file", &val ) ) {
+			if ( val == NULL ) { val = valor_de( "--password-file" ); if ( cli_error ) return; }
+			pja_pass_archivo = val;
+			pja_fuentes++;
+		}
+		else if ( largo( *argv, "--password", &val ) ) {
+			// Allowed by decision (doc/CLI.md 3): the user chooses. What can be
+			// done about the exposure is done here: the value is wiped from
+			// argv as soon as it is read, which on Linux is what
+			// /proc/<pid>/cmdline shows from then on. The shell history and
+			// the window before this line are out of reach.
+			if ( val == NULL ) { val = valor_de( "--password" ); if ( cli_error ) return; }
+			pja_pass.assign( val );
+			pja_hay_pass = true;
+			pja_fuentes++;
+			memset( (char*) val, 'x', strlen( val ) );
 		}
 		else if ( strcmp( *argv, "-o" ) == 0 || largo( *argv, "--output-dir", &val ) ) {
 			bool solo_dir = ( strcmp( *argv, "-o" ) != 0 );
@@ -2600,7 +2718,8 @@ INTERN void initialize_options( int argc, char** argv )
 			unsigned char hd[2] = {0,0};
 			if ( fread( hd, 1, 2, fp ) == 2 ) {
 				bool is_jpg = ( hd[0] == 0xFF && hd[1] == 0xD8 );
-				bool is_pjg = ( hd[0] == pjg_magic[0] && hd[1] == pjg_magic[1] );
+				bool is_pjg = ( hd[0] == pjg_magic[0] && hd[1] == pjg_magic[1] )
+				           || ( hd[0] == 'P' && hd[1] == 'J' );   // .pja
 				if ( ( is_jpg && !decompress_only ) ||
 				     ( is_pjg && !compress_only ) )
 					file_proc_cnt++;
@@ -2785,8 +2904,15 @@ INTERN void process_ui( void )
     str_out.reset(nullptr);
     str_str.reset(nullptr);
 	// delete if broken or if output not needed
-	if ( ( !pipe_on ) && ( action != A_LIST ) &&
-	     ( ( errorlevel >= err_tol ) || ( action != A_COMPRESS ) ) ) {
+	bool quitar_salida = ( !pipe_on ) && ( action != A_LIST ) &&
+	     ( ( errorlevel >= err_tol ) || ( action != A_COMPRESS ) );
+	#if defined(HAVE_PJA)
+	// A .pja output is written only once it verified, by pja_guardar, which
+	// creates it: when anything failed before that, the name may well belong
+	// to a file the user already had (with -f). Remove only what this run made.
+	if ( es_pja ) quitar_salida = quitar_salida && salida_escrita;
+	#endif
+	if ( quitar_salida ) {
 		if ( filetype == F_JPG ) {
 			if ( file_exists( pjgfilename ) ) remove( pjgfilename );
 		} else if ( filetype == F_PJG ) {
@@ -2962,7 +3088,15 @@ INTERN inline const char* get_status( bool (*function)() )
 		return "Compressing data to PJG";
 	} else if ( function == *unpack_pjg ) {
 		return "Uncompressing data from PJG";
-	} else if ( function == *swap_streams ) {
+	}
+	#if defined(HAVE_PJA)
+	else if ( function == *pack_pja ) {
+		return "Wrapping PJG into PJA";
+	} else if ( function == *guardar_pja ) {
+		return "Verifying & writing JPEG";
+	}
+	#endif
+	else if ( function == *swap_streams ) {
 		return "Swapping input/output streams";
 	} else if ( function == *compare_output ) {
 		return "Verifying output stream";
@@ -3004,17 +3138,19 @@ INTERN void show_help( void )
 {	
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "packJPG -- lossless JPEG compression. Typical reduction: ~20%%.\n" );
-	fprintf( msgout, "Compresses JPEG files to PJG format and decompresses them back,\n" );
-	fprintf( msgout, "with bit-for-bit identical reconstruction.\n" );
+	fprintf( msgout, "Compresses JPEG files to .pja and decompresses them back, with\n" );
+	fprintf( msgout, "bit-for-bit identical reconstruction. A .pja carries the size and\n" );
+	fprintf( msgout, "hash of the original JPEG and is checked against them when extracted;\n" );
+	fprintf( msgout, "it can be encrypted. Plain .pjg files are still read, and written with --pjg.\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Website: %s\n", website );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Usage: %s <command> [switches] [filename(s)]\n", appname );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Commands:\n" );
-	fprintf( msgout, " a         compress only: process JPG files, skip PJG\n" );
-	fprintf( msgout, " x         decompress only: process PJG files, skip JPG\n" );
-	fprintf( msgout, " list      list PJG file info without decompressing\n" );
+	fprintf( msgout, " a         compress only: JPG -> PJA, skip compressed files\n" );
+	fprintf( msgout, " x         decompress only: PJA/PJG -> JPG, skip JPG\n" );
+	fprintf( msgout, " list      list PJA/PJG file info without decompressing\n" );
 	fprintf( msgout, " stats     show JPEG file info (size, dimensions, color) without compressing\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Switches:" );
@@ -3038,14 +3174,22 @@ INTERN void show_help( void )
 	fprintf( msgout, "     --parallel-stages  use 3 cores for single-file compression (pre-pack stages)\n" );
 	fprintf( msgout, "     --max-output=SIZE  cap reconstructed-JPEG size when decoding\n" );
 	fprintf( msgout, "                        (K/M/G, bare number = MB; def: 256M, 0 = unlimited)\n" );
+	fprintf( msgout, "     --pjg              write the bare .pjg stream (no hash, no encryption)\n" );
+	fprintf( msgout, " -e, --encrypt          encrypt; asks the password without echo (twice for a)\n" );
+	fprintf( msgout, "     --password-file=F  the password from a file (must not be readable by others)\n" );
+	fprintf( msgout, "     --password-stdin   the password from the first line of stdin\n" );
+	fprintf( msgout, "     --password=TEXT    the password itself (visible in the shell history)\n" );
+	fprintf( msgout, "     --keep-corrupt     a JPEG that fails its hash is kept as NAME.corrupto\n" );
+	fprintf( msgout, "                        instead of deleted; it never keeps its own name\n" );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "-o works like the destination of cp: an existing directory or a name\n" );
 	fprintf( msgout, "ending in '/' is a directory; anything else is the output file name,\n" );
 	fprintf( msgout, "and then only one input file is allowed.\n" );
 	fprintf( msgout, "\n" );
-	fprintf( msgout, "  %s a foto.jpg                 -> foto.pjg\n", appname );
-	fprintf( msgout, "  %s a foto.jpg -o pana.pjg     -> pana.pjg\n", appname );
-	fprintf( msgout, "  %s x foto.pjg -o CARPETA/     -> CARPETA/foto.jpg\n", appname );
+	fprintf( msgout, "  %s a foto.jpg                 -> foto.pja\n", appname );
+	fprintf( msgout, "  %s a foto.jpg -o pana.pja     -> pana.pja\n", appname );
+	fprintf( msgout, "  %s a -e foto.jpg              -> foto.pja, encrypted\n", appname );
+	fprintf( msgout, "  %s x foto.pja -o CARPETA/     -> CARPETA/foto.jpg, if it verifies\n", appname );
 	fprintf( msgout, "\n" );
 	fprintf( msgout, "Switch names changed in this version and the old ones are gone, not\n" );
 	fprintf( msgout, "aliased. Passing one prints the name that replaced it. Note that -o no\n" );
@@ -3092,6 +3236,9 @@ INTERN void process_file( void )
 					execute( calc_zdst_lists );
 				}
 				execute( pack_pjg );
+				#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+				if ( es_pja ) execute( pack_pja );
+				#endif
 				#if !defined(BUILD_LIB)	
 				if ( verify_lv > 0 ) { // verifcation
 					// save jpgfilesize/pjgfilesize before verify — unpack overwrites them
@@ -3213,8 +3360,16 @@ INTERN void process_file( void )
 					execute( recode_jpeg );
 				}
 				execute( merge_jpeg );
-				#if !defined(BUILD_LIB)
+				#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+				// The .pja verifies with the size and hash of the ORIGINAL JPEG,
+				// which is stronger than re-encoding and comparing the .pjg:
+				// that one is skipped for .pja (also when -th forces --verify).
+				if ( es_pja ) execute( guardar_pja );
+				if ( verify_lv > 0 && !es_pja ) { // verify
+				#elif !defined(BUILD_LIB)
 				if ( verify_lv > 0 ) { // verify
+				#endif
+				#if !defined(BUILD_LIB)
 					execute( reset_buffers );
 					execute( swap_streams );
 					execute( read_jpeg );
@@ -3282,6 +3437,14 @@ INTERN void process_file( void )
 				#endif // DEV_BUILD
 
 			case A_LIST:
+				#if defined(HAVE_PJA)
+				if ( es_pja ) {
+					fprintf( msgout, " format      : .pja v%u, %s\n", pja_version(),
+					         pja_es_cifrado ? "encrypted" : "not encrypted" );
+					fprintf( msgout, " JPEG size   : %llu bytes (declared, checked against its hash on x)\n",
+					         (unsigned long long) pja_tam );
+				}
+				#endif
 				execute( list_pjg );
 				break;
 			#else
@@ -3355,6 +3518,419 @@ INTERN void execute( bool (*function)() )
 
 
 /* -----------------------------------------------
+	.pja: the default output of 'a' since 6.0
+	----------------------------------------------- */
+
+#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+
+// pjacore.h takes UTF-8 paths. On Windows the CLI carries them in the ANSI
+// code page (argv, and the wildcard expansion converts back to CP_ACP), the
+// same convention FileReader/FileWriter widen with CP_ACP.
+static std::string ruta_utf8( const char* r )
+{
+	#if defined(_WIN32) || defined(WIN32)
+	int nw = MultiByteToWideChar( CP_ACP, 0, r, -1, NULL, 0 );
+	if ( nw <= 0 ) return std::string( r );
+	std::wstring w( nw, L'\0' );
+	MultiByteToWideChar( CP_ACP, 0, r, -1, &w[0], nw );
+	int nu = WideCharToMultiByte( CP_UTF8, 0, w.c_str(), -1, NULL, 0, NULL, NULL );
+	if ( nu <= 0 ) return std::string( r );
+	std::string u( nu, '\0' );
+	WideCharToMultiByte( CP_UTF8, 0, w.c_str(), -1, &u[0], nu, NULL, NULL );
+	u.resize( nu - 1 );
+	return u;
+	#else
+	return std::string( r );
+	#endif
+}
+
+static const char* pja_texto( int32_t rc )
+{
+	switch ( rc ) {
+		case PJA_ERR_FORMATO:   return "not a valid .pja (bad header or version)";
+		case PJA_ERR_LIMITE:    return "the .pja declares impossible sizes (corrupt file)";
+		case PJA_ERR_CLAVE:     return "wrong password, missing password, or the encrypted file is damaged at its start";
+		case PJA_ERR_ALTERADO:  return "the encrypted .pja was altered or truncated";
+		case PJA_ERR_ALEATORIO: return "the system gave no random bytes for the salt";
+		case PJA_ERR_IO:        return "could not write the output";
+		case PJA_ERR_INTERNO:   return "internal error in the .pja core";
+		case PJA_ERR_NO_INIT:   return "the .pja core was not initialized";
+		default:                return "unexpected error from the .pja core";
+	}
+}
+
+// Writes `datos` as `nombre`, through pja_guardar: the file is CREATED (never
+// written through a link that already has that name), and a JPEG whose hash
+// is not `esperado` never keeps its name. Only a file that verified sets
+// salida_escrita, which is what the cleanup in process_ui looks at.
+static bool escribir_verificado( const char* nombre, const std::vector<std::uint8_t>& datos,
+                                 const unsigned char esperado[16] )
+{
+	std::string u = ruta_utf8( nombre );
+	int32_t des = -1, cod = 0;
+	char fin[ 4096 ] = { 0 };
+	size_t usado = 0;
+	int32_t rc = pja_guardar( u.data(), u.size(), datos.data(), datos.size(), esperado,
+	                          keep_corrupt ? 1 : 0, overwrite ? 1 : 0, &des, &cod, fin, sizeof( fin ), &usado );
+	if ( rc == PJA_ERR_IO ) {
+		if ( !overwrite && file_exists( nombre ) )
+			snprintf( errormessage, MSG_SIZE, "%s already exists -- pass -f to overwrite", nombre );
+		else
+			snprintf( errormessage, MSG_SIZE, "could not write %s (system error %i)", nombre, (int) cod );
+		errorlevel = 2;
+		return false;
+	}
+	if ( rc != PJA_OK ) {
+		snprintf( errormessage, MSG_SIZE, "%s", pja_texto( rc ) );
+		errorlevel = 2;
+		return false;
+	}
+	if ( des == PJA_GUARDADO_VERIFICADO ) {
+		salida_escrita = true;
+		return true;
+	}
+	if ( des == PJA_GUARDADO_CONSERVADO )
+		snprintf( errormessage, MSG_SIZE,
+			"the reconstructed JPEG does not match the hash in the .pja -- kept as %s (--keep-corrupt)", fin );
+	else
+		snprintf( errormessage, MSG_SIZE,
+			"the reconstructed JPEG does not match the hash in the .pja -- nothing was written" );
+	errorlevel = 2;
+	return false;
+}
+
+// x: the whole .pja is already in memory (every Reader holds its data). Open
+// it, authenticate it if encrypted, reject a declared size over --max-output
+// BEFORE decoding, and put the .pjg it carries where the decoder expects it:
+// str_in, past the 2-byte magic.
+INTERN bool abrir_pja( void )
+{
+	std::vector<std::uint8_t> d = str_in->get_data();
+	pja_tam_archivo = d.size();
+	int32_t cif = 0;
+	int32_t rc = pja_examinar( d.data(), d.size(), &cif );
+	pja_es_cifrado = ( rc == PJA_OK && cif );
+	if ( rc != PJA_OK ) {
+		snprintf( errormessage, MSG_SIZE, "%s", pja_texto( rc ) );
+		errorlevel = 2;
+		return false;
+	}
+	if ( cif && !pja_hay_pass ) {
+		snprintf( errormessage, MSG_SIZE,
+			"this .pja is encrypted -- give the password (-e, --password-file=, --password-stdin or --password=)" );
+		errorlevel = 2;
+		return false;
+	}
+	PjaAbierto* h = NULL;
+	rc = pja_abrir( d.data(), d.size(),
+	                cif ? (const uint8_t*) pja_pass.data() : NULL, cif ? pja_pass.size() : 0, &h );
+	if ( rc != PJA_OK ) {
+		snprintf( errormessage, MSG_SIZE, "%s", pja_texto( rc ) );
+		errorlevel = 2;
+		return false;
+	}
+	int64_t tam = pja_tam_orig( h );
+	std::vector<std::uint8_t> pjg( (size_t) pja_payload_largo( h ) );
+	if ( tam < 0 || pja_payload( h, pjg.data(), pjg.size() ) != PJA_OK ||
+	     pja_hash( h, pja_hash_decl, 16 ) != PJA_OK ) {
+		pja_cerrar( h );
+		snprintf( errormessage, MSG_SIZE, "internal error reading the .pja" );
+		errorlevel = 2;
+		return false;
+	}
+	pja_cerrar( h );
+	pja_tam = (uint64_t) tam;
+	if ( pjg_max_output_size > 0 && pja_tam > pjg_max_output_size ) {
+		snprintf( errormessage, MSG_SIZE,
+			"the .pja declares a %llu-byte JPEG, over --max-output (%u bytes) -- not decoding",
+			(unsigned long long) pja_tam, pjg_max_output_size );
+		errorlevel = 2;
+		return false;
+	}
+	tope_pja = ( pja_tam > 0xFFFFFFFFull ) ? 0xFFFFFFFFu : (unsigned int) pja_tam;
+	if ( pjg.size() < 2 || pjg[0] != (unsigned char) pjg_magic[0] || pjg[1] != (unsigned char) pjg_magic[1] ) {
+		snprintf( errormessage, MSG_SIZE, "the .pja does not carry a .pjg stream" );
+		errorlevel = 2;
+		return false;
+	}
+	str_in = std::make_unique<MemoryReader>( pjg );
+	unsigned char m[ 2 ];
+	str_in->read( m, 2 );
+	return true;
+}
+
+// a: the .pjg is in str_out (a MemoryWriter), the JPEG still in str_in. Wrap
+// it with the JPEG's size and hash, encrypted if asked, and write it out.
+INTERN bool pack_pja( void )
+{
+	std::vector<std::uint8_t> pjg = str_out->get_data();
+	std::vector<std::uint8_t> jpg = str_in->get_data();
+	unsigned char h[ 16 ];
+	pja_hash128( jpg.data(), jpg.size(), h, 16 );
+	int64_t n = pja_escribir_largo( pjg.size(), pja_cifrar ? 1 : 0 );
+	if ( n < 0 ) {
+		snprintf( errormessage, MSG_SIZE, "%s", pja_texto( (int32_t) n ) );
+		errorlevel = 2;
+		return false;
+	}
+	std::vector<std::uint8_t> pja( (size_t) n );
+	int32_t rc = pja_escribir( pjg.data(), pjg.size(), h, jpg.size(),
+	                           pja_cifrar ? (const uint8_t*) pja_pass.data() : NULL,
+	                           pja_cifrar ? pja_pass.size() : 0, pja.data(), pja.size() );
+	if ( rc != PJA_OK ) {
+		snprintf( errormessage, MSG_SIZE, "%s", pja_texto( rc ) );
+		errorlevel = 2;
+		return false;
+	}
+	pjgfilesize = n;
+	if ( dry_run ) return true;
+	if ( pipe_on ) {
+		StreamWriter w;
+		w.write( pja );
+		if ( w.error() ) { snprintf( errormessage, MSG_SIZE, "write error on stdout" ); errorlevel = 2; return false; }
+		return true;
+	}
+	unsigned char hp[ 16 ];
+	pja_hash128( pja.data(), pja.size(), hp, 16 );
+	return escribir_verificado( pjgfilename, pja, hp );
+}
+
+// x: the JPEG is in str_out. It keeps its name only if it has the size and
+// the hash the .pja declared.
+INTERN bool guardar_pja( void )
+{
+	std::vector<std::uint8_t> jpg = str_out->get_data();
+	jpgfilesize = jpg.size();
+	pjgfilesize = pja_tam_archivo;
+	// The size is checked on its own: the hash is of the CONTENT, so a JPEG
+	// that decodes right inside a .pja whose declared size was altered still
+	// matches it. That file is damaged all the same, and it is not taken as
+	// good (it was, until the CLI battery flipped that field: 12/10/2026).
+	bool tam_ok = ( jpg.size() == pja_tam );
+	if ( dry_run || pipe_on ) {
+		unsigned char h[ 16 ];
+		pja_hash128( jpg.data(), jpg.size(), h, 16 );
+		if ( !tam_ok || memcmp( h, pja_hash_decl, 16 ) != 0 ) {
+			snprintf( errormessage, MSG_SIZE,
+				"the reconstructed JPEG does not match the size and hash in the .pja" );
+			errorlevel = 2;
+			return false;
+		}
+		if ( pipe_on ) {
+			StreamWriter w;
+			w.write( jpg );
+			if ( w.error() ) { snprintf( errormessage, MSG_SIZE, "write error on stdout" ); errorlevel = 2; return false; }
+		}
+		return true;
+	}
+	if ( !tam_ok ) {
+		// same treatment as a hash that fails: never under its own name,
+		// and with --keep-corrupt it stays as .corrupto. pja_guardar decides
+		// that from the hash, so it gets one that cannot match.
+		unsigned char ajeno[ 16 ];
+		pja_hash128( jpg.data(), jpg.size(), ajeno, 16 );
+		ajeno[ 0 ] ^= 0xFF;
+		escribir_verificado( jpgfilename, jpg, ajeno );   // always fails: only the .corrupto can come out
+		char conservado[ MSG_SIZE ];
+		snprintf( conservado, MSG_SIZE, "%s", errormessage );
+		snprintf( errormessage, MSG_SIZE,
+			"the .pja declares %llu bytes and the JPEG has %llu -- %s",
+			(unsigned long long) pja_tam, (unsigned long long) jpg.size(),
+			strstr( conservado, "kept as" ) ? strstr( conservado, "kept as" ) : "nothing was written" );
+		errorlevel = 2;
+		return false;
+	}
+	return escribir_verificado( jpgfilename, jpg, pja_hash_decl );
+}
+
+#endif // HAVE_PJA && !BUILD_LIB
+
+
+/* -----------------------------------------------
+	.pja password, resolved once before any file
+	----------------------------------------------- */
+
+#if defined(HAVE_PJA) && !defined(BUILD_LIB)
+
+// A line from the TERMINAL without echo -- not from stdin, which may be a
+// pipe or the input file itself. false if there is no terminal.
+static bool leer_sin_eco( const char* pregunta, std::string& out )
+{
+	#if defined(_WIN32) || defined(WIN32)
+	HANDLE hin = CreateFileW( L"CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+	                          NULL, OPEN_EXISTING, 0, NULL );
+	if ( hin == INVALID_HANDLE_VALUE ) return false;
+	DWORD modo = 0;
+	if ( !GetConsoleMode( hin, &modo ) ) { CloseHandle( hin ); return false; }
+	fprintf( stderr, "%s", pregunta ); fflush( stderr );
+	SetConsoleMode( hin, ( modo & ~ENABLE_ECHO_INPUT ) | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT );
+	wchar_t buf[ 1024 ];
+	DWORD n = 0;
+	BOOL ok = ReadConsoleW( hin, buf, 1023, &n, NULL );
+	SetConsoleMode( hin, modo );
+	CloseHandle( hin );
+	fprintf( stderr, "\n" );
+	if ( !ok ) return false;
+	while ( n > 0 && ( buf[ n - 1 ] == L'\n' || buf[ n - 1 ] == L'\r' ) ) n--;
+	// UTF-8, so the same password gives the same bytes on every platform
+	int nu = WideCharToMultiByte( CP_UTF8, 0, buf, (int) n, NULL, 0, NULL, NULL );
+	out.assign( nu > 0 ? nu : 0, '\0' );
+	if ( nu > 0 ) WideCharToMultiByte( CP_UTF8, 0, buf, (int) n, &out[0], nu, NULL, NULL );
+	SecureZeroMemory( buf, sizeof( buf ) );
+	return true;
+	#else
+	FILE* tty = fopen( "/dev/tty", "r+" );
+	if ( tty == NULL ) return false;
+	int fd = fileno( tty );
+	struct termios viejo, nuevo;
+	if ( tcgetattr( fd, &viejo ) != 0 ) { fclose( tty ); return false; }
+	nuevo = viejo;
+	nuevo.c_lflag &= ~ECHO;
+	fprintf( tty, "%s", pregunta ); fflush( tty );
+	tcsetattr( fd, TCSAFLUSH, &nuevo );
+	char buf[ 1024 ];
+	bool ok = fgets( buf, sizeof( buf ), tty ) != NULL;
+	tcsetattr( fd, TCSAFLUSH, &viejo );
+	fprintf( tty, "\n" );
+	fclose( tty );
+	if ( !ok ) return false;
+	size_t n = strlen( buf );
+	while ( n > 0 && ( buf[ n - 1 ] == '\n' || buf[ n - 1 ] == '\r' ) ) n--;
+	out.assign( buf, n );
+	memset( buf, 0, sizeof( buf ) );
+	return true;
+	#endif
+}
+
+// Drops ONE line ending: a password file written by an editor ends in one.
+static void sin_fin_de_linea( std::string& s )
+{
+	if ( !s.empty() && s.back() == '\n' ) s.pop_back();
+	if ( !s.empty() && s.back() == '\r' ) s.pop_back();
+}
+
+// true if some input is an encrypted .pja (the 8 bytes in clear say so)
+static bool hay_pja_cifrado( void )
+{
+	for ( int fi = 0; fi < file_cnt; fi++ ) {
+		if ( filelist[ fi ] == NULL || strcmp( filelist[ fi ], "-" ) == 0 ) continue;
+		#if defined(_WIN32) || defined(WIN32)
+		FILE* f = _wfopen( safe_path( filelist[ fi ] ).c_str(), L"rb" );
+		#else
+		FILE* f = fopen( filelist[ fi ], "rb" );
+		#endif
+		if ( f == NULL ) continue;
+		unsigned char cab[ 8 ] = { 0 };
+		size_t n = fread( cab, 1, 8, f );
+		fclose( f );
+		int32_t cif = 0;
+		if ( n == 8 && cab[0] == 'P' && cab[1] == 'J' &&
+		     pja_examinar( cab, 8, &cif ) == PJA_OK && cif ) return true;
+	}
+	return false;
+}
+
+static bool resolver_contrasena( void )
+{
+	bool comprimir = !decompress_only && action != A_LIST && action != A_STATS;
+	if ( pja_fuentes > 1 ) {
+		fprintf( stderr, "\nError: give the password one way only (--password, --password-file or --password-stdin)\n\n" );
+		return false;
+	}
+	if ( comprimir && salida_pjg && ( pja_pedir || pja_fuentes > 0 ) ) {
+		fprintf( stderr, "\nError: --pjg cannot be encrypted -- encryption is part of the .pja format\n\n" );
+		return false;
+	}
+	#if defined(_WIN32) || defined(WIN32)
+	// argv is in the ANSI code page; the password has to be the same bytes
+	// on every platform, so it goes to UTF-8 like the prompt.
+	if ( pja_hay_pass ) pja_pass = ruta_utf8( pja_pass.c_str() );
+	#endif
+	if ( pja_pass_archivo != NULL ) {
+		#if !defined(_WIN32) && !defined(WIN32)
+		struct stat st;
+		if ( stat( pja_pass_archivo, &st ) != 0 ) {
+			fprintf( stderr, "\nError: cannot read the password file %s\n\n", pja_pass_archivo );
+			return false;
+		}
+		if ( ( st.st_mode & 077 ) != 0 ) {
+			fprintf( stderr, "\nError: the password file %s can be read by other users (mode %03o) -- chmod 600 it\n\n",
+			         pja_pass_archivo, (unsigned) ( st.st_mode & 0777 ) );
+			return false;
+		}
+		FILE* f = fopen( pja_pass_archivo, "rb" );
+		#else
+		FILE* f = _wfopen( safe_path( pja_pass_archivo ).c_str(), L"rb" );
+		#endif
+		if ( f == NULL ) {
+			fprintf( stderr, "\nError: cannot read the password file %s\n\n", pja_pass_archivo );
+			return false;
+		}
+		char buf[ 4096 ];
+		size_t n = fread( buf, 1, sizeof( buf ), f );
+		bool mas = fgetc( f ) != EOF;
+		fclose( f );
+		if ( mas ) {
+			fprintf( stderr, "\nError: the password file %s is over 4 KB -- is it the right file?\n\n", pja_pass_archivo );
+			return false;
+		}
+		pja_pass.assign( buf, n );
+		memset( buf, 0, sizeof( buf ) );
+		sin_fin_de_linea( pja_pass );
+		pja_hay_pass = true;
+	}
+	if ( pja_pass_stdin ) {
+		for ( int fi = 0; fi < file_cnt; fi++ )
+			if ( filelist[ fi ] != NULL && strcmp( filelist[ fi ], "-" ) == 0 ) {
+				fprintf( stderr, "\nError: --password-stdin and '-' both want stdin\n\n" );
+				return false;
+			}
+		char buf[ 4096 ];
+		if ( fgets( buf, sizeof( buf ), stdin ) == NULL ) {
+			fprintf( stderr, "\nError: --password-stdin: nothing on stdin\n\n" );
+			return false;
+		}
+		pja_pass.assign( buf );
+		memset( buf, 0, sizeof( buf ) );
+		sin_fin_de_linea( pja_pass );
+		pja_hay_pass = true;
+	}
+	if ( comprimir ) {
+		pja_cifrar = !salida_pjg && ( pja_pedir || pja_hay_pass );
+		if ( pja_cifrar && !pja_hay_pass ) {
+			std::string otra;
+			if ( !leer_sin_eco( "Password for the .pja files: ", pja_pass ) ||
+			     !leer_sin_eco( "Again, to check it: ", otra ) ) {
+				fprintf( stderr, "\nError: -e needs a terminal to ask the password -- or use --password-file= / --password-stdin\n\n" );
+				return false;
+			}
+			if ( otra != pja_pass ) {
+				fprintf( stderr, "\nError: the two passwords do not match\n\n" );
+				return false;
+			}
+			pja_hay_pass = true;
+		}
+		if ( pja_cifrar && pja_pass.empty() ) {
+			fprintf( stderr, "\nError: the password is empty\n\n" );
+			return false;
+		}
+	} else if ( !pja_hay_pass && ( pja_pedir || hay_pja_cifrado() ) ) {
+		// asked once for the whole run, before any worker starts
+		if ( leer_sin_eco( "Password for the encrypted .pja files: ", pja_pass ) ) {
+			pja_hay_pass = true;
+		} else if ( pja_pedir ) {
+			fprintf( stderr, "\nError: -e needs a terminal to ask the password -- or use --password-file= / --password-stdin\n\n" );
+			return false;
+		}
+		// without a terminal, each encrypted file reports that it needs one
+	}
+	return true;
+}
+
+#endif // HAVE_PJA && !BUILD_LIB
+
+
+/* -----------------------------------------------
 	check file and determine filetype
 	----------------------------------------------- */
 
@@ -3364,6 +3940,9 @@ INTERN bool check_file( void )
 	unsigned char fileid[ 2 ] = { 0, 0 };
 	const char* filename = filelist[ file_no ];
 	filetype = F_UNK; // reset before open attempt so inaccessible files don't inherit previous filetype
+	#if defined(HAVE_PJA)
+	es_pja = false; salida_escrita = false; tope_pja = 0; pja_tam = 0; pja_tam_archivo = 0;
+	#endif
 
 	try {
 		if (pipe_on) {
@@ -3399,13 +3978,30 @@ INTERN bool check_file( void )
 	if ( ( fileid[0] == 0xFF ) && ( fileid[1] == 0xD8 ) ) {
 		// file is JPEG
 		filetype = F_JPG;
+		// Since 6.0 'a' writes .pja; --pjg keeps the bare stream. A build
+		// without the .pja core does not quietly fall back to .pjg: the user
+		// asked for the default and would get something else.
+		#if defined(HAVE_PJA)
+		es_pja = !salida_pjg && action == A_COMPRESS && !decompress_only;
+		#else
+		if ( !salida_pjg && action == A_COMPRESS && !decompress_only ) {
+			snprintf( errormessage, MSG_SIZE,
+				"this build has no .pja support (built with PJA=0) -- pass --pjg to write .pjg" );
+			errorlevel = 2;
+			return false;
+		}
+		#endif
+		const char* ext_salida = pjg_ext;
+		#if defined(HAVE_PJA)
+		if ( es_pja ) ext_salida = pja_ext;
+		#endif
 		// create filenames
 		if ( !pipe_on ) {
 			jpgfilename = (char*) calloc( strlen( filename ) + 1, sizeof( char ) );
 			strcpy( jpgfilename, filename );
 			pjgfilename = ( overwrite ) ?
-				create_filename( filename, (char*) pjg_ext ) :
-				unique_filename( filename, (char*) pjg_ext );
+				create_filename( filename, (char*) ext_salida ) :
+				unique_filename( filename, (char*) ext_salida );
 		}
 		else {
 			jpgfilename = create_filename( "STDIN", NULL );
@@ -3413,6 +4009,12 @@ INTERN bool check_file( void )
 		}
 
 		try {
+			#if defined(HAVE_PJA)
+			// .pja: the .pjg is built in memory and wrapped by pack_pja,
+			// which also does the writing (file, stdout, or nothing).
+			// es_pja is never set with decompress_only.
+			if ( es_pja ) str_out = std::make_unique<MemoryWriter>(); else
+			#endif
 			if (pipe_on) {
 				str_out = std::make_unique<StreamWriter>();
 			} else if ( dry_run ) {
@@ -3445,6 +4047,41 @@ INTERN bool check_file( void )
 			auto_set = false;
 		}
 	}
+	#if defined(HAVE_PJA)
+	else if ( ( fileid[0] == 'P' ) && ( fileid[1] == 'J' ) ) {
+		// file is PJA: decoded to memory, and written only after it verifies
+		if ( compress_only ) {
+			// Skip silently — symmetric with 'x' skipping .jpg files
+			filetype = F_UNK;
+			errorlevel = 0;
+			return false;
+		}
+		filetype = F_PJG;
+		es_pja = true;
+		if ( !pipe_on ) {
+			pjgfilename = (char*) calloc( strlen( filename ) + 1, sizeof( char ) );
+			strcpy( pjgfilename, filename );
+			jpgfilename = ( overwrite ) ?
+				create_filename( filename, (char*) jpg_ext ) :
+				unique_filename( filename, (char*) jpg_ext );
+		}
+		else {
+			jpgfilename = create_filename( "STDOUT", NULL );
+			pjgfilename = create_filename( "STDIN", NULL );
+		}
+		if ( !abrir_pja() ) return false;
+		if ( action != A_LIST ) str_out = std::make_unique<MemoryWriter>();
+		auto_set = true;
+	}
+	#else
+	else if ( ( fileid[0] == 'P' ) && ( fileid[1] == 'J' ) && !compress_only ) {
+		// not skipped as "unknown": the user would never learn why
+		filetype = F_PJG;
+		snprintf( errormessage, MSG_SIZE, "this build has no .pja support (built with PJA=0)" );
+		errorlevel = 2;
+		return false;
+	}
+	#endif
 	else if ( ( fileid[0] == pjg_magic[0] ) && ( fileid[1] == pjg_magic[1] ) ) {
 		// file is PJG
 		filetype = F_PJG;
@@ -4048,10 +4685,10 @@ INTERN bool merge_jpeg( void )
 	// lower bound — 0xFF stuffing and restart markers only add to it.
 	{
 		int64_t est = (int64_t) 4 + hdrs + hufs + grbs;
-		if ( pjg_max_output_size > 0 && est > (int64_t) pjg_max_output_size ) {
+		if ( tope_salida() > 0 && est > (int64_t) tope_salida() ) {
 			snprintf( errormessage, MSG_SIZE,
 				"output size limit exceeded: reconstructed JPEG would be at least "
-				"%lld bytes (limit %u)", (long long) est, pjg_max_output_size );
+				"%lld bytes (limit %u)", (long long) est, tope_salida() );
 			errorlevel = 2; return false;
 		}
 		int64_t ratio_limit;
@@ -4156,11 +4793,11 @@ INTERN bool merge_jpeg( void )
 	// Tier 1: absolute cap. Tier 2: blowup ratio. The entry estimate
 	// is a lower bound; this catches outputs that slip past it.
 	{
-		if ( pjg_max_output_size > 0 &&
-		     (uint64_t) jpgfilesize > (uint64_t) pjg_max_output_size ) {
+		if ( tope_salida() > 0 &&
+		     (uint64_t) jpgfilesize > (uint64_t) tope_salida() ) {
 			snprintf( errormessage, MSG_SIZE,
 				"output size limit exceeded: reconstructed JPEG is %lld bytes (limit %u)",
-				(long long) jpgfilesize, pjg_max_output_size );
+				(long long) jpgfilesize, tope_salida() );
 			errorlevel = 2; return false;
 		}
 		int64_t ratio_limit;
@@ -6179,7 +6816,7 @@ INTERN bool unpack_pjg( void )
 		// Every size here is declared in the stream, so a short read is a
 		// truncation we can name instead of decoding zeros as if they were
 		// data. Each read is checked against the count it asked for.
-		const unsigned int sfth_cap = pjg_max_output_size > 0 ? pjg_max_output_size : 64u * 1024 * 1024;
+		const unsigned int sfth_cap = tope_salida() > 0 ? tope_salida() : 64u * 1024 * 1024;
 		uint8_t hle[4] = {};
 		if ( str_in->read( hle, 4 ) != 4 ) {
 			snprintf( errormessage, MSG_SIZE, "unexpected end of file (sfth header size)" );
@@ -9146,8 +9783,8 @@ INTERN bool pjg_decode_generic( ArithmeticDecoder* dec, unsigned char** data, in
 	// A caller-set pjg_max_output_size (decompression-bomb guard) tightens this:
 	// no single generic field can exceed the total output cap.
 	size_t decode_limit = 64 * 1024 * 1024;
-	if ( pjg_max_output_size > 0 && (size_t) pjg_max_output_size < decode_limit )
-		decode_limit = (size_t) pjg_max_output_size;
+	if ( tope_salida() > 0 && (size_t) tope_salida() < decode_limit )
+		decode_limit = (size_t) tope_salida();
 	model = INIT_MODEL_S( 256 + 1, 256, 1 );
 	while ( true ) {
 		c = decode_ari( dec, model );

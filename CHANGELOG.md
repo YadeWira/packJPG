@@ -2,6 +2,35 @@
 
 ## Unreleased — hacia 6.0 LTS
 
+> **`a` escribe `.pja` por defecto.** Un `.pja` es el mismo `.pjg` más el
+> tamaño y el hash BLAKE3 del JPEG original, y puede ir cifrado (Argon2id +
+> XChaCha20-Poly1305). `x` verifica cada JPEG contra ese tamaño y ese hash, y
+> **un JPEG que no coincide nunca se escribe con su nombre**. Medido: entre el
+> 1 % y el 21 % de los bits volteados de un `.pjg` decodifican a *otro* JPEG
+> válido sin ningún error. `--pjg` sigue escribiendo el formato de antes, y los
+> `.pjg` se siguen leyendo.
+
+| switch nuevo | |
+|---|---|
+| `--pjg` | el `.pjg` pelado, sin hash ni cifrado |
+| `-e`, `--encrypt` | cifrar; pide la contraseña sin eco (dos veces al crear) |
+| `--password-file=F`, `--password-stdin`, `--password=TEXTO` | la contraseña sin preguntar; `--password` se borra de `argv` apenas se lee |
+| `--keep-corrupt` | un JPEG que no verifica queda como `NOMBRE.corrupto` |
+
+- `--max-output` se compara con el tamaño que declara el `.pja` **antes** de
+  decodificar, y ese tamaño es además el tope del decodificador para el archivo.
+- Con `-f`, lo que ya había solo se reemplaza por un archivo que verificó (se
+  escribe a un temporal y se renombra encima), y nunca a través de un enlace.
+- **Hace falta FreePascal 3.2 para compilar `packJPG`** (`make PJA=0` compila sin
+  él, y entonces `a` exige `--pjg`). En Windows el núcleo va como
+  `pjaffi_x64.dll` / `pjaffi_x86.dll` **al lado del `.exe`**.
+- Arreglado de paso: en Windows, `packJPG` dejaba la consola en UTF-8 al
+  salir, y el `.cmd` que lo llamaba leía el resto de sus líneas mal: cualquier
+  nombre o contraseña no ASCII después de la primera llamada se corrompía.
+- Arreglado: un `.pjg` con un bit alterado podía hacer escribir por un puntero
+  nulo o leer fuera del heap al decodificar (`recode_jpeg`,
+  `pjg_unoptimize_header`).
+
 > **Corte limpio en la línea de comandos: los switches viejos se quitaron, no se
 > aliasaron.** Los scripts existentes se rompen — a propósito, y con un mensaje
 > que nombra el reemplazo en vez de decir "unknown option". El que más cuidado

@@ -37,7 +37,10 @@ jobs:
         # README.md) — the Makefile prefers those over any system libcharls/
         # libjxl. Dropping them also fixes ubuntu-22.04 CI, which doesn't
         # even have a libjxl-dev package in its default repos.
-        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm
+        # fpc: since 6.0 'a' writes .pja, whose core is FreePascal. fpc-source
+        # and the win64 units are for the Windows DLLs; the i386-win32 cross
+        # compiler is built from fpc-source by pja/pas/fpc_i386_win32.sh.
+        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm fpc fpc-source-3.2.2 fp-units-win-rtl-3.2.2
 
       - name: Build all targets
         run: bash build_all.sh
@@ -53,7 +56,7 @@ jobs:
           find test-files -name '*.jpg' ! -name '* *' | head -5 | while read f; do
             stem=$(basename "${f%.*}")
             ./dist/packJPG_linux_x64 a --no-pause -f --output-dir=/tmp "$f"
-            ./dist/packJPG_linux_x64 x --no-pause -f --output-dir=/tmp "/tmp/${stem}.pjg"
+            ./dist/packJPG_linux_x64 x --no-pause -f --output-dir=/tmp "/tmp/${stem}.pja"
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $f" || { echo "FAIL: $f"; exit 1; }
           done
 
@@ -61,8 +64,24 @@ jobs:
         run: |
           f=test-files/grayscale.jls
           ./dist/packJPG_linux_x64 a --no-pause -f --output-dir=/tmp "$f"
-          ./dist/packJPG_linux_x64 x --no-pause -f --output-dir=/tmp /tmp/grayscale.pjg
+          ./dist/packJPG_linux_x64 x --no-pause -f --output-dir=/tmp /tmp/grayscale.pja
           cmp "$f" /tmp/grayscale.jls && echo "PASS: $f (JPEG-LS)" || { echo "FAIL: $f (JPEG-LS)"; exit 1; }
+
+      - name: The .pja from the CLI (Linux release binary)
+        run: |
+          # passwords from every source, tampered files, -f, links, threads,
+          # pipes; each cell says what it expects, and fewer cells than
+          # planned is a failure
+          bash source/test/cli_pja.sh "$PWD/dist/packJPG_linux_x64" "$PWD/test-files"
+
+      - name: Windows binaries ship with their .pja DLL
+        run: |
+          for a in x64 x86; do
+            test -f dist/pjaffi_$a.dll || { echo "FAIL: falta dist/pjaffi_$a.dll"; exit 1; }
+          done
+          x86_64-w64-mingw32-objdump -p dist/packJPG_win_x64.exe | grep -q 'pjaffi_x64.dll' || { echo "FAIL: x64 no importa pjaffi_x64.dll"; exit 1; }
+          i686-w64-mingw32-objdump   -p dist/packJPG_win_x86.exe | grep -q 'pjaffi_x86.dll' || { echo "FAIL: x86 no importa pjaffi_x86.dll"; exit 1; }
+          echo "OK: cada .exe importa la DLL de su arquitectura, y las dos estan en dist/"
 
       - name: Lib batch API smoke (v4.0e)
         run: |

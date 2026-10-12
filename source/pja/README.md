@@ -4,9 +4,10 @@ Un `.pja` es **un JPEG comprimido con integridad y, si se pide, cifrado**: el
 flujo `.pjg` de siempre, más el tamaño y el hash BLAKE3-128 del JPEG original.
 Layout y razones en `doc/FORMATO.md`, y límites en `doc/POLITICA.md`.
 
-**Todavía no está enganchado a la CLI.** `pjatool.cpp` es la demostración
-punta a punta: usa `pjglib` para el códec y esta biblioteca para el formato,
-en el orden en que lo va a hacer el CLI.
+**Es lo que escribe `packJPG a` por defecto desde la 6.0** (`--pjg` para el
+formato de antes). `pjatool.cpp` es la demostración mínima punta a punta: usa
+`pjglib` para el códec y esta biblioteca para el formato, en el mismo orden
+que el CLI.
 
 ```sh
 pjatool a foto.jpg foto.pja [contraseña]
@@ -39,10 +40,11 @@ pjatool x foto.pja foto.jpg [contraseña]     # decodifica, verifica tamaño y h
 | `pas/pjacifrado.pas` | AEAD por trozos de 64 KB, número y marca de último en el AAD |
 | `pas/pjacripto.pas`, `pas/c/` | BLAKE3, Argon2id, XChaCha20-Poly1305 y el generador del sistema, en C |
 | `pas/pjalimites.pas` | los números de `POLITICA.md` |
-| `pas/pjafs.pas` | escribir la salida: sin seguir enlaces, sin escrituras a medias, sin dejar con su nombre un archivo que no verifica |
+| `pas/pjafs.pas` | escribir la salida (`pja_guardar`): sin seguir enlaces, sin escrituras a medias, sin dejar con su nombre un archivo que no verifica, y sobrescribiendo solo con algo que verificó |
 | `pas/pjaffi.pas` | la frontera C (`include/pjacore.h`) |
 | `pas/frontera.sh` | `libpjaffi_pas.a` para enlazar estática en Linux |
-| `pas/frontera_win.sh` | `pjaffi.dll` 32/64 para Windows, con ASLR y DEP |
+| `pas/frontera_win.sh` | `pjaffi_x64.dll` / `pjaffi_x86.dll` para Windows, con ASLR y DEP, y su biblioteca de importación |
+| `pas/fpc_i386_win32.sh` | el compilador cruzado de FreePascal para Windows de 32 bits, armado desde `fpc-source` (Debian no lo trae); ~12 s |
 | `test_frontera.cpp`, `pjatool.cpp` | consumidores C++ de la frontera |
 
 ## Frontera C
@@ -83,8 +85,9 @@ make pja-check    # la suite entera
 make pja-clean
 ```
 
-`pja` **no** es parte de `make all`: quien solo quiere packJPG no necesita
-FreePascal. Si `fpc` no está, el target falla con una instrucción.
+Desde la 6.0 `make all` construye el núcleo, porque `packJPG` lo enlaza: hace
+falta FreePascal 3.2. Si `fpc` no está, el target falla con una instrucción;
+`make PJA=0` compila sin el núcleo, y entonces `a` exige `--pjg`.
 
 Qué corre `make pja-check` (`pas/correr_pruebas.sh`):
 
@@ -99,6 +102,9 @@ Qué corre `make pja-check` (`pas/correr_pruebas.sh`):
 | `test_frontera` | el contrato de `pjacore.h` desde C++, con 8 hilos |
 | `sin_init` | sin `pja_iniciar`, todo da `NO_INIT`, también desde 8 hilos |
 | `pjatool` | ida y vuelta con el códec, sin cifrar y cifrado; y `corrupcion`: bits al azar sobre un `.pja`, extraídos como lo haría el CLI, **sin un solo JPEG distinto entregado como bueno** |
+
+Y desde `source/`, la del CLI: `test/cli_pja.sh` (43 celdas: cada fuente de
+contraseña, `.pja` alterados, `-f`, `--keep-corrupt`, enlaces, hilos, pipes).
 
 Cada prueba exige su cuenta mínima de celdas: una que corre cero no pasa por
 verde. Los mutantes van aparte (`IA_LAB/agentes/PJPG/mutantes-formato/`).

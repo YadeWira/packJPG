@@ -25,7 +25,7 @@ library pjaffi;
 
 uses
   {$ifdef unix} cthreads, {$endif}
-  SysUtils, pjacripto, pjacifrado, pjaformato;
+  SysUtils, pjacripto, pjacifrado, pjaformato, pjafs;
 
 const
   PJA_OK            = 0;
@@ -38,6 +38,7 @@ const
   PJA_ERR_INTERNO   = -9;    { una excepcion adentro: un defecto nuestro, nunca una entrada valida }
   PJA_ERR_NO_INIT   = -10;   { se llamo sin pja_iniciar (enlace estatico) }
   PJA_ERR_ALEATORIO = -11;
+  PJA_ERR_IO        = -12;
 
 type
   TPjaAbierto = record
@@ -174,6 +175,36 @@ begin
   except Result := PJA_ERR_INTERNO; end;
 end;
 
+function GuardarImpl(ruta: PChar; ruta_largo: SizeUInt; datos: PByte; largo: SizeUInt; esperado: PByte;
+                     conservar, sobrescribir: LongInt; desenlace, codigo: PLongInt;
+                     ruta_final: PChar; ruta_final_largo: SizeUInt; ruta_final_usado: PSizeUInt): LongInt;
+var r: RawByteString; h: THash16; d: TDesenlace; rf: TResultadoFs; sf: TSiFalla; n: SizeUInt;
+begin
+  try
+    r := '';
+    SetLength(r, ruta_largo);
+    if ruta_largo > 0 then Move(ruta^, r[1], ruta_largo);
+    Move(esperado^, h[0], 16);
+    if conservar <> 0 then sf := sfConservar else sf := sfBorrar;
+    rf := EscribirVerificado(r, Copiar(datos, largo), h, sf, sobrescribir <> 0, d);
+    if codigo <> nil then codigo^ := rf.codigo;
+    if not rf.Ok then begin
+      { NoSePudoConservar: el archivo ya se borro; para quien llama es "no quedo nada" }
+      if desenlace <> nil then desenlace^ := Ord(deBorrado);
+      Exit(PJA_ERR_IO);
+    end;
+    if desenlace <> nil then desenlace^ := Ord(d.tipo);
+    if ruta_final_usado <> nil then ruta_final_usado^ := Length(d.ruta);
+    if (ruta_final <> nil) and (ruta_final_largo > 0) then begin
+      n := Length(d.ruta);
+      if n >= ruta_final_largo then n := ruta_final_largo - 1;
+      if n > 0 then Move(d.ruta[1], ruta_final^, n);
+      ruta_final[n] := #0;
+    end;
+    Result := PJA_OK;
+  except Result := PJA_ERR_INTERNO; end;
+end;
+
 { ------------------------------------------------------------------------
   La frontera: cascaras. Sin variables administradas, sin try. }
 
@@ -253,6 +284,16 @@ begin
   Result := EscribirImpl(payload, payload_largo, hash, tam_orig, pass, pass_largo, buf, buf_largo);
 end;
 
+function pja_guardar(ruta: PChar; ruta_largo: SizeUInt; datos: PByte; largo: SizeUInt; esperado: PByte;
+                     conservar, sobrescribir: LongInt; desenlace, codigo: PLongInt;
+                     ruta_final: PChar; ruta_final_largo: SizeUInt; ruta_final_usado: PSizeUInt): LongInt; cdecl;
+begin
+  if not inicializado then Exit(PJA_ERR_NO_INIT);
+  if (ruta = nil) or (esperado = nil) or ((datos = nil) and (largo <> 0)) then Exit(PJA_ERR_NULL);
+  Result := GuardarImpl(ruta, ruta_largo, datos, largo, esperado, conservar, sobrescribir, desenlace, codigo,
+                        ruta_final, ruta_final_largo, ruta_final_usado);
+end;
+
 function pja_version: LongWord; cdecl;
 begin
   Result := VERSION;
@@ -304,6 +345,7 @@ exports
   pja_hash128 name 'pja_hash128',
   pja_escribir_largo name 'pja_escribir_largo',
   pja_escribir name 'pja_escribir',
+  pja_guardar name 'pja_guardar',
   pja_version name 'pja_version',
   pja_inicializado name 'pja_inicializado',
   pja_rango_activo name 'pja_rango_activo',

@@ -103,7 +103,10 @@ ver `pjatool.cpp`):
 5. rechazar si `tam_orig` pasa el tope del usuario (`--max-output`)
 6. decodificar con `tam_orig` **como tope** del decodificador
 7. verificar que el JPEG mida `tam_orig` y tenga el hash declarado
-8. recién ahí, escribirlo con su nombre (`pjafs.EscribirVerificado`)
+8. recién ahí, escribirlo con su nombre (`pja_guardar`, `pjafs.EscribirVerificado`)
+
+El CLI de packJPG hace exactamente eso desde la 6.0 (`a` escribe `.pja` por
+defecto); `pjatool.cpp` es la versión mínima.
 
 **El escritor valida con la misma función que el lector.** Lo que se escribe
 se puede abrir, y lo que se rechaza al abrir no se puede escribir. Es la regla
@@ -170,12 +173,17 @@ Cada fila es un caso con su resultado esperado, y está en las pruebas.
 |---|---|
 | enlace (simbólico o duro) con el nombre de la salida | sin sobrescribir: el nombre está ocupado (un enlace colgante también lo ocupa); con sobrescribir, se reemplaza la entrada y **nunca se escribe a través** |
 | la salida ya existe | rechaza, salvo que se pida sobrescribir |
+| con sobrescribir | se escribe a un temporal nuevo del mismo directorio y se renombra encima: **lo que había solo se reemplaza por algo que verificó** |
 | la salida es un directorio | rechaza, aunque se pida sobrescribir |
-| hash que no coincide | **se borra el archivo** |
-| lo mismo, con `--keep-corrupt` | se renombra a `<nombre>.corrupto`; si ya existe, `.corrupto.1`, `.corrupto.2`… |
-| lo mismo, y el renombre falla | **se borra igual** y se devuelve error |
+| hash que no coincide | **no se escribe nada** con ese nombre (el hash se mira antes de escribir) |
+| lo mismo, con `--keep-corrupt` | se escribe como `<nombre>.corrupto`; si ya existe, `.corrupto.1`, `.corrupto.2`… |
+| lo mismo, y no hay nombre `.corrupto` libre | error, sin escribir nada |
 | falla la escritura a mitad de camino | se borra lo escrito antes de devolver el error |
 | no se pudo crear el archivo | **no se borra nada**: lo que haya ahí no lo escribimos nosotros |
+
+Hasta el 12/10 sobrescribir **borraba primero** lo que había. Desde el CLI eso
+quería decir que un `x -f` de un `.pja` que no verificaba destruía el JPEG que
+el usuario ya tenía, y no dejaba nada en su lugar.
 
 > **Un archivo que sigue en disco con su propio nombre pasó la verificación.**
 

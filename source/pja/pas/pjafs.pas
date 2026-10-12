@@ -51,9 +51,11 @@ type
     function Texto: string;
   end;
 
-{ Escribe el archivo y verifica DESPUES de escribir. El archivo se CREA (nunca
-  se abre uno existente, y no se siguen enlaces); con `sobrescribir`, la
-  entrada que haya se borra antes. }
+{ Escribe el archivo si `datos` tiene el hash `esperado`. El archivo se CREA
+  (nunca se abre uno existente, y no se siguen enlaces). Con `sobrescribir`,
+  se escribe a un temporal y se renombra encima: lo que habia solo se
+  reemplaza por algo que verifico. Si el hash no coincide no se escribe nada
+  con ese nombre (con sfConservar, queda como <archivo>.corrupto[.N]). }
 function EscribirVerificado(const archivo: RawByteString; const datos: TBytes; const esperado: THash16;
                             siFalla: TSiFalla; sobrescribir: Boolean; out d: TDesenlace): TResultadoFs;
 
@@ -267,53 +269,76 @@ begin
   Result := False;
 end;
 
+{ Crea `ruta` (nunca abre uno existente ni sigue enlaces) y escribe todo; si
+  la escritura falla, borra lo que creo. }
+function CrearYEscribir(const ruta: RawByteString; const datos: TBytes; out codigo: LongInt): Boolean;
+var f: TArchivo;
+begin
+  codigo := 0;
+  { Si no se pudo crear no hay nada nuestro que borrar. }
+  if not CrearNuevo(ruta, f) then begin codigo := UltimoError; Exit(False); end;
+  if not EscribirTodo(f, datos) then begin
+    codigo := UltimoError;
+    if codigo = 0 then codigo := -1;
+    Cerrar(f);
+    Borrar(ruta);                        { una escritura a medias no se deja tirada }
+    Exit(False);
+  end;
+  Cerrar(f);
+  Result := True;
+end;
+
 function EscribirVerificado(const archivo: RawByteString; const datos: TBytes; const esperado: THash16;
                             siFalla: TSiFalla; sobrescribir: Boolean; out d: TDesenlace): TResultadoFs;
-var p, otro: RawByteString; codigo: LongInt; f: TArchivo; obtenido: THash16;
+var p, otro, tmp: RawByteString; codigo: LongInt; obtenido: THash16; n: Integer;
 begin
   d.tipo := deVerificado; d.ruta := '';
   FillChar(d.esperado, SizeOf(d.esperado), 0); FillChar(d.obtenido, SizeOf(d.obtenido), 0);
   if Pos(#0, archivo) > 0 then Exit(RF(efIo, -1));
   if Padre(archivo, p) then
     if not CrearDirectorios(p, codigo) then Exit(RF(efIo, codigo));
-  if sobrescribir then
-    if not Borrar(archivo) then begin
-      codigo := UltimoError;
-      if (codigo <> E_NO_EXISTE) and (codigo <> E_NO_EXISTE2) then Exit(RF(efIo, codigo));
+
+  { El hash es de los datos que se van a escribir: se mira ANTES. Lo que no
+    coincide nunca se escribe con su nombre, ni un instante. }
+  obtenido := Blake3_128(datos);
+  if not CompareMem(@obtenido[0], @esperado[0], SizeOf(THash16)) then begin
+    d.esperado := esperado; d.obtenido := obtenido;
+    if siFalla = sfBorrar then begin
+      d.tipo := deBorrado;               { "borrado": no queda nada, porque no se escribio }
+      Exit(RF(efNinguno, 0));
     end;
-  { Si no se pudo crear no hay nada nuestro que borrar. }
-  if not CrearNuevo(archivo, f) then Exit(RF(efIo, UltimoError));
-  if not EscribirTodo(f, datos) then begin
+    if not RutaCorruptaLibre(archivo, otro) then Exit(RF(efNoSePudoConservar, -1));
+    if not CrearYEscribir(otro, datos, codigo) then Exit(RF(efNoSePudoConservar, codigo));
+    d.tipo := deConservado; d.ruta := otro;
+    Exit(RF(efNinguno, 0));
+  end;
+
+  if not sobrescribir then begin
+    if not CrearYEscribir(archivo, datos, codigo) then Exit(RF(efIo, codigo));
+    d.ruta := archivo;
+    Exit(RF(efNinguno, 0));
+  end;
+
+  { Sobrescribir: a un temporal nuevo del mismo directorio, y recien escrito
+    entero, rename sobre el destino. Lo que habia queda intacto si algo
+    falla antes, y rename reemplaza la ENTRADA: no escribe a traves de un
+    enlace simbolico o duro que tenga ese nombre. Antes se borraba el
+    destino primero: un `x -f` de un archivo que no verificaba destruia el
+    JPEG que el usuario ya tenia (medido desde el CLI, 12/10/2026). }
+  tmp := '';
+  for n := 0 to 999 do begin
+    tmp := archivo + '.pja-tmp' + IntToStr(n);
+    if CrearYEscribir(tmp, datos, codigo) then Break;
+    if not ExisteEntrada(tmp) then Exit(RF(efIo, codigo));   { fallo de verdad, no un nombre ocupado }
+    tmp := '';
+  end;
+  if tmp = '' then Exit(RF(efIo, -1));
+  if not Renombrar(tmp, archivo) then begin
     codigo := UltimoError;
-    if codigo = 0 then codigo := -1;
-    Cerrar(f);
-    Borrar(archivo);                     { una escritura a medias no se deja tirada }
+    Borrar(tmp);
     Exit(RF(efIo, codigo));
   end;
-  Cerrar(f);
-
-  obtenido := Blake3_128(datos);
-  if CompareMem(@obtenido[0], @esperado[0], SizeOf(THash16)) then begin
-    d.tipo := deVerificado; d.ruta := archivo;
-    Exit(RF(efNinguno, 0));
-  end;
-  d.esperado := esperado; d.obtenido := obtenido;
-
-  if siFalla = sfBorrar then begin
-    if not Borrar(archivo) then Exit(RF(efIo, UltimoError));
-    d.tipo := deBorrado;
-    Exit(RF(efNinguno, 0));
-  end;
-  if not RutaCorruptaLibre(archivo, otro) then begin
-    Borrar(archivo);
-    Exit(RF(efNoSePudoConservar, -1));
-  end;
-  if not Renombrar(archivo, otro) then begin
-    codigo := UltimoError;
-    Borrar(archivo);
-    Exit(RF(efNoSePudoConservar, codigo));
-  end;
-  d.tipo := deConservado; d.ruta := otro;
+  d.ruta := archivo;
   Result := RF(efNinguno, 0);
 end;
 

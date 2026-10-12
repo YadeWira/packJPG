@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <filesystem>
 #include "pjacore.h"
 
 static int fallos = 0;
@@ -178,6 +179,44 @@ int main(int argc, char** argv, char** envp) {
              "escribir con contraseña nula de largo 5 -> NULL");
     chequear(pja_escribir(pjg.data(), pjg.size(), h, tam, nullptr, 0, nullptr, 0) == PJA_ERR_NULL,
              "escribir sin buffer -> NULL");
+
+    // --- pja_guardar: la salida verificada antes de quedar con su nombre
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        fs::path d = fs::temp_directory_path() / ("pja_tf_" + std::to_string((long)std::rand()) + std::to_string((long)(size_t)&fallos));
+        fs::remove_all(d, ec); fs::create_directories(d);
+        std::string ok = (d / "sub" / "ok.jpg").string(), mal = (d / "mal.jpg").string();
+        int32_t des = -1, cod = 0; char fin[4096]; size_t usado = 0;
+        chequear(pja_guardar(ok.data(), ok.size(), pjg.data(), pjg.size(), h, 0, 0, &des, &cod, fin, sizeof fin, &usado) == PJA_OK
+                 && des == PJA_GUARDADO_VERIFICADO && leer(ok.c_str()) == pjg && std::string(fin) == ok,
+                 "guardar: verificado, crea el directorio que falta");
+        chequear(pja_guardar(ok.data(), ok.size(), pjg.data(), pjg.size(), h, 0, 0, &des, &cod, nullptr, 0, nullptr) == PJA_ERR_IO,
+                 "guardar: ya existe, sin sobrescribir -> IO");
+        chequear(leer(ok.c_str()) == pjg, "  y el que estaba queda intacto");
+        std::vector<uint8_t> otro2(pjg.begin(), pjg.begin() + 20);
+        uint8_t h2[16]; pja_hash128(otro2.data(), otro2.size(), h2, 16);
+        chequear(pja_guardar(ok.data(), ok.size(), otro2.data(), otro2.size(), h2, 0, 1, &des, &cod, nullptr, 0, nullptr) == PJA_OK
+                 && des == PJA_GUARDADO_VERIFICADO && leer(ok.c_str()) == otro2, "guardar: con sobrescribir, lo reemplaza");
+        chequear(pja_guardar(mal.data(), mal.size(), pjg.data(), pjg.size(), h2, 0, 0, &des, &cod, nullptr, 0, nullptr) == PJA_OK
+                 && des == PJA_GUARDADO_BORRADO && !fs::exists(mal), "guardar: hash ajeno -> BORRADO, no queda nada");
+        usado = 0;
+        chequear(pja_guardar(mal.data(), mal.size(), pjg.data(), pjg.size(), h2, 1, 0, &des, &cod, fin, sizeof fin, &usado) == PJA_OK
+                 && des == PJA_GUARDADO_CONSERVADO && !fs::exists(mal) && std::string(fin) == mal + ".corrupto"
+                 && usado == mal.size() + 9 && leer(fin) == pjg, "guardar: con conservar -> .corrupto, nunca con su nombre");
+        char chico[8];
+        chequear(pja_guardar(mal.data(), mal.size(), pjg.data(), pjg.size(), h2, 1, 0, &des, &cod, chico, sizeof chico, &usado) == PJA_OK
+                 && des == PJA_GUARDADO_CONSERVADO && strlen(chico) == 7 && usado == mal.size() + 11,
+                 "guardar: ruta_final recortada al buffer, usado dice el largo entero");
+        chequear(pja_guardar(nullptr, 3, pjg.data(), pjg.size(), h, 0, 0, &des, &cod, nullptr, 0, nullptr) == PJA_ERR_NULL
+                 && pja_guardar(mal.data(), mal.size(), pjg.data(), pjg.size(), nullptr, 0, 0, &des, &cod, nullptr, 0, nullptr) == PJA_ERR_NULL,
+                 "guardar: ruta o hash nulos -> NULL");
+        fs::create_directories(d / "dir.jpg");
+        std::string dj = (d / "dir.jpg").string();
+        chequear(pja_guardar(dj.data(), dj.size(), pjg.data(), pjg.size(), h, 0, 1, &des, &cod, nullptr, 0, nullptr) == PJA_ERR_IO
+                 && fs::is_directory(dj), "guardar: sobre un directorio, ni con sobrescribir");
+        fs::remove_all(d, ec);
+    }
 
     // Hilos del anfitrion llamando a la vez (el runtime de FPC: cthreads y el
     // heap compartido). Cada hilo abre, lee y cierra; todos tienen que ver

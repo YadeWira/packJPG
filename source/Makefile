@@ -91,6 +91,26 @@ else
   DLL_WINLIBS      := $(WINLIBS_X64)
 endif
 
+# --- formato .pja ------------------------------------------------------------
+# Desde la 6.0, `a` escribe .pja, y el nucleo del formato es FreePascal (+ la
+# cripto en C) en pja/: packJPG lo enlaza estatico. Hace falta FreePascal 3.2
+# para compilar packJPG. Con PJA=0 compila sin el, y entonces `a` exige --pjg:
+# no cae en silencio a otro formato del que se pidio.
+#
+# Va aca y no abajo con los demas targets de pja: make expande los
+# prerrequisitos de una regla al leerla, y la de $(TARGET) esta mas abajo.
+PJA     ?= 1
+FPC_PAS ?= fpc
+PJA_DIR  = pja
+PAS_DIR  = $(PJA_DIR)/pas
+PAS_OUT  = $(PAS_DIR)/build
+PAS_LIB  = $(PAS_OUT)/libpjaffi_pas.a
+ifeq ($(PJA),1)
+  CXXFLAGS_PJA = -DHAVE_PJA -I$(PJA_DIR)/include
+  PJA_LINK     = $(PAS_LIB) -ldl
+  PJA_DEP      = $(PAS_LIB)
+endif
+
 CSRC     = $(wildcard *.c)
 CXXSRC   = $(wildcard *.cpp)
 DEPS     = $(wildcard *.h) Makefile
@@ -122,13 +142,13 @@ endif
 # --- default rules -----------------------------------------------------------
 
 %.o: %.cpp $(DEPS)
-	$(CXX) -c -o $@ $< $(CXXFLAGS)
+	$(CXX) -c -o $@ $< $(CXXFLAGS) $(CXXFLAGS_PJA)
 
 %.res: %.rc
 	@-$(RC) $< $@
 
-$(TARGET): $(OBJ) $(RES)
-	$(CXX) -o $@ $^ -s $(LDFLAGS) $(LIBS)
+$(TARGET): $(OBJ) $(RES) $(PJA_DEP)
+	$(CXX) -o $@ $(OBJ) $(RES) -s $(LDFLAGS) $(LIBS) $(PJA_LINK)
 	$(UPX)
 
 # --- standard targets --------------------------------------------------------
@@ -160,7 +180,8 @@ pgo: pgo-clean
 	@mkdir -p /tmp/packjpg_pgo_work
 	@cp $(PGO_WORKLOAD)/*.jpg /tmp/packjpg_pgo_work/ 2>/dev/null || \
 	   { echo "ERROR: no jpgs in $(PGO_WORKLOAD)"; exit 1; }
-	@cd /tmp/packjpg_pgo_work && $(CURDIR)/$(TARGET) a --no-pause -f ./*.jpg \
+	@# --pjg: el perfil es del codec; envolver en .pja no cambia nada de el
+	@cd /tmp/packjpg_pgo_work && $(CURDIR)/$(TARGET) a --pjg --no-pause -f ./*.jpg \
 	    >/dev/null 2>&1 || true
 	@# El `|| true` de arriba es correcto --packJPG sale != 0 si CUALQUIER
 	@# archivo del lote avisa-- pero se traga tambien un fallo total. Sin
@@ -317,25 +338,19 @@ so:
 	@echo "[OK] $(SONAME) — exported symbols:"
 	@nm -D --defined-only $(SONAME) | awk '{print "      "$$3}' | grep pjglib_ || true
 
-# --- formato .pja (FreePascal) ----------------------------------------------
-# Deliberadamente FUERA de `all`. El codec se compila sin FreePascal instalado y
-# va a seguir siendo asi: quien solo quiera packJPG no necesita una toolchain
-# mas. `make pja` es el opt-in.
+# --- formato .pja (FreePascal): biblioteca y pruebas ------------------------
+# `make all` la construye (packJPG la enlaza); `make PJA=0` compila sin ella.
 #
 # FPC_PAS se puede pisar (make pja FPC_PAS=/ruta/fpc). Si no esta, el target
 # falla con una instruccion, no con "command not found" a 40 lineas de
 # profundidad.
-FPC_PAS ?= fpc
-PJA_DIR  = pja
-PAS_DIR  = $(PJA_DIR)/pas
-PAS_OUT  = $(PAS_DIR)/build
-PAS_LIB  = $(PAS_OUT)/libpjaffi_pas.a
+# FPC_PAS, PJA_DIR, PAS_DIR, PAS_OUT y PAS_LIB estan arriba, junto a PJA.
 
 define PJA_SIN_FPC
 	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
 	  echo "ERROR: no encuentro '$(FPC_PAS)'. El formato .pja se compila con"; \
-	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
-	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
+	  echo "       FreePascal 3.2 (https://www.freepascal.org), que desde la 6.0 hace"; \
+	  echo "       falta para packJPG (sin el: make PJA=0, y 'a' pide --pjg). Instalalo, o pasa la ruta:"; \
 	  echo "         make $@ FPC_PAS=/ruta/a/fpc"; \
 	  exit 1; }
 endef
@@ -358,8 +373,8 @@ pja-corpus: $(TARGET)
 	@rm -rf $(PJA_CORPUS_DIR) && mkdir -p $(PJA_CORPUS_DIR)/n $(PJA_CORPUS_DIR)/p
 	@cp ../test-files/*.jpg $(PJA_CORPUS_DIR)/n/
 	@cp ../test-files/*.jpg $(PJA_CORPUS_DIR)/p/
-	@./$(TARGET) a --no-pause -f $(PJA_CORPUS_DIR)/n/*.jpg >/dev/null 2>&1 || true
-	@./$(TARGET) a --no-pause -f --parallel-stages $(PJA_CORPUS_DIR)/p/*.jpg >/dev/null 2>&1 || true
+	@./$(TARGET) a --pjg --no-pause -f $(PJA_CORPUS_DIR)/n/*.jpg >/dev/null 2>&1 || true
+	@./$(TARGET) a --pjg --no-pause -f --parallel-stages $(PJA_CORPUS_DIR)/p/*.jpg >/dev/null 2>&1 || true
 	@for f in $(PJA_CORPUS_DIR)/n/*.pjg; do mv "$$f" $(PJA_CORPUS_DIR)/n_`basename $$f`; done
 	@for f in $(PJA_CORPUS_DIR)/p/*.pjg; do mv "$$f" $(PJA_CORPUS_DIR)/p_`basename $$f`; done
 	@rm -rf $(PJA_CORPUS_DIR)/n $(PJA_CORPUS_DIR)/p
@@ -435,27 +450,56 @@ CROSS_LD    = -static -static-libgcc -static-libstdc++
 bin:
 	mkdir -p bin
 
-linux-x64: bin
-	$(CXX) $(CXXFLAGS) -DUNIX -o bin/$(TARGET)_linux_x64 $(CXXSRC) -s $(LDFLAGS) $(LIBS)
+linux-x64: bin $(PJA_DEP)
+	$(CXX) $(CXXFLAGS) $(CXXFLAGS_PJA) -DUNIX -o bin/$(TARGET)_linux_x64 $(CXXSRC) -s $(LDFLAGS) $(LIBS) $(PJA_LINK)
 	@echo "[OK] bin/$(TARGET)_linux_x64"
 
+# Windows: el nucleo .pja va como DLL al lado del .exe (estatico le quitaria
+# el ASLR al .exe entero, medido). pjaffi_x64.dll / pjaffi_x86.dll, y el .exe
+# se enlaza contra su biblioteca de importacion: ver pas/frontera_win.sh.
+# La de 32 bits necesita el compilador cruzado (pas/fpc_i386_win32.sh).
+PJA_WIN     = $(PAS_OUT)/win
+FPC386_DIR  = $(PAS_OUT)/fpc386
+ifeq ($(PJA),1)
+  PJA_WIN64_LIB = $(PJA_WIN)/64/libpjaffi_x64.dll.a
+  PJA_WIN86_LIB = $(PJA_WIN)/32/libpjaffi_x86.dll.a
+endif
+
+$(PJA_WIN)/64/libpjaffi_x64.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh
+	$(PJA_SIN_FPC)
+	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=64 bash $(PAS_DIR)/frontera_win.sh
+
+$(FPC386_DIR)/ppc386:
+	$(PJA_SIN_FPC)
+	bash $(PAS_DIR)/fpc_i386_win32.sh $(FPC386_DIR)
+
+$(PJA_WIN)/32/libpjaffi_x86.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh $(FPC386_DIR)/ppc386
+	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=32 PPC386=$(CURDIR)/$(FPC386_DIR)/ppc386 \
+	    RTL386=$(CURDIR)/$(FPC386_DIR)/units/i386-win32 bash $(PAS_DIR)/frontera_win.sh
+
 win-x64: JLS=0
-win-x64: bin
+win-x64: bin $(PJA_WIN64_LIB)
 ifneq ($(HAVE_WINLIBS_X64),)
-	$(WIN64) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X64)
+	$(WIN64) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) $(CXXFLAGS_PJA) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X64) $(PJA_WIN64_LIB)
 else
 	@echo "[--] winlibs/x86_64 not found — building win-x64 without JPEG-LS"
-	$(WIN64) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD)
+	$(WIN64) $(CROSS_FLAGS) $(CXXFLAGS_PJA) -o bin/$(TARGET)_win_x64.exe $(CXXSRC) -s $(CROSS_LD) $(PJA_WIN64_LIB)
+endif
+ifeq ($(PJA),1)
+	cp $(PJA_WIN)/64/pjaffi_x64.dll bin/
 endif
 	@echo "[OK] bin/$(TARGET)_win_x64.exe"
 
 win-x86: JLS=0
-win-x86: bin
+win-x86: bin $(PJA_WIN86_LIB)
 ifneq ($(HAVE_WINLIBS_X86),)
-	$(WIN32) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X86)
+	$(WIN32) $(CROSS_FLAGS) $(WINJLS_DEFS) $(WINLIBS_INC) $(CXXFLAGS_PJA) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD) $(WINLIBS_X86) $(PJA_WIN86_LIB)
 else
 	@echo "[--] winlibs/i686 not found — building win-x86 without JPEG-LS"
-	$(WIN32) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD)
+	$(WIN32) $(CROSS_FLAGS) $(CXXFLAGS_PJA) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD) $(PJA_WIN86_LIB)
+endif
+ifeq ($(PJA),1)
+	cp $(PJA_WIN)/32/pjaffi_x86.dll bin/
 endif
 	@echo "[OK] bin/$(TARGET)_win_x86.exe"
 

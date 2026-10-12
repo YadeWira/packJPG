@@ -56,25 +56,25 @@ packJPG <command> [switches] [filename(s)]
 
 | Command | Description |
 |---|---|
-| `a` | compress JPEG files to PJG (archive) |
-| `x` | decompress PJG files back to JPEG (extract) |
-| `list` | display info about PJG files without decompressing (header only — see below) |
+| `a` | compress JPEG files to `.pja` (archive); `--pjg` writes the bare `.pjg` |
+| `x` | decompress `.pja` and `.pjg` files back to JPEG (extract) |
+| `list` | display info about `.pja`/`.pjg` files without decompressing (header only — see below) |
 | `stats` | show JPEG file info (size, dimensions, color mode) without compressing |
 
 packJPG recognizes file types by content, not extension: `.jpg`, `.jls`
-(if built with JPEG-LS support) and `.pjg` are all detected by their
+(if built with JPEG-LS support), `.pja` and `.pjg` are all detected by their
 magic bytes regardless of what they're named. Files that are none of
 these are silently skipped. Wildcards (`*.jpg`, `*.*`) and drag-and-drop
 work; on Windows, wildcard expansion is handled internally because
 `cmd.exe` doesn't expand them.
 
 `-r` (directory recursion) is the one place extension *does* matter —
-it only descends into files named `.jpg`/`.jpeg`/`.pjg`/`.jls`, since
+it only descends into files named `.jpg`/`.jpeg`/`.pja`/`.pjg`/`.jls`, since
 walking every file in a tree and content-sniffing each one would be
 needlessly slow.
 
 In default mode files are never overwritten — packJPG appends underscores
-to make a fresh name. Pass `-o` to overwrite. Directories are silently
+to make a fresh name. Pass `-f` to overwrite. Directories are silently
 ignored unless `-r` is given.
 
 If `"-"` is used as a filename, input is read from stdin and output is
@@ -86,10 +86,43 @@ written to stdout (handy for piping through `jpegtran` etc.).
 packJPG a *.jpg                       # compress everything in cwd
 packJPG a -th 0 -f --no-pause -o out/ *.jpg   # all cores, overwrite, no pause, into out/
 packJPG a -r photos/                  # recurse into photos/
-packJPG x *.pjg                       # decompress
-packJPG list *.pjg                    # show version + size, no decompress
-packJPG - < sail.pjg > sail.jpg       # stream
+packJPG x *.pja                       # decompress (checks size and hash)
+packJPG a -e *.jpg                    # encrypted .pja; asks the password twice, no echo
+packJPG list *.pja                    # show version + size, no decompress
+packJPG a - < sail.jpg > sail.pja     # stream
 ```
+
+### `.pja` — the default output since 6.0
+
+A `.pja` is one JPEG: the same `.pjg` stream as before, plus the **size and
+BLAKE3 hash of the original JPEG**, optionally **encrypted** (Argon2id +
+XChaCha20-Poly1305). It costs 32 bytes per file unencrypted.
+
+The hash is what makes it worth it. A `.pjg` with one damaged bit can decode to
+*another valid JPEG* with no error at all — measured, between 1 % and 21 % of
+single-bit flips do. `x` checks every JPEG against the size and hash it was
+packed with, and **a JPEG that does not match never gets written under its
+name**: it is not written at all, or with `--keep-corrupt` it is kept as
+`NAME.corrupto`. With `-f`, a file that was already there is only replaced by
+one that verified.
+
+| switch | |
+|---|---|
+| `--pjg` | write the bare `.pjg` stream, as before 6.0 (no hash, no encryption) |
+| `-e`, `--encrypt` | encrypt; the password is asked without echo, twice for `a` |
+| `--password-file=F` | the password from a file; refused if other users can read it (Unix) |
+| `--password-stdin` | the password from the first line of stdin |
+| `--password=TEXT` | the password itself — it ends up in the shell history; it is wiped from the process's argv as soon as it is read |
+| `--keep-corrupt` | a JPEG that fails its check is kept as `NAME.corrupto` instead of deleted |
+
+`x` asks for the password on its own when one of the inputs is an encrypted
+`.pja` and none was given. `--max-output` is checked against the size the `.pja`
+declares **before** decoding, and that declared size is also the decoder's cap
+for the file. `.pjg` files are still read, and `--pjg` still writes them.
+
+On Windows the `.pja` core is a DLL that ships next to the executable:
+`pjaffi_x64.dll` with `packJPG_win_x64.exe`, `pjaffi_x86.dll` with
+`packJPG_win_x86.exe`. Layout and rationale: `source/pja/doc/FORMATO.md`.
 
 ### `list` — what it actually checks
 
@@ -178,9 +211,9 @@ and it is why `-t` could never be given a meaning at all.
 | anything else | the output **file name** |
 
 ```
-packJPG a foto.jpg                 ->  foto.pjg
-packJPG a foto.jpg -o pana.pjg     ->  pana.pjg
-packJPG x foto.pjg -o CARPETA/     ->  CARPETA/foto.jpg
+packJPG a foto.jpg                 ->  foto.pja
+packJPG a foto.jpg -o pana.pja     ->  pana.pja
+packJPG x foto.pja -o CARPETA/     ->  CARPETA/foto.jpg
 ```
 
 With a file name, **only one input is allowed** — otherwise fifty inputs would
@@ -299,9 +332,9 @@ preprocessor. FreeArc processes one file at a time in this mode, so
 ```ini
 [External compressor:jpg]
 packcmd   = packjpg a --parallel-stages --porcelain -f $$arcdatafile$$.jpg
-unpackcmd = packjpg x --parallel-stages --porcelain -f $$arcdatafile$$.pjg
+unpackcmd = packjpg x --parallel-stages --porcelain -f $$arcdatafile$$.pja
 datafile   = $$arcdatafile$$.jpg
-packedfile = $$arcdatafile$$.pjg
+packedfile = $$arcdatafile$$.pja
 solid = 0
 ```
 
@@ -314,8 +347,9 @@ arc a -m"jpg" archive.arc *.jpg
 ## Library / DLL API
 
 v4.0e adds a C-linkage library API for embedding packJPG into other
-applications (archivers, image tools, webservers, etc.). Same `.pjg`
-format as the CLI, with **multithreading enabled by default**.
+applications (archivers, image tools, webservers, etc.). It reads and writes
+the bare `.pjg` stream (the `.pja` wrapper is the CLI's, through
+`source/pja/include/pjacore.h`), with **multithreading enabled by default**.
 
 ### Building
 

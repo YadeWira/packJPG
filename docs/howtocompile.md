@@ -1,7 +1,8 @@
 # How to Compile packJPG
 
 This document explains how to compile packJPG as an executable or as a
-static/shared library. Requires a C++17 compliant compiler.
+static/shared library. Requires a C++17 compliant compiler and, for the
+executable since 6.0, FreePascal 3.2 (the `.pja` core: see below).
 
 **Tested with:** clang 18, g++ 13.
 **Supported targets:** Linux x64, Windows x64 (cross), Windows x86 (cross) — all Windows 7 SP1+.
@@ -16,12 +17,13 @@ From the `source/` directory, run:
 ```
 
 This builds Linux x64, Windows x64, and Windows x86 binaries into
-`bin/`. Requires clang++ (or g++) for Linux and mingw-w64 (**posix**
-thread model, see below) for Windows targets.
+`dist/`, plus `pjaffi_x64.dll` / `pjaffi_x86.dll`, which ship next to the
+Windows executables. Requires clang++ (or g++) for Linux, mingw-w64
+(**posix** thread model, see below) for Windows targets, and FreePascal.
 
 ```
 # Ubuntu/Debian
-sudo apt install clang mingw-w64
+sudo apt install clang mingw-w64 fpc fpc-source fp-units-win-rtl
 
 # Arch
 sudo pacman -S clang mingw-w64-gcc
@@ -103,31 +105,39 @@ make dll    # Windows shared library (packJPG.dll) — MinGW cross-compile
 - The same C-linkage API is exposed by all three: the static `.a`, the
   Unix `.so`, and the Windows `.dll`.
 
-## The PJA format (FreePascal)
+## The PJA format (FreePascal) — needed to build packJPG since 6.0
 
-`.pja` is one JPEG compressed by packJPG, plus the original size and its
-BLAKE3-128 hash, optionally encrypted. Its core lives in `source/pja/` and is
-written in FreePascal, with the cryptography in C (Monocypher, BLAKE3). It is
-**not** part of `make all`, and that is deliberate: building packJPG itself does
-not require FreePascal and never will. Opt in:
+`a` writes `.pja` by default: one JPEG compressed by packJPG, plus the original
+size and its BLAKE3-128 hash, optionally encrypted. Its core lives in
+`source/pja/` and is written in FreePascal, with the cryptography in C
+(Monocypher, BLAKE3), and **`packJPG` links it**:
 
 ```
-make pja          # pja/pas/build/libpjaffi_pas.a, to link statically
-make pja-tests    # + test_frontera and pjatool (the latter needs packJPGlib.a)
-make pja-check    # the whole suite
-make pja-clean
+sudo apt install fpc                          # Linux build
+sudo apt install fpc-source fp-units-win-rtl  # + the Windows DLLs (build_all.sh)
+make                  # builds pja/pas/build/libpjaffi_pas.a first, links it statically
+make PJA=0            # without FreePascal: then `a` needs --pjg, it never falls back in silence
+make pja-check        # the format's own suite
 ```
 
-If `fpc` is not on the path, `make pja` stops with an instruction rather than a
-`command not found` from deep inside a recipe. Point it somewhere else with
-`make pja FPC_PAS=/path/to/fpc`.
+If `fpc` is not on the path, the build stops with an instruction rather than a
+`command not found` from deep inside a recipe; `make FPC_PAS=/path/to/fpc` points
+it somewhere else.
 
-A program linking the static library must call `pja_iniciar(argc, argv, envp)`
+On Windows the core is a DLL next to the executable, `pjaffi_x64.dll` /
+`pjaffi_x86.dll` (linked statically it would cost the whole `.exe` its ASLR):
+`make win-x64` / `make win-x86` and `build_all.sh` build it and put it beside
+the `.exe`. The 32-bit one needs the FreePascal i386-win32 cross compiler, which
+Debian does not package; `pja/pas/fpc_i386_win32.sh` builds it from
+`fpc-source` in about 12 seconds.
+
+The library (`make lib`, `dll`, `so`) does not include the core: it reads and
+writes the bare `.pjg` stream, as before.
+
+A program embedding `pjacore.h` itself must call `pja_iniciar(argc, argv, envp)`
 at the top of `main` (without it every call returns `PJA_ERR_NO_INIT`) and link
-with `-lpthread -ldl`. On Windows the core is a DLL, built by
-`pja/pas/frontera_win.sh`.
-
-See `source/pja/README.md` for the format docs and the C boundary contract.
+with `-lpthread -ldl`. See `source/pja/README.md` for the format and the C
+boundary.
 
 ### Cross-compiling for Windows — always use the posix thread model
 

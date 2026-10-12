@@ -24,6 +24,7 @@ static int todas(void) {
     malas += pja_escribir_largo(20, 0) != PJA_ERR_NO_INIT;
     malas += pja_escribir(b, 20, b, 100, nullptr, 0, b, 64) != PJA_ERR_NO_INIT;
     malas += pja_escribir(b, 20, b, 100, b, 3, b, 64) != PJA_ERR_NO_INIT;
+    malas += pja_guardar("x", 1, b, 4, b, 0, 0, &cif, &cif, nullptr, 0, nullptr) != PJA_ERR_NO_INIT;
     malas += pja_inicializado() != 0;
     pja_cerrar((PjaAbierto*)b);          // sin runtime no puede liberar nada: tiene que no tocarlo
     return malas;

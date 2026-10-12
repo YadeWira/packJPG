@@ -15,7 +15,10 @@
 #
 # All binaries are collected into ./dist/
 #
-# Requirements: clang++ (or g++), mingw-w64
+# Requirements: clang++ (or g++), mingw-w64, FreePascal 3.2 (fpc, fpc-source,
+#   fp-units-win-rtl): since 6.0 'a' writes .pja, whose core is FreePascal.
+#   Linux links it statically; Windows ships it as pjaffi_x64.dll /
+#   pjaffi_x86.dll next to the .exe (static would cost the .exe its ASLR).
 #   Ubuntu/Debian : sudo apt install mingw-w64
 #   Arch          : sudo pacman -S mingw-w64-gcc
 #   macOS         : brew install mingw-w64
@@ -86,16 +89,24 @@ else
     skip "JPEG-LS support disabled (no vendored libs, libcharls-dev/libjxl-dev not found)"
 fi
 
-(cd "$SRC_DIR" && $CXX $CFLAGS $LTO -DUNIX $JLS_DEFINE \
+# ─── .pja core (FreePascal) ──────────────────────────────────────────────────
+# Not optional for a release: a packJPG without it refuses 'a' unless --pjg.
+command -v fpc &>/dev/null || fail "fpc not found: packJPG 6.0 needs FreePascal 3.2 for .pja (apt install fpc fpc-source fp-units-win-rtl)"
+(cd "$SRC_DIR" && make pja > /dev/null) || fail "make pja (the .pja core) failed"
+PJA_DEFS="-DHAVE_PJA -Ipja/include"
+PJA_LINUX="pja/pas/build/libpjaffi_pas.a -ldl"
+ok ".pja core: $SRC_DIR/pja/pas/build/libpjaffi_pas.a"
+
+(cd "$SRC_DIR" && $CXX $CFLAGS $LTO -DUNIX $JLS_DEFINE $PJA_DEFS \
     -o "../$DIST/packJPG_linux_x64" \
-    $SRC $JLS_SRC $JLS_LIBS \
+    $SRC $JLS_SRC $JLS_LIBS $PJA_LINUX \
     && strip --strip-unneeded "../$DIST/packJPG_linux_x64")
 ok "dist/packJPG_linux_x64"
 
 # native build (optimized for this machine only, not for distribution)
-(cd "$SRC_DIR" && $CXX $CFLAGS_NATIVE $LTO -DUNIX $JLS_DEFINE \
+(cd "$SRC_DIR" && $CXX $CFLAGS_NATIVE $LTO -DUNIX $JLS_DEFINE $PJA_DEFS \
     -o "../$DIST/packJPG_linux_x64_native" \
-    $SRC $JLS_SRC $JLS_LIBS)
+    $SRC $JLS_SRC $JLS_LIBS $PJA_LINUX)
 ok "dist/packJPG_linux_x64_native (native, do not distribute)"
 
 # ─── Windows JPEG-LS (vendored) ─────────────────────────────────────────────
@@ -108,6 +119,24 @@ winlibs_link() {
     local d="winlibs/$1"
     echo "$d/libcharls.a $d/libjxl.a $d/libjxl_threads.a $d/libjxl_cms.a" \
          "$d/liblcms2.a $d/libhwy.a $d/libbrotlienc.a $d/libbrotlidec.a $d/libbrotlicommon.a"
+}
+
+# ─── Windows .pja core: pjaffi_<arch>.dll + its import library ─────────────
+# frontera_win.sh also builds and checks test_frontera.exe against it.
+PJA_WIN="pja/pas/build/win"
+pja_dll() {  # $1 = 64 | 32
+    local extra=()
+    if [ "$1" = 32 ]; then
+        if [ -z "${PPC386:-}" ]; then
+            bash "$SRC_DIR/pja/pas/fpc_i386_win32.sh" "$SRC_DIR/pja/pas/build/fpc386" > /dev/null \
+                || fail "building the FreePascal i386-win32 cross compiler"
+            PPC386="$SRC_DIR/pja/pas/build/fpc386/ppc386"
+            RTL386="$SRC_DIR/pja/pas/build/fpc386/units/i386-win32"
+        fi
+        extra=(PPC386="$(realpath "$PPC386")" RTL386="$(realpath "$RTL386")")
+    fi
+    env PJA_DIR="$SRC_DIR/pja" OUT="$SRC_DIR/$PJA_WIN" ARCH="$1" "${extra[@]}" \
+        bash "$SRC_DIR/pja/pas/frontera_win.sh" > /dev/null || fail "pjaffi DLL ($1 bits)"
 }
 
 # ─── Windows x64 ─────────────────────────────────────────────────────────────
@@ -148,11 +177,14 @@ else
         skip "Windows x64 JPEG-LS: source/winlibs/x86_64 not found"
     fi
 
-    (cd "$SRC_DIR" && $WIN64 $CFLAGS $WIN64_JLS \
+    pja_dll 64
+    (cd "$SRC_DIR" && $WIN64 $CFLAGS $WIN64_JLS $PJA_DEFS \
         -o "../$DIST/packJPG_win_x64.exe" \
-        $SRC $WIN64_JLS_SRC $ICONS64 $WIN64_JLS_LIBS \
+        $SRC $WIN64_JLS_SRC $ICONS64 $WIN64_JLS_LIBS $PJA_WIN/64/libpjaffi_x64.dll.a \
         -static -static-libgcc -static-libstdc++ \
         && x86_64-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x64.exe")
+    cp "$SRC_DIR/$PJA_WIN/64/pjaffi_x64.dll" "$DIST/"
+    ok "dist/pjaffi_x64.dll (goes next to packJPG_win_x64.exe)"
     [ -f "$SRC_DIR/icons_x64.o" ] && rm -f "$SRC_DIR/icons_x64.o"
     ok "dist/packJPG_win_x64.exe"
 fi
@@ -189,11 +221,14 @@ else
         skip "Windows x86 JPEG-LS: source/winlibs/i686 not found"
     fi
 
-    (cd "$SRC_DIR" && $WIN86 $CFLAGS $WIN86_JLS \
+    pja_dll 32
+    (cd "$SRC_DIR" && $WIN86 $CFLAGS $WIN86_JLS $PJA_DEFS \
         -o "../$DIST/packJPG_win_x86.exe" \
-        $SRC $WIN86_JLS_SRC $ICONS86 $WIN86_JLS_LIBS \
+        $SRC $WIN86_JLS_SRC $ICONS86 $WIN86_JLS_LIBS $PJA_WIN/32/libpjaffi_x86.dll.a \
         -static -static-libgcc -static-libstdc++ \
         && i686-w64-mingw32-strip --strip-unneeded "../$DIST/packJPG_win_x86.exe")
+    cp "$SRC_DIR/$PJA_WIN/32/pjaffi_x86.dll" "$DIST/"
+    ok "dist/pjaffi_x86.dll (goes next to packJPG_win_x86.exe)"
     [ -f "$SRC_DIR/icons_x86.o" ] && rm -f "$SRC_DIR/icons_x86.o"
     ok "dist/packJPG_win_x86.exe"
 fi
