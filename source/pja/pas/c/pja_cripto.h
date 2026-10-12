@@ -5,13 +5,12 @@
 #define PJA_CRIPTO_H
 #include <stddef.h>
 #include <stdint.h>
-/* BLAKE3 de la concatenación a ‖ b, truncado a 16 bytes. Dos tramos porque el
- * hash del índice cubre cab[0..12] ‖ índice sin copiarlos a un búfer común;
- * para un solo tramo, nb = 0. */
+/* BLAKE3 de la concatenación a ‖ b, truncado a 16 bytes. Para un solo tramo,
+ * nb = 0. */
 void pja_blake3_128(const uint8_t *a, size_t na, const uint8_t *b, size_t nb, uint8_t out[16]);
 
-/* Argon2id (v1.3) sin secreto ni datos asociados: lo mismo que
- * argon2::Argon2::hash_password_into del Rust de referencia. Reserva su área de
+/* Argon2id (v1.3) sin secreto ni datos asociados (verificado contra el crate
+ * argon2 de RustCrypto: pas/pruebas/kat.txt). Reserva su área de
  * trabajo (m_kib KiB), la limpia y la libera. 0 = bien; -1 = parámetros
  * inválidos o sin memoria. Nunca aborta. */
 int pja_argon2id(const uint8_t *pass, size_t npass, const uint8_t *salt, size_t nsalt,
@@ -29,4 +28,9 @@ int pja_aead_unlock(const uint8_t key[32], const uint8_t nonce[24],
                     const uint8_t *cifra, size_t n, const uint8_t mac[16], uint8_t *plano);
 
 void pja_wipe(void *p, size_t n);
+
+/* n bytes del generador del sistema (getrandom o /dev/urandom; RtlGenRandom en
+ * Windows). 0 = bien; -1 = no hubo de donde sacarlos. Para la sal y el nonce:
+ * nunca se cae a un generador propio. */
+int pja_aleatorio(uint8_t *buf, size_t n);
 #endif

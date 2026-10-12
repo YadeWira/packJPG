@@ -1,5 +1,3 @@
-target/
-Cargo.lock
 test_frontera
 pjatool
 /pruebas/

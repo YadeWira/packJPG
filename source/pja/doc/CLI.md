@@ -57,37 +57,40 @@ packPNG, que cubre `a`/`x`/`list`.
 | `-sfth` | `--parallel-stages` | dice qué hace |
 | `-maxout256` | `--max-output=256M` | con unidad |
 | `-odsalida/` | `-o` (ver 2.1), `--output-dir=` | `-C` descartado |
-| `-fs` | `--keep-structure` | lo reusa el contenedor |
+| `-fs` | `--keep-structure` | |
 | `-r` | `-r`, `--recursive` | se queda |
 | `-dry` | `-n`, `--dry-run` | convención |
 | `-module` | `--porcelain` | |
 | `--no-color` | `--no-color` | se queda |
 
-## 2. Switches nuevos
+## 2. Switches nuevos: el formato `.pja`
+
+Un `.pja` es un JPEG por archivo (`FORMATO.md`). El contenedor de varios
+archivos que esta sección describía antes (`--archive`, `-C`, rutas adentro)
+se descartó el 12/10/2026.
 
 | switch | qué hace |
 |---|---|
-| `--archive` | crear un contenedor multi-archivo |
-| `-o NOMBRE` | nombre del contenedor de salida |
-| `-e`, `--encrypt` | pedir contraseña interactiva, **sin eco**, dos veces al crear |
+| `--pja` | comprimir a `.pja` en vez de `.pjg`: el JPEG con su tamaño y su hash, verificados al extraer |
+| `-e`, `--encrypt` | `.pja` cifrado; pide la contraseña interactiva, **sin eco**, dos veces al crear |
+| `--password=TEXTO` | la contraseña en la línea de comandos (ver §3) |
+| `--password-stdin` | la contraseña por la entrada estándar (patrón de docker) |
 | `--password-file=RUTA` | para scripts; rechaza si el archivo tiene permisos más amplios que `0600` |
-| `--keep-structure` | preservar rutas dentro del contenedor |
-| `--keep-corrupt` | al extraer, un miembro cuyo hash no coincide se renombra a `<nombre>.corrupto` en vez de borrarse |
+| `--keep-corrupt` | al extraer, un JPEG cuyo hash no coincide se renombra a `<nombre>.corrupto` en vez de borrarse |
 
-**`list` sobre un contenedor cifrado pide contraseña.** No es una decisión de
-la CLI sino del formato: el índice viaja adentro del cifrado, así que no hay
-nada que listar sin la clave. Ver `FORMATO.md` §1.
-
-**`-o` y `-C` no colisionan porque significan cosas distintas:** `-o` es un
-archivo de salida (convención de `gcc`, `curl`), `-C` es un directorio destino
-(convención de `tar`). Si el argumento de uno tiene la forma del otro, se
-rechaza con un mensaje que nombra el correcto.
+Extraer no necesita switch: el `.pja` se reconoce por la magia, y si está
+cifrado se pide la contraseña.
 
 ```
-crear:     packJPG --archive -o timelapse.pjg *.jpg
-extraer:   packJPG x timelapse.pjg -C fotos/
+crear:     packJPG a --pja -e foto.jpg       -> foto.pja, cifrado
+extraer:   packJPG x foto.pja                -> foto.jpg, si el hash coincide
 ```
 
+**Sin decidir:** si `--pja` pasa a ser el formato por defecto de `a`, con el
+`.pjg` como opción. A favor: la verificación del hash detecta los `.pjg`
+alterados que decodifican a otro JPEG válido (entre el 1 % y el 21 % de los
+bits volteados, medido). En contra: 24 bytes por archivo, y los `.pjg` que ya
+consumen packPDF y los demás.
 
 ### 2.1 `-o`, con semántica de `cp`
 
@@ -113,11 +116,21 @@ archivo y ganaría el último, en silencio. Es la misma regla que aplica `cp`.
 `--output-dir=` queda como forma larga que **sólo** acepta directorios, para
 scripts que prefieran ser inequívocos.
 
-## 3. Lo que nunca va a existir
+## 3. `--password` en la línea de comandos
 
-`--password TEXTO`. Queda en el historial del shell, en `ps` para cualquier otro
-usuario de la máquina, y en `/proc/<pid>/cmdline`. **Que no exista es la única
-forma de que nadie la use.**
+**Existe, por decisión del 15/09/2026:** el usuario decide qué usar. La
+exposición es real (el historial del shell, `ps` y `/proc/<pid>/cmdline` para
+cualquier usuario de la máquina), así que va con mitigaciones y con
+alternativas mejores al lado, no en su lugar:
+
+- el argumento se **borra de `argv` apenas se parsea**. Medido en Linux:
+  sobrescribirlo in situ cambia lo que muestra `/proc/self/cmdline`. Queda una
+  ventana entre el `exec` y el borrado, y no ayuda con el historial del shell.
+  **En Windows no está medido**: la línea de comandos vive en el PEB y
+  sobrescribir el `argv` de la CRT puede no cambiar lo que ven WMI o Process
+  Explorer.
+- `--password-stdin`, `--password-file=` y el prompt sin eco no tienen esa
+  exposición.
 
 ## 4. Reglas del parseo
 

@@ -1,7 +1,4 @@
-{ Port de pjaffi/src/lib.rs: la frontera C++ <-> Pascal del contenedor.
-
-  La misma superficie que la version Rust (include/pjacore.h), con los mismos
-  codigos de estado, mas pja_iniciar/pja_terminar y dos codigos nuevos.
+{ La frontera C++ <-> Pascal del formato .pja (include/pjacore.h).
 
   Reglas, todas medidas en el spike de enlace (fpc-link/RESULTADOS.md):
   - entra puntero + largo, sale un codigo de estado; 0 es exito
@@ -17,8 +14,7 @@
   - olvidarse de inicializar el runtime NO falla solo: el camino normal anda
     y la proteccion de rango se apaga. Por eso la bandera, y PJA_ERR_NO_INIT.
   - ninguna excepcion cruza hacia C++ (seria comportamiento indefinido): la
-    implementacion las convierte en PJA_ERR_INTERNO. El Rust abortaba el
-    proceso; aca vuelve un codigo. }
+    implementacion las convierte en PJA_ERR_INTERNO. }
 library pjaffi;
 {$I pja.inc}
 {$ifdef MSWINDOWS}
@@ -29,7 +25,7 @@ library pjaffi;
 
 uses
   {$ifdef unix} cthreads, {$endif}
-  SysUtils, pjacripto, pjaindice, pjaescritor, pjacifrado, pjacontenedor;
+  SysUtils, pjacripto, pjacifrado, pjaformato;
 
 const
   PJA_OK            = 0;
@@ -37,30 +33,18 @@ const
   PJA_ERR_BUF_CHICO = -2;
   PJA_ERR_FORMATO   = -3;
   PJA_ERR_LIMITE    = -4;
-  PJA_ERR_NOMBRE    = -5;
   PJA_ERR_CLAVE     = -6;
-  PJA_ERR_INDICE    = -7;
-  PJA_ERR_RANGO     = -8;
+  PJA_ERR_ALTERADO  = -7;
   PJA_ERR_INTERNO   = -9;    { una excepcion adentro: un defecto nuestro, nunca una entrada valida }
   PJA_ERR_NO_INIT   = -10;   { se llamo sin pja_iniciar (enlace estatico) }
+  PJA_ERR_ALEATORIO = -11;
 
 type
   TPjaAbierto = record
-    a: TAbierto;
+    p: TPja;
   end;
   PPjaAbierto = ^TPjaAbierto;
   PPPjaAbierto = ^PPjaAbierto;
-
-  { Mismo layout que PjaEntradaC en pjacore.h. }
-  TPjaEntradaC = record
-    nombre: PByte;
-    nombre_largo: SizeUInt;
-    payload: PByte;
-    payload_largo: SizeUInt;
-    hash: THash16;
-    tam_orig: QWord;
-  end;
-  PPjaEntradaC = ^TPjaEntradaC;
 
 var
   { Dato estatico: legible ANTES de que corra la inicializacion de la unidad.
@@ -70,21 +54,26 @@ var
 { ------------------------------------------------------------------------
   Implementacion. Aca si puede haber variables administradas y try. }
 
-function Traducir(const r: TResultadoContenedor): LongInt;
+function Traducir(const r: TResultadoPja): LongInt;
 begin
   case r.err of
-    ecoNinguno: Result := PJA_OK;
-    ecoContrasenaFaltante, ecoContrasenaSobrante, ecoCifrado: Result := PJA_ERR_CLAVE;
-    ecoArchivoCorto: Result := PJA_ERR_FORMATO;
-    ecoEscritura: Result := PJA_ERR_NOMBRE;
-    ecoIndice:
-      case r.indice.err of
-        eNombreInvalido, eNombreDuplicado: Result := PJA_ERR_NOMBRE;
-        eIndiceAlterado: Result := PJA_ERR_INDICE;
-        eDemasiadosMiembros, eCountImposible, eRatioExcedido, ePresupuestoExcedido,
-        eSumaNoCuadra, ePayloadFueraDeRango, eDesborde: Result := PJA_ERR_LIMITE;
-      else Result := PJA_ERR_FORMATO;
+    epNinguno: Result := PJA_OK;
+    epArchivoCorto, epNoEsPja, epVersionFutura, epVersionVieja, epFlagDesconocido,
+    epReservadoNoCero, epPerfilKdfDesconocido: Result := PJA_ERR_FORMATO;
+    epContrasenaFaltante, epContrasenaSobrante: Result := PJA_ERR_CLAVE;
+    epCifrado:
+      case r.cifrado.err of
+        { el primer trozo: contraseña equivocada o trozo alterado, el AEAD no
+          los distingue }
+        ecTrozoAlterado: if r.cifrado.valor = 0 then Result := PJA_ERR_CLAVE
+                         else Result := PJA_ERR_ALTERADO;
+        ecTruncado, ecSobranTrozos: Result := PJA_ERR_ALTERADO;
+        ecFormato: Result := PJA_ERR_FORMATO;
+      else Result := PJA_ERR_INTERNO;
       end;
+    epCabeceraAlterada: Result := PJA_ERR_ALTERADO;
+    epPayloadFueraDeRango, epTamOrigInvalido, epRatioExcedido, epDesborde: Result := PJA_ERR_LIMITE;
+    epSinAleatorio: Result := PJA_ERR_ALEATORIO;
   else Result := PJA_ERR_INTERNO;
   end;
 end;
@@ -97,16 +86,30 @@ begin
   if n > 0 then Move(p^, Result[0], n);
 end;
 
+function ExaminarImpl(datos: PByte; largo: SizeUInt; cifrado: PLongInt): LongInt;
+var c: Boolean; r: TResultadoPja; cab: TBytes;
+begin
+  try
+    { solo los 8 bytes que se miran: no copiar un archivo de 200 MB para eso }
+    if largo > TAM_CABECERA then largo := TAM_CABECERA;
+    cab := Copiar(datos, largo);
+    r := Examinar(cab, c);
+    if not r.Ok then Exit(Traducir(r));
+    cifrado^ := Ord(c);
+    Result := PJA_OK;
+  except Result := PJA_ERR_INTERNO; end;
+end;
+
 function AbrirImpl(datos: PByte; largo: SizeUInt; pass: PByte; pass_largo: SizeUInt;
                    salida: PPPjaAbierto): LongInt;
-var d: TBytes; h: PPjaAbierto; r: TResultadoContenedor;
+var d: TBytes; h: PPjaAbierto; r: TResultadoPja;
 begin
   h := nil;
   try
     d := Copiar(datos, largo);
     New(h);
-    if pass = nil then r := Abrir(d, h^.a)
-    else r := Abrir(d, Copiar(pass, pass_largo), h^.a);
+    if pass = nil then r := Abrir(d, h^.p)
+    else r := Abrir(d, Copiar(pass, pass_largo), h^.p);
     if not r.Ok then begin Dispose(h); h := nil; Exit(Traducir(r)); end;
     salida^ := h;
     Result := PJA_OK;
@@ -121,58 +124,11 @@ begin
   try Dispose(h); except end;
 end;
 
-{ Copia `src` al buffer del llamador, con los chequeos de largo de la frontera. }
-function CopiarAfuera(const src: TBytes; buf: PByte; buf_largo: SizeUInt): LongInt;
-begin
-  if buf_largo < SizeUInt(Length(src)) then Exit(PJA_ERR_BUF_CHICO);
-  if Length(src) > 0 then Move(src[0], buf^, Length(src));
-  Result := PJA_OK;
-end;
-
-function CantidadImpl(h: PPjaAbierto): Int64;
-begin
-  try Result := Length(h^.a.contenedor.miembros); except Result := PJA_ERR_INTERNO; end;
-end;
-
-function NombreLargoImpl(h: PPjaAbierto; i: SizeUInt): Int64;
+function PayloadImpl(h: PPjaAbierto; buf: PByte; buf_largo: SizeUInt): LongInt;
 begin
   try
-    if i >= SizeUInt(Length(h^.a.contenedor.miembros)) then Exit(PJA_ERR_RANGO);
-    Result := Length(h^.a.contenedor.miembros[i].nombre);
-  except Result := PJA_ERR_INTERNO; end;
-end;
-
-function NombreImpl(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt;
-begin
-  try
-    if i >= SizeUInt(Length(h^.a.contenedor.miembros)) then Exit(PJA_ERR_RANGO);
-    Result := CopiarAfuera(h^.a.contenedor.miembros[i].nombre, buf, buf_largo);
-  except Result := PJA_ERR_INTERNO; end;
-end;
-
-function PayloadLargoImpl(h: PPjaAbierto; i: SizeUInt): Int64;
-begin
-  try
-    if i >= SizeUInt(Length(h^.a.payloads)) then Exit(PJA_ERR_RANGO);
-    Result := Length(h^.a.payloads[i]);
-  except Result := PJA_ERR_INTERNO; end;
-end;
-
-function PayloadImpl(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt;
-begin
-  try
-    if i >= SizeUInt(Length(h^.a.payloads)) then Exit(PJA_ERR_RANGO);
-    Result := CopiarAfuera(h^.a.payloads[i], buf, buf_largo);
-  except Result := PJA_ERR_INTERNO; end;
-end;
-
-function HashImpl(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt;
-begin
-  try
-    { el orden de los chequeos es el del Rust: buffer chico antes que rango }
-    if buf_largo < 16 then Exit(PJA_ERR_BUF_CHICO);
-    if i >= SizeUInt(Length(h^.a.contenedor.miembros)) then Exit(PJA_ERR_RANGO);
-    Move(h^.a.contenedor.miembros[i].hash[0], buf^, 16);
+    if buf_largo < SizeUInt(Length(h^.p.payload)) then Exit(PJA_ERR_BUF_CHICO);
+    if Length(h^.p.payload) > 0 then Move(h^.p.payload[0], buf^, Length(h^.p.payload));
     Result := PJA_OK;
   except Result := PJA_ERR_INTERNO; end;
 end;
@@ -187,49 +143,46 @@ begin
   except Result := PJA_ERR_INTERNO; end;
 end;
 
-{ recolectar() del Rust: nulo en una entrada (o en la lista con n > 0) es PJA_ERR_NULL. }
-function Recolectar(ents: PPjaEntradaC; n: SizeUInt; out es: TEntradas): Boolean;
-var i: SizeUInt; e: PPjaEntradaC;
-begin
-  es := nil;
-  if (ents = nil) and (n <> 0) then Exit(False);
-  SetLength(es, n);
-  if n > 0 then
-    for i := 0 to n - 1 do begin
-      e := ents + i;
-      if (e^.nombre = nil) or (e^.payload = nil) then Exit(False);
-      es[i].nombre := Copiar(e^.nombre, e^.nombre_largo);
-      es[i].payload := Copiar(e^.payload, e^.payload_largo);
-      if e^.tam_orig <> 0 then es[i].tam_orig := e^.tam_orig else es[i].tam_orig := e^.payload_largo;
-      es[i].hash := e^.hash;
-    end;
-  Result := True;
-end;
-
-function EscribirLargoImpl(ents: PPjaEntradaC; n: SizeUInt; flags: Byte): Int64;
-var es: TEntradas; bytes: TBytes; av: TAvisos; r: TResultadoContenedor;
+function EscribirLargoImpl(payload_largo: SizeUInt; cifrado: LongInt): Int64;
 begin
   try
-    if not Recolectar(ents, n, es) then Exit(PJA_ERR_NULL);
-    r := EscribirContenedor(es, flags, bytes, av);
-    if not r.Ok then Exit(Traducir(r));
-    Result := Length(bytes);
+    if payload_largo > SizeUInt(High(SizeInt)) then Exit(PJA_ERR_LIMITE);
+    Result := LargoEscrito(Int64(payload_largo), cifrado <> 0);
+    if Result < 0 then Result := PJA_ERR_LIMITE;
   except Result := PJA_ERR_INTERNO; end;
 end;
 
-function EscribirImpl(ents: PPjaEntradaC; n: SizeUInt; flags: Byte; buf: PByte; buf_largo: SizeUInt): LongInt;
-var es: TEntradas; bytes: TBytes; av: TAvisos; r: TResultadoContenedor;
+function EscribirImpl(payload: PByte; payload_largo: SizeUInt; hash: PByte; tam_orig: QWord;
+                      pass: PByte; pass_largo: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt;
+var pl, bytes: TBytes; h: THash16; r: TResultadoPja; n: Int64;
 begin
   try
-    if not Recolectar(ents, n, es) then Exit(PJA_ERR_NULL);
-    r := EscribirContenedor(es, flags, bytes, av);
+    if payload_largo > SizeUInt(High(SizeInt)) then Exit(PJA_ERR_LIMITE);
+    { El buffer chico se rechaza ANTES de derivar: con cifrado, el escritor
+      pagaria 64 MiB de Argon2id para despues no poder entregar nada. }
+    n := LargoEscrito(Int64(payload_largo), pass <> nil);
+    if n < 0 then Exit(PJA_ERR_LIMITE);
+    if buf_largo < SizeUInt(n) then Exit(PJA_ERR_BUF_CHICO);
+    pl := Copiar(payload, payload_largo);
+    Move(hash^, h[0], 16);
+    if pass = nil then r := Escribir(pl, h, tam_orig, bytes)
+    else r := Escribir(pl, h, tam_orig, Copiar(pass, pass_largo), bytes);
     if not r.Ok then Exit(Traducir(r));
-    Result := CopiarAfuera(bytes, buf, buf_largo);
+    if Length(bytes) <> n then raise Exception.Create('pja_escribir: largo distinto del anunciado');
+    Move(bytes[0], buf^, Length(bytes));
+    Result := PJA_OK;
   except Result := PJA_ERR_INTERNO; end;
 end;
 
 { ------------------------------------------------------------------------
   La frontera: cascaras. Sin variables administradas, sin try. }
+
+function pja_examinar(datos: PByte; largo: SizeUInt; cifrado: PLongInt): LongInt; cdecl;
+begin
+  if not inicializado then Exit(PJA_ERR_NO_INIT);
+  if (cifrado = nil) or ((datos = nil) and (largo <> 0)) then Exit(PJA_ERR_NULL);
+  Result := ExaminarImpl(datos, largo, cifrado);
+end;
 
 function pja_abrir(datos: PByte; largo: SizeUInt; pass: PByte; pass_largo: SizeUInt;
                    salida: PPPjaAbierto): LongInt; cdecl;
@@ -246,46 +199,34 @@ begin
   if h <> nil then CerrarImpl(h);
 end;
 
-function pja_cantidad(h: PPjaAbierto): Int64; cdecl;
+function pja_tam_orig(h: PPjaAbierto): Int64; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
   if h = nil then Exit(PJA_ERR_NULL);
-  Result := CantidadImpl(h);
+  Result := Int64(h^.p.tam_orig);    { ValidarDescriptor garantiza <= High(Int64) }
 end;
 
-function pja_nombre_largo(h: PPjaAbierto; i: SizeUInt): Int64; cdecl;
+function pja_payload_largo(h: PPjaAbierto): Int64; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
   if h = nil then Exit(PJA_ERR_NULL);
-  Result := NombreLargoImpl(h, i);
+  Result := Length(h^.p.payload);
 end;
 
-function pja_nombre(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
+function pja_payload(h: PPjaAbierto; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
   if (h = nil) or (buf = nil) then Exit(PJA_ERR_NULL);
-  Result := NombreImpl(h, i, buf, buf_largo);
+  Result := PayloadImpl(h, buf, buf_largo);
 end;
 
-function pja_payload_largo(h: PPjaAbierto; i: SizeUInt): Int64; cdecl;
-begin
-  if not inicializado then Exit(PJA_ERR_NO_INIT);
-  if h = nil then Exit(PJA_ERR_NULL);
-  Result := PayloadLargoImpl(h, i);
-end;
-
-function pja_payload(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
+function pja_hash(h: PPjaAbierto; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
   if (h = nil) or (buf = nil) then Exit(PJA_ERR_NULL);
-  Result := PayloadImpl(h, i, buf, buf_largo);
-end;
-
-function pja_hash(h: PPjaAbierto; i: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
-begin
-  if not inicializado then Exit(PJA_ERR_NO_INIT);
-  if (h = nil) or (buf = nil) then Exit(PJA_ERR_NULL);
-  Result := HashImpl(h, i, buf, buf_largo);
+  if buf_largo < 16 then Exit(PJA_ERR_BUF_CHICO);
+  Move(h^.p.hash[0], buf^, 16);
+  Result := PJA_OK;
 end;
 
 function pja_hash128(datos: PByte; largo: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
@@ -297,22 +238,24 @@ begin
   Result := Hash128Impl(datos, largo, buf);
 end;
 
-function pja_escribir_largo(ents: PPjaEntradaC; n: SizeUInt; flags: Byte): Int64; cdecl;
+function pja_escribir_largo(payload_largo: SizeUInt; cifrado: LongInt): Int64; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
-  Result := EscribirLargoImpl(ents, n, flags);
+  Result := EscribirLargoImpl(payload_largo, cifrado);
 end;
 
-function pja_escribir(ents: PPjaEntradaC; n: SizeUInt; flags: Byte; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
+function pja_escribir(payload: PByte; payload_largo: SizeUInt; hash: PByte; tam_orig: QWord;
+                      pass: PByte; pass_largo: SizeUInt; buf: PByte; buf_largo: SizeUInt): LongInt; cdecl;
 begin
   if not inicializado then Exit(PJA_ERR_NO_INIT);
-  if buf = nil then Exit(PJA_ERR_NULL);
-  Result := EscribirImpl(ents, n, flags, buf, buf_largo);
+  if (buf = nil) or (hash = nil) or ((payload = nil) and (payload_largo <> 0))
+     or ((pass = nil) and (pass_largo <> 0)) then Exit(PJA_ERR_NULL);
+  Result := EscribirImpl(payload, payload_largo, hash, tam_orig, pass, pass_largo, buf, buf_largo);
 end;
 
 function pja_version: LongWord; cdecl;
 begin
-  Result := 1;
+  Result := VERSION;
 end;
 
 { 1 si el runtime esta inicializado. Para que el anfitrion lo verifique. }
@@ -351,11 +294,10 @@ end;
 { `name` explicito y nada mas: sin el, la tabla de exportacion se lleva
   tambien los nombres internos de Pascal (fpc-link). }
 exports
+  pja_examinar name 'pja_examinar',
   pja_abrir name 'pja_abrir',
   pja_cerrar name 'pja_cerrar',
-  pja_cantidad name 'pja_cantidad',
-  pja_nombre_largo name 'pja_nombre_largo',
-  pja_nombre name 'pja_nombre',
+  pja_tam_orig name 'pja_tam_orig',
   pja_payload_largo name 'pja_payload_largo',
   pja_payload name 'pja_payload',
   pja_hash name 'pja_hash',

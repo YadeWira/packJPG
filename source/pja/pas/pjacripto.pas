@@ -1,7 +1,8 @@
 { Primitivas criptograficas, en C, detras de una frontera angosta.
 
   El cifrado NO se escribe en Pascal: va en C (BLAKE3 1.8.7 y Monocypher 4.0.3
-  oficiales), verificados byte a byte contra el Rust de referencia.
+  oficiales), verificados byte a byte contra los vectores que produjo el Rust
+  de referencia antes de retirarlo (pruebas/kat.txt).
   Esta unidad es la unica que toca punteros hacia C, y los toma recien DESPUES
   de validar los limites del tramo sobre el arreglo, con $R+: los accesos por
   puntero no estan controlados, y @a[0] de un arreglo vacio dispara el control
@@ -43,6 +44,8 @@ function AeadUnlock(const clave: TClave; const nonce: TNonce; const ad: array of
                     const datos: TBytes; ini, n: SizeInt; out plano: TBytes): Boolean;
 { Pone en cero de una forma que el compilador no puede sacar por "inutil". }
 procedure Limpiar(var x; n: SizeInt);
+{ n bytes del generador del sistema. False si no hubo: el llamador no sigue. }
+function Aleatorio(out x; n: SizeInt): Boolean;
 
 implementation
 
@@ -53,7 +56,8 @@ implementation
 {$L monocypher.o}
 { malloc/memcpy/strlen/_assert del C: libc en Unix; en Windows msvcrt, que es la
   que trae todo Windows desde 7 (la libc.a de Linux ni siquiera es COFF). }
-{$ifdef MSWINDOWS}{$linklib msvcrt}{$else}{$linklib c}{$endif}
+{ advapi32: RtlGenRandom (SystemFunction036), para Aleatorio. }
+{$ifdef MSWINDOWS}{$linklib msvcrt}{$linklib advapi32}{$else}{$linklib c}{$endif}
 { libgcc: BLAKE3 cuenta bits con __builtin_popcountll, que sin -mpopcnt GCC
   resuelve llamando a __popcountdi2 de libgcc. -mpopcnt no es opcion: esa
   instruccion no existe en CPUs viejas de 32 bits. El build pasa la ruta con -Fl. }
@@ -69,6 +73,7 @@ procedure pja_aead_lock(key, nonce, ad: PByte; nad: SizeUInt; plano: PByte; n: S
 function pja_aead_unlock(key, nonce, ad: PByte; nad: SizeUInt; cifra: PByte; n: SizeUInt;
   mac, plano: PByte): LongInt; cdecl; external name 'pja_aead_unlock';
 procedure pja_wipe(p: Pointer; n: SizeUInt); cdecl; external name 'pja_wipe';
+function pja_aleatorio(buf: Pointer; n: SizeUInt): LongInt; cdecl; external name 'pja_aleatorio';
 
 function Puntero(const x: TBytes; ini, largo: SizeInt): PByte;
 begin
@@ -133,6 +138,12 @@ end;
 procedure Limpiar(var x; n: SizeInt);
 begin
   if n > 0 then pja_wipe(@x, n);
+end;
+
+function Aleatorio(out x; n: SizeInt): Boolean;
+begin
+  FillChar(x, n, 0);
+  Result := (n <= 0) or (pja_aleatorio(@x, n) = 0);
 end;
 
 end.

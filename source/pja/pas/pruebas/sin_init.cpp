@@ -12,18 +12,18 @@
 static int todas(void) {
     uint8_t b[64] = {0};
     PjaAbierto* h = nullptr;
-    PjaEntradaC e = {b, 1, b, 20, {0}, 0};
+    int32_t cif = 7;
     int malas = 0;
+    malas += pja_examinar(b, 64, &cif) != PJA_ERR_NO_INIT || cif != 7;
     malas += pja_abrir(b, 64, nullptr, 0, &h) != PJA_ERR_NO_INIT || h != nullptr;
-    malas += pja_cantidad((PjaAbierto*)b) != PJA_ERR_NO_INIT;      // ni siquiera mira el puntero
-    malas += pja_nombre_largo((PjaAbierto*)b, 0) != PJA_ERR_NO_INIT;
-    malas += pja_nombre((PjaAbierto*)b, 0, b, 64) != PJA_ERR_NO_INIT;
-    malas += pja_payload_largo((PjaAbierto*)b, 0) != PJA_ERR_NO_INIT;
-    malas += pja_payload((PjaAbierto*)b, 0, b, 64) != PJA_ERR_NO_INIT;
-    malas += pja_hash((PjaAbierto*)b, 0, b, 64) != PJA_ERR_NO_INIT;
+    malas += pja_tam_orig((PjaAbierto*)b) != PJA_ERR_NO_INIT;      // ni siquiera mira el puntero
+    malas += pja_payload_largo((PjaAbierto*)b) != PJA_ERR_NO_INIT;
+    malas += pja_payload((PjaAbierto*)b, b, 64) != PJA_ERR_NO_INIT;
+    malas += pja_hash((PjaAbierto*)b, b, 64) != PJA_ERR_NO_INIT;
     malas += pja_hash128(b, 64, b, 16) != PJA_ERR_NO_INIT;
-    malas += pja_escribir_largo(&e, 1, 0) != PJA_ERR_NO_INIT;
-    malas += pja_escribir(&e, 1, 0, b, 64) != PJA_ERR_NO_INIT;
+    malas += pja_escribir_largo(20, 0) != PJA_ERR_NO_INIT;
+    malas += pja_escribir(b, 20, b, 100, nullptr, 0, b, 64) != PJA_ERR_NO_INIT;
+    malas += pja_escribir(b, 20, b, 100, b, 3, b, 64) != PJA_ERR_NO_INIT;
     malas += pja_inicializado() != 0;
     pja_cerrar((PjaAbierto*)b);          // sin runtime no puede liberar nada: tiene que no tocarlo
     return malas;

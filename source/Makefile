@@ -134,7 +134,7 @@ $(TARGET): $(OBJ) $(RES)
 # --- standard targets --------------------------------------------------------
 
 .PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
-        native pgo pgo-clean pja pja-tests pja-clean pja-corpus pja-pas-tests pja-pas-lib
+        native pgo pgo-clean pja pja-tests pja-clean pja-corpus pja-check
 
 all: $(TARGET)
 
@@ -317,41 +317,41 @@ so:
 	@echo "[OK] $(SONAME) — exported symbols:"
 	@nm -D --defined-only $(SONAME) | awk '{print "      "$$3}' | grep pjglib_ || true
 
-# --- contenedor PJA (Rust) ---------------------------------------------------
-# Deliberadamente FUERA de `all`. El codec se compila sin Rust instalado y va a
-# seguir siendo asi: quien solo quiera packJPG no necesita una toolchain mas.
-# `make pja` es el opt-in.
+# --- formato .pja (FreePascal) ----------------------------------------------
+# Deliberadamente FUERA de `all`. El codec se compila sin FreePascal instalado y
+# va a seguir siendo asi: quien solo quiera packJPG no necesita una toolchain
+# mas. `make pja` es el opt-in.
 #
-# CARGO se puede pisar (make pja CARGO=/ruta/cargo). Si no esta, el target
+# FPC_PAS se puede pisar (make pja FPC_PAS=/ruta/fpc). Si no esta, el target
 # falla con una instruccion, no con "command not found" a 40 lineas de
 # profundidad.
-CARGO    ?= cargo
-PJA_DIR   = pja
-PJA_LIB   = $(PJA_DIR)/target/release/libpjaffi.a
+FPC_PAS ?= fpc
+PJA_DIR  = pja
+PAS_DIR  = $(PJA_DIR)/pas
+PAS_OUT  = $(PAS_DIR)/build
+PAS_LIB  = $(PAS_OUT)/libpjaffi_pas.a
 
-$(PJA_LIB): $(wildcard $(PJA_DIR)/*/src/*.rs) $(wildcard $(PJA_DIR)/*/Cargo.toml) $(PJA_DIR)/Cargo.toml
-	@command -v $(CARGO) >/dev/null 2>&1 || { \
-	  echo "ERROR: no encuentro '$(CARGO)'. El contenedor PJA se compila con"; \
-	  echo "       la toolchain de Rust (https://rustup.rs), que NO hace falta"; \
-	  echo "       para packJPG en si. Instalala, o pasa la ruta:"; \
-	  echo "         make pja CARGO=/ruta/a/cargo"; \
+define PJA_SIN_FPC
+	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
+	  echo "ERROR: no encuentro '$(FPC_PAS)'. El formato .pja se compila con"; \
+	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
+	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
+	  echo "         make $@ FPC_PAS=/ruta/a/fpc"; \
 	  exit 1; }
-	$(CARGO) build --release --manifest-path $(PJA_DIR)/Cargo.toml
+endef
 
-pja: $(PJA_LIB)
-	@echo "[OK] $(PJA_LIB)"
+# El nucleo entero en una .a para enlazar estatica (Linux). Ver pas/frontera.sh.
+$(PAS_LIB): $(wildcard $(PAS_DIR)/*.pas) $(PAS_DIR)/pja.inc $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera.sh
+	$(PJA_SIN_FPC)
+	FPC=$(FPC_PAS) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) bash $(PAS_DIR)/frontera.sh
 
-# Corpus para las pruebas de Rust del contenedor.
-#
-# Antes esas pruebas leian una ruta ABSOLUTA de la maquina de desarrollo. Pasaban
-# ahi y no podian pasar en ningun otro lado -- y una de ellas, peor, se salteaba
-# en silencio cuando el directorio no existia: verde, cero cobertura. Lo destapo
-# meter el contenedor en CI.
-#
-# El material sale de test-files/ comprimido por el packJPG DE ESTE ARBOL, que es
-# mejor que un fixture congelado: prueba contra lo que este commit produce. Se
-# generan las dos variantes de formato (normal y --parallel-stages) porque son
-# .pjg distintos y las pruebas necesitan mas de cinco.
+pja: $(PAS_LIB)
+	@echo "[OK] $(PAS_LIB)"
+
+# .pjg reales para las pruebas, comprimidos por el packJPG DE ESTE ARBOL: mejor
+# que un fixture congelado, prueba contra lo que este commit produce. Las dos
+# variantes de formato (normal y --parallel-stages), porque son .pjg distintos
+# y las pruebas necesitan mas de cinco.
 PJA_CORPUS_DIR = $(PJA_DIR)/pruebas/corpus
 
 pja-corpus: $(TARGET)
@@ -371,67 +371,29 @@ pja-corpus: $(TARGET)
 	 fi; \
 	 echo "[OK] $(PJA_CORPUS_DIR): $$n .pjg"
 
-# pjatool y test_frontera son consumidores de C++ de la frontera FFI.
-# pjatool ademas usa la libreria de packJPG, asi que necesita packJPGlib.a
-# — o sea -DBUILD_LIB. Sin eso el link se cae con undefined reference a
-# pjglib_init_streams, que no dice nada sobre la causa.
-#
-# PJA_NUCLEO elige que nucleo se enlaza detras de pjacore.h: `rust` (la
-# referencia, mientras dure el port) o `pascal` (libpjaffi_pas.a, que arma
-# pas/frontera.sh). La interfaz es la misma; el Pascal ademas exige
-# pja_iniciar al principio de main.
-PJA_NUCLEO ?= rust
-PAS_LIB     = $(PAS_OUT)/libpjaffi_pas.a
-ifeq ($(PJA_NUCLEO),pascal)
-PJA_NUCLEO_LIB = $(PAS_LIB)
-else
-PJA_NUCLEO_LIB = $(PJA_LIB)
-endif
-
-pja-tests: $(PJA_NUCLEO_LIB) lib
+# pjatool y test_frontera son consumidores de C++ de la frontera (pjacore.h),
+# con el nucleo enlazado estatico; los dos llaman a pja_iniciar al principio de
+# main. pjatool ademas usa la libreria de packJPG, asi que necesita
+# packJPGlib.a -- o sea -DBUILD_LIB. Sin eso el link se cae con undefined
+# reference a pjglib_init_streams, que no dice nada sobre la causa.
+pja-tests: $(PAS_LIB) lib
 	$(CXX) $(CXXFLAGS) -I$(PJA_DIR)/include $(PJA_DIR)/test_frontera.cpp \
-	    $(PJA_NUCLEO_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/test_frontera
+	    $(PAS_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/test_frontera
 	$(CXX) $(CXXFLAGS) -DBUILD_LIB -I. -I$(PJA_DIR)/include $(PJA_DIR)/pjatool.cpp \
-	    $(TARGET)lib.a $(PJA_NUCLEO_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/pjatool
-	@echo "[OK] pja tests ($(PJA_NUCLEO)): $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
-	@echo "     las pruebas de Rust van aparte: $(CARGO) test --release --manifest-path $(PJA_DIR)/Cargo.toml"
+	    $(TARGET)lib.a $(PAS_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/pjatool
+	@echo "[OK] $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
 
-# --- capa Pascal del contenedor (port desde Rust) ----------------------------
-# Opt-in como `pja`: packJPG en si no necesita FreePascal.
-#
-# El criterio de aceptacion del port es DIFERENCIAL: las mismas entradas pasan
-# por la version Rust (la referencia, `cargo run --example`) y por la de Pascal,
-# y tienen que dar lo mismo linea por linea. Las pruebas unitarias portadas
-# solo prueban que el Pascal hace lo que uno CREE que hace el Rust.
-FPC_PAS ?= fpc
-PAS_DIR  = $(PJA_DIR)/pas
-PAS_OUT  = $(PAS_DIR)/build
-
-# La capa Pascal entera en una .a para enlazar estatica (Linux). Ver pas/frontera.sh.
-$(PAS_LIB): $(wildcard $(PAS_DIR)/*.pas) $(PAS_DIR)/pja.inc $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera.sh
-	@command -v $(FPC_PAS) >/dev/null 2>&1 || { echo "ERROR: no encuentro '$(FPC_PAS)' (FreePascal 3.2)"; exit 1; }
-	FPC=$(FPC_PAS) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) bash $(PAS_DIR)/frontera.sh
-
-pja-pas-lib: $(PAS_LIB)
-
-# `lib` porque la suite tambien hace el round-trip de pjatool enlazado al
-# nucleo Pascal, y pjatool usa el codec.
-pja-pas-tests: $(PJA_LIB) pja-corpus lib
-	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
-	  echo "ERROR: no encuentro '$(FPC_PAS)'. La capa Pascal se compila con"; \
-	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
-	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
-	  echo "         make pja-pas-tests FPC_PAS=/ruta/a/fpc"; \
-	  exit 1; }
-	FPC=$(FPC_PAS) CARGO=$(CARGO) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) PJG_LIB=$(TARGET)lib.a \
+# La suite entera (pas/correr_pruebas.sh): guardias de fuente, pruebas Pascal,
+# la frontera C, y punta a punta con el codec. `lib` porque pjatool lo usa.
+pja-check: pja-corpus lib
+	$(PJA_SIN_FPC)
+	FPC=$(FPC_PAS) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) PJG_LIB=$(TARGET)lib.a \
 	    PJG_INC=. PJG_LIBS="$(CXXFLAGS) $(LDFLAGS) $(LIBS)" bash $(PAS_DIR)/correr_pruebas.sh
 
-# Aparte de `clean` a proposito: target/ de cargo son cientos de megas de
-# dependencias compiladas y borrarlo cuesta minutos de rebuild. `clean` saca
-# solo lo que produce este Makefile.
+# Aparte de `clean`: saca tambien el corpus y el build de FPC.
 pja-clean:
 	@echo pja-clean...
-	@-rm -rf $(PJA_DIR)/target $(PJA_DIR)/pruebas $(PAS_OUT)
+	@-rm -rf $(PJA_DIR)/pruebas $(PAS_OUT)
 	@-rm -f $(PJA_DIR)/test_frontera $(PJA_DIR)/pjatool
 
 clean:

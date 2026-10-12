@@ -1,5 +1,6 @@
-{ Cifrado autenticado por trozos. Port de pjacore/src/cifrado.rs, con las
-  primitivas en C (Monocypher 4.0.3) detras de pjacripto.
+{ Cifrado autenticado por trozos, con las primitivas en C (Monocypher 4.0.3)
+  detras de pjacripto. El esquema es el del Rust de referencia: los vectores
+  de pruebas/kat.txt lo fijan byte a byte.
 
   El MAC se verifica antes de que un byte llegue al codec. Por trozos de 64 KB
   y no en un bloque, porque un AEAD unico obligaria a tener el contenedor entero
@@ -7,12 +8,14 @@
   error clasico del cifrado por trozos: el NUMERO de trozo va en el AAD (asi
   reordenar falla) y el ULTIMO se marca en su propio AAD (asi truncar falla).
 
-  Heredado del Rust tal cual, para que la comparacion diferencial sea limpia:
-  - descifrar acepta trozos DESPUES del marcado como ultimo, si autentican.
-    No es explotable desde afuera (armar un trozo valido exige la clave), pero
-    pesa en el diseno append-only, donde quien tiene la clave SI agrega datos.
-  - ClaveIncorrecta esta declarada y nunca se produce: una contrasena
-    equivocada da TrozoAlterado(0). }
+  Una contrasena equivocada da TrozoAlterado(0): el AEAD no distingue entre
+  clave mala y primer trozo alterado, y no hay nada que agregar que lo haga
+  sin dar un oraculo mas barato que el propio Argon2id.
+
+  Dos diferencias con el Rust, ya sin diferencial que las ate: un trozo
+  DESPUES del marcado como ultimo se rechaza (SobranTrozos; el Rust lo
+  aceptaba si autenticaba), y ClaveIncorrecta, declarada alla y nunca
+  producida, no existe. }
 unit pjacifrado;
 
 {$I pja.inc}
@@ -30,12 +33,12 @@ const
   TAM_NONCE = 24;
 
 type
-  TErrorCifrado = (ecNinguno, ecClaveIncorrecta, ecTrozoAlterado, ecTruncado, ecFormato);
+  TErrorCifrado = (ecNinguno, ecTrozoAlterado, ecTruncado, ecFormato, ecSobranTrozos);
   TResultadoCifrado = record
     err: TErrorCifrado;
     valor: QWord;           { el numero de trozo, en TrozoAlterado }
     function Ok: Boolean;
-    function Texto: string; { mismo texto que el Debug de Rust }
+    function Texto: string;
   end;
 
   { Perfil de derivacion de clave. Va identificado por un byte en la cabecera,
@@ -71,11 +74,11 @@ begin Result := err = ecNinguno; end;
 function TResultadoCifrado.Texto: string;
 begin
   case err of
-    ecNinguno:         Result := 'Ninguno';
-    ecClaveIncorrecta: Result := 'ClaveIncorrecta';
-    ecTrozoAlterado:   Result := 'TrozoAlterado(' + IntToStr(valor) + ')';
-    ecTruncado:        Result := 'Truncado';
-    ecFormato:         Result := 'Formato';
+    ecNinguno:       Result := 'Ninguno';
+    ecTrozoAlterado: Result := 'TrozoAlterado(' + IntToStr(valor) + ')';
+    ecTruncado:      Result := 'Truncado';
+    ecFormato:       Result := 'Formato';
+    ecSobranTrozos:  Result := 'SobranTrozos';
   end;
 end;
 
@@ -180,6 +183,10 @@ begin
   salida := nil; SetLength(salida, Length(datos) - ini); n := 0;
   p := ini; i := 0; viElUltimo := False;
   while p < Length(datos) do begin
+    { Nada despues del ultimo: ni basura ni un trozo que autentique. Un trozo
+      valido de mas solo lo arma quien tiene la clave, pero "lo que sigue al
+      final no cuenta" es justo la clase de regla que se olvida al leer. }
+    if viElUltimo then begin salida := nil; Exit(RC(ecSobranTrozos)); end;
     if p + 4 > Length(datos) then begin salida := nil; Exit(RC(ecFormato)); end;
     largo := Int64(datos[p]) or (Int64(datos[p + 1]) shl 8) or (Int64(datos[p + 2]) shl 16)
              or (Int64(datos[p + 3]) shl 24);

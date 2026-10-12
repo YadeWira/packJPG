@@ -103,32 +103,29 @@ make dll    # Windows shared library (packJPG.dll) — MinGW cross-compile
 - The same C-linkage API is exposed by all three: the static `.a`, the
   Unix `.so`, and the Windows `.dll`.
 
-## The PJA container (Rust)
+## The PJA format (FreePascal)
 
-The multi-file container lives in `source/pja/` and is written in Rust. It is
+`.pja` is one JPEG compressed by packJPG, plus the original size and its
+BLAKE3-128 hash, optionally encrypted. Its core lives in `source/pja/` and is
+written in FreePascal, with the cryptography in C (Monocypher, BLAKE3). It is
 **not** part of `make all`, and that is deliberate: building packJPG itself does
-not require a Rust toolchain and never will. Opt in:
+not require FreePascal and never will. Opt in:
 
 ```
-make pja          # builds the Rust workspace -> pja/target/release/libpjaffi.a
+make pja          # pja/pas/build/libpjaffi_pas.a, to link statically
 make pja-tests    # + test_frontera and pjatool (the latter needs packJPGlib.a)
-make pja-clean    # removes cargo's target/, which `make clean` deliberately does not
+make pja-check    # the whole suite
+make pja-clean
 ```
 
-If `cargo` is not on the path, `make pja` stops with an instruction rather than
-a `command not found` from deep inside a recipe. Point it somewhere else with
-`make pja CARGO=/path/to/cargo`.
+If `fpc` is not on the path, `make pja` stops with an instruction rather than a
+`command not found` from deep inside a recipe. Point it somewhere else with
+`make pja FPC_PAS=/path/to/fpc`.
 
-`make clean` leaves `pja/target/` alone on purpose — it holds hundreds of
-megabytes of compiled dependencies and deleting it costs minutes of rebuild for
-no gain. Use `make pja-clean` when you actually want it gone.
-
-The Rust test suite is separate from the Makefile, because `cargo test` builds
-against `std` while the Makefile builds the `no_std` staticlib:
-
-```
-cargo test --release --manifest-path pja/Cargo.toml
-```
+A program linking the static library must call `pja_iniciar(argc, argv, envp)`
+at the top of `main` (without it every call returns `PJA_ERR_NO_INIT`) and link
+with `-lpthread -ldl`. On Windows the core is a DLL, built by
+`pja/pas/frontera_win.sh`.
 
 See `source/pja/README.md` for the format docs and the C boundary contract.
 
