@@ -33,7 +33,7 @@ done
 echo "== referencias Rust"
 $CARGO build --release --manifest-path "$PJA/Cargo.toml" \
   --example dif_nombres --example dif_indice --example dif_escritor --example dif_cifrado --example dif_contenedor --example dif_corrupcion \
-  --example dif_pjafs --example kat_cripto
+  --example dif_pjafs --example kat_cripto --bin gen
 EX=$PJA/target/release/examples
 "$EX/kat_cripto" "$OUT/kat" > /dev/null
 
@@ -65,10 +65,14 @@ diferencial() {   # nombre, cantidad minima de entradas, comando rust, comando p
   if [ "$c" -lt "$min" ] || [ "$r" -ne "$c" ] || [ "$p" -ne "$c" ]; then
     echo "FALLA $n: corpus $c lineas, rust $r, pascal $p -- tienen que coincidir y ser >= $min"; exit 1
   fi
-  d=$(paste -d'|' "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" | awk -F'|' '$1 != $2' | wc -l)
+  # cmp y diff, no paste+awk con un separador: una salida que contuviera el
+  # separador escondia las diferencias que vinieran despues de el (paso con
+  # el diferencial de la frontera, cuyas lineas llevan '|').
+  d=0; cmp -s "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" || d=$(diff "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" | grep -c '^<' || true)
+  [ "$d" -eq 0 ] && ! cmp -s "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" && d=1
   echo "diferencial $n: $d distintas de $c entradas"
   if [ "$d" -ne 0 ]; then
-    paste -d'|' "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" | awk -F'|' '$1 != $2' | head -5 | cut -c1-200
+    diff "$OUT/$n.rust.txt" "$OUT/$n.pascal.txt" | head -10 | cut -c1-200
     exit 1
   fi
 }
@@ -132,3 +136,46 @@ python3 "$PAS/diferencial/escenarios_fs.py" listar "$FS/r" > "$FS/arbol_r.txt"
 python3 "$PAS/diferencial/escenarios_fs.py" listar "$FS/p" > "$FS/arbol_p.txt"
 cmp -s "$FS/arbol_r.txt" "$FS/arbol_p.txt" || { echo "FALLA pjafs_efbig: los arboles difieren"; exit 1; }
 echo "arbol pjafs_efbig: iguales, $n escrituras cortadas por EFBIG"
+
+echo "== frontera C (pjacore.h): nucleo Pascal enlazado estatico"
+FPC=$FPC PAS_CC=$CC PJA_DIR=$PJA PAS_OUT=$OUT bash "$PAS/frontera.sh"
+CXX=${PAS_CXX:-g++}
+LIBRUST=$PJA/target/release/libpjaffi.a; LIBPAS=$OUT/libpjaffi_pas.a
+$CXX -O2 -std=c++17 -I"$PJA/include" "$PJA/test_frontera.cpp" "$LIBPAS" -lpthread -ldl -o "$OUT/test_frontera_pas"
+GEN=$PJA/target/release/gen
+"$GEN" "$OUT/fr_claro.pja" - "$CORPUS"/*.pjg > /dev/null
+"$GEN" "$OUT/fr_cif.pja" secreta123 "$CORPUS"/n_*.pjg > /dev/null
+"$OUT/test_frontera_pas" "$OUT/fr_claro.pja" | tail -1
+"$OUT/test_frontera_pas" "$OUT/fr_cif.pja" secreta123 | tail -1
+# el anfitrion que se olvida de pja_iniciar: PJA_ERR_NO_INIT en todo, tambien en hilos
+$CXX -O2 -std=c++17 -I"$PJA/include" "$PAS/diferencial/sin_init.cpp" "$LIBPAS" -lpthread -ldl -o "$OUT/sin_init"
+"$OUT/sin_init"
+# El mismo programa C++, enlazado una vez contra cada nucleo.
+for lado in rust pas; do
+  lib=$LIBPAS; [ $lado = rust ] && lib=$LIBRUST
+  $CXX -O2 -std=c++17 -I"$PJA/include" "$PAS/diferencial/dif_frontera.cpp" "$lib" -lpthread -ldl -o "$OUT/dif_frontera_$lado"
+done
+"$OUT/dif_frontera_rust" "$CORPUS" "$OUT/fr_cif.pja" secreta123 > "$OUT/frontera.rust.txt" 2> /dev/null & pr=$!
+"$OUT/dif_frontera_pas"  "$CORPUS" "$OUT/fr_cif.pja" secreta123 > "$OUT/frontera.pascal.txt" 2> /dev/null & pp=$!
+wait $pr; wait $pp
+n=$(wc -l < "$OUT/frontera.rust.txt")
+if [ "$n" -lt 8000 ] || ! cmp -s "$OUT/frontera.rust.txt" "$OUT/frontera.pascal.txt"; then
+  echo "FALLA frontera: $n lineas, o las salidas difieren"; diff "$OUT/frontera.rust.txt" "$OUT/frontera.pascal.txt" | head -6 | cut -c1-200; exit 1
+fi
+echo "diferencial frontera: 0 distintas de $n llamadas"
+
+# Punta a punta: pjatool (codec + contenedor) enlazado al nucleo Pascal.
+if [ -n "${PJG_LIB:-}" ] && [ -f "$PJG_LIB" ]; then
+  $CXX -O2 -std=c++17 -DBUILD_LIB -I"${PJG_INC:-.}" -I"$PJA/include" "$PJA/pjatool.cpp" "$PJG_LIB" "$LIBPAS" \
+      ${PJG_LIBS:-} -lpthread -ldl -o "$OUT/pjatool_pas"
+  RT=$OUT/rt; rm -rf "$RT"; mkdir -p "$RT/ent" "$RT/sal"
+  cp "$PJA"/../../test-files/*.jpg "$RT/ent/"
+  "$OUT/pjatool_pas" crear "$RT/c.pja" "$RT"/ent/*.jpg > /dev/null
+  "$OUT/pjatool_pas" extraer "$RT/c.pja" "$RT/sal" > /dev/null
+  t=0; ok=0
+  for f in "$RT"/ent/*.jpg; do t=$((t+1)); cmp -s "$f" "$RT/sal/$(basename "$f")" && ok=$((ok+1)); done
+  [ "$t" -ge 5 ] && [ "$ok" -eq "$t" ] || { echo "FALLA round-trip pjatool (Pascal): $ok de $t"; exit 1; }
+  echo "round-trip pjatool con nucleo Pascal: $ok de $t JPEG byte a byte"
+else
+  echo "FALLA: falta PJG_LIB (packJPGlib.a) para el round-trip de pjatool"; exit 1
+fi

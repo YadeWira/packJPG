@@ -1,4 +1,5 @@
-/* pjacore.h — frontera C++ <-> Rust del contenedor PJA.
+/* pjacore.h — frontera C++ <-> nucleo del contenedor PJA (Pascal; Rust hasta
+ * que el port termine, con la misma interfaz).
  *
  * Contrato, deliberadamente angosto:
  *   - entra puntero + largo, sale un codigo de estado; 0 es exito
@@ -6,9 +7,14 @@
  *     el llamador, y el unico objeto con estado es un manejador opaco con
  *     su abrir/cerrar
  *   - los `*_largo` existen para preguntar el tamaño ANTES de reservar
- *   - el lado Rust compila con panic = "abort": un panic que desenrollara
- *     hacia C++ seria comportamiento indefinido
- *   - Rust y C++ comparten un solo heap (el asignador de Rust usa malloc)
+ *   - ninguna excepcion cruza el borde: un defecto interno vuelve como
+ *     PJA_ERR_INTERNO (el lado Rust abortaba el proceso)
+ *   - ANTES de cualquier otra llamada, pja_iniciar(argc, argv, envp) al
+ *     principio de main; pja_terminar() al final. Enlazada estatica (Linux),
+ *     sin pja_iniciar todo devuelve PJA_ERR_NO_INIT: sin runtime la
+ *     proteccion de rango del lado Pascal se apaga en silencio, y eso no
+ *     puede pasar callado. En la DLL (Windows) el runtime arranca al
+ *     cargarla y pja_iniciar solo lo confirma.
  */
 #ifndef PJACORE_H
 #define PJACORE_H
@@ -27,6 +33,16 @@ extern "C" {
 #define PJA_ERR_CLAVE      -6   /* contraseña incorrecta, faltante o sobrante */
 #define PJA_ERR_INDICE     -7   /* cabecera o indice alterados */
 #define PJA_ERR_RANGO      -8
+#define PJA_ERR_INTERNO    -9   /* defecto nuestro: una excepcion adentro */
+#define PJA_ERR_NO_INIT   -10   /* falto pja_iniciar */
+
+int32_t pja_iniciar(int argc, char** argv, char** envp);
+void    pja_terminar(void);
+/* 1 si el runtime esta arrancado. */
+int32_t pja_inicializado(void);
+/* 1 si el nucleo se compilo con control de rango. Una prueba que no lo mire
+ * podria pasar con la red apagada. */
+int32_t pja_rango_activo(void);
 
 typedef struct PjaAbierto PjaAbierto;
 

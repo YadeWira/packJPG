@@ -243,6 +243,18 @@ pub unsafe extern "C" fn pja_escribir(ents: *const PjaEntradaC, n: usize, flags:
 #[no_mangle]
 pub extern "C" fn pja_version() -> u32 { 1 }
 
+// Inicializacion: Rust no tiene runtime que arrancar. Existen para que la
+// interfaz sea la misma que la del lado Pascal, que si lo necesita.
+#[no_mangle]
+pub extern "C" fn pja_iniciar(_argc: i32, _argv: *const *const u8, _envp: *const *const u8) -> i32 { PJA_OK }
+#[no_mangle]
+pub extern "C" fn pja_terminar() {}
+#[no_mangle]
+pub extern "C" fn pja_inicializado() -> i32 { 1 }
+/// Rust controla los rangos siempre (no hay forma de apagarlo en safe).
+#[no_mangle]
+pub extern "C" fn pja_rango_activo() -> i32 { 1 }
+
 // --- panic y personality ---------------------------------------------------
 #[cfg(not(test))]
 #[panic_handler]

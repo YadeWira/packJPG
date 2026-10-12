@@ -127,7 +127,20 @@ static int extraer(const std::string& origen, const std::string& dir) {
     return malos ? 1 : 0;
 }
 
-int main(int argc, char** argv) {
+static int principal(int argc, char** argv);
+
+int main(int argc, char** argv, char** envp) {
+    // El nucleo primero: sin esto, del lado Pascal todo da PJA_ERR_NO_INIT.
+    if (int32_t r = pja_iniciar(argc, argv, envp); r != PJA_OK) {
+        printf("pja_iniciar: %d\n", r);
+        return 1;
+    }
+    int rc = principal(argc, argv);
+    pja_terminar();
+    return rc;
+}
+
+static int principal(int argc, char** argv) {
     if (argc < 3) {
         printf("uso:\n  pjatool crear  <salida.pjg> <foto.jpg>...\n"
                "  pjatool extraer <contenedor.pjg> <directorio>\n");

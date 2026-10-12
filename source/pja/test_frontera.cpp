@@ -6,6 +6,8 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <thread>
+#include <atomic>
 #include "pjacore.h"
 
 static int fallos = 0;
@@ -24,8 +26,16 @@ static std::vector<uint8_t> leer(const char* ruta) {
     return v;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char** argv, char** envp) {
+    // Antes de pja_iniciar, el lado Pascal enlazado estatico tiene que negarse
+    // con su codigo, no andar a medias (sin runtime, $R+ se apaga en silencio).
+    // El lado Rust no tiene runtime: ahi pja_inicializado ya da 1.
+    bool sin_init_niega = pja_inicializado() == 1 || pja_cantidad(nullptr) == PJA_ERR_NO_INIT;
+    int32_t ri = pja_iniciar(argc, argv, envp);
     printf("version del nucleo: %u\n", pja_version());
+    chequear(sin_init_niega, "antes de pja_iniciar: PJA_ERR_NO_INIT (o no hace falta)");
+    chequear(ri == PJA_OK && pja_inicializado() == 1, "pja_iniciar -> OK, inicializado");
+    chequear(pja_rango_activo() == 1, "el nucleo controla rangos");
     if (argc < 2) { printf("uso: frontera <contenedor.pjg> [contraseña]\n"); return 2; }
 
     std::vector<uint8_t> datos = leer(argv[1]);
@@ -88,10 +98,35 @@ int main(int argc, char** argv) {
     chequear(pja_abrir(basura.data(), basura.size(), nullptr, 0, &h3) == PJA_ERR_FORMATO
              && h3 == nullptr, "basura -> PJA_ERR_FORMATO");
 
+    // Hilos del anfitrion llamando a la vez (el spike lo midio con el runtime
+    // de FPC: cthreads y el heap compartido). Cada hilo abre, lee y cierra;
+    // todos tienen que ver exactamente lo mismo que el hilo principal.
+    {
+        std::vector<uint8_t> ref(pja_payload_largo(h, n - 1));
+        pja_payload(h, n - 1, ref.data(), ref.size());
+        std::atomic<int> malas{0}, hechas{0};
+        std::vector<std::thread> hs;
+        for (int t = 0; t < 8; t++) hs.emplace_back([&] {
+            for (int k = 0; k < (pass ? 2 : 150); k++) {     // con contraseña cada apertura deriva Argon2id
+                PjaAbierto* x = nullptr;
+                if (pja_abrir(datos.data(), datos.size(), pass, pass_largo, &x) != PJA_OK) { malas++; continue; }
+                std::vector<uint8_t> p(pja_payload_largo(x, n - 1));
+                if (pja_payload(x, n - 1, p.data(), p.size()) != PJA_OK || p != ref) malas++;
+                if (pja_nombre_largo(x, 99999) != PJA_ERR_RANGO) malas++;    // y los errores, tambien en paralelo
+                pja_cerrar(x);
+                hechas++;
+            }
+        });
+        for (auto& t : hs) t.join();
+        char q[96]; snprintf(q, sizeof q, "8 hilos: %d aperturas, %d malas", hechas.load(), malas.load());
+        chequear(malas == 0 && hechas == 8 * (pass ? 2 : 150), q);
+    }
+
     pja_cerrar(h);
     pja_cerrar(nullptr);          // pasar nulo tiene que ser valido
     chequear(true, "pja_cerrar(nullptr) no revienta");
 
     printf("\n%s (%d fallos)\n", fallos ? "HAY FALLOS" : "todo en verde", fallos);
+    pja_terminar();
     return fallos ? 1 : 0;
 }

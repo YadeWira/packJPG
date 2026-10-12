@@ -32,7 +32,7 @@ mismo corpus, línea por línea (`make pja-pas-tests`).
 | `corrupcion` | portado — las 2 pruebas dan las mismas cuentas que el Rust (1.047 celdas de un bit: 1.041 rechazos, 6 lecturas iguales, todas en el payload; 104 de 104 truncados rechazados) + diferencial **celda por celda** de 80.223 celdas sobre el contenedor entero (cada bit de cabecera e índice, también **resellados** para llegar a las validaciones de miembros reales; valores, truncado en cada largo, agregados), 0 distintas, en 64 y 32 bits. La prueba portada exige además lo que el Rust sólo imprime (`lee_distinto = 0`, y que lo que se lee igual caiga en el payload): sin eso, un `Iguales` roto pasaba. Mutantes: por sí sola atrapa 7 de los 14 de `indice` (control incluido); los otros 7 piden formas que 6 `.pjg` reales no tienen —cifrado, rutas, duplicados, 8 GiB— y los atrapa `dif_indice`. Arnés: 5 de 8, los 3 restantes equivalentes |
 | `cifrado` | portado — el esquema por trozos en Pascal, las primitivas (XChaCha20-Poly1305, Argon2id) en C con Monocypher 4.0.3; 33 pruebas con KAT del Rust (Argon2id y cifrado **byte a byte** en los bordes de 64 KiB) + diferencial de 2.219 casos (claves, cifrados y contenedores alterados), 0 distintos, en 64 y 32 bits; 13/13 mutantes reales detectados, 2 equivalentes con prueba |
 | `pjafs` (rutas al extraer) | portado — **antes, cuatro arreglos al Rust de referencia**, medidos con pruebas que fallaban: (1) un enlace simbólico en el destino con el nombre del miembro hacía escribir **afuera** (con sobrescribir pisaba el archivo apuntado; colgante, lo creaba, y lo reportaba `Verificado`); ahora el archivo se **crea** (`O_EXCL`/`CREATE_NEW`, no sigue enlaces) y sobrescribir borra la entrada antes, como tar; también cubre enlaces duros; (2) el largo para Windows se medía sobre la ruta sin resolver (destino relativo: 249 en vez de 344) y en bytes; ahora sobre la resuelta, en unidades UTF-16; (3) en Windows los nombres `SoloWindows` (`CON.jpg`, `foto?.jpg`, `foto.`) pasaban: ahora se rechazan allá, como dice POLITICA 3.2; (4) si la escritura fallaba al abrir, se borraba un archivo que no habíamos escrito. Port: 62 pruebas (las 14 del Rust + conteo UTF-16, contención por componentes, `Padre`); diferencial de 4.710 casos sobre **árboles de disco reales** que arma un tercero igual para las dos puntas (enlaces que salen, que entran, colgantes, duros, a `/`, directorios sin permiso, nombres no UTF-8, `.corrupto` agotados), comparando la salida **y el árbol entero después** (28.636 entradas), y exigiendo que ningún caso que pase por `destino_de` toque `afuera` (con control positivo); una segunda pasada con `ulimit -f` corta escrituras a la mitad (EFBIG). 0 distintos, en 64 y 32 bits. 22/24 mutantes, 2 equivalentes. **Windows real**: 50/50 en Windows 10 y en Windows 7, 32 y 64 bits; con *junctions*, la que sale da `EscapaDelDestino` y la que entra se acepta |
-| frontera FFI | pendiente — en Windows va como DLL (ver abajo) |
+| frontera FFI | portada — `pas/pjaffi.pas`, la misma interfaz `include/pjacore.h` con los mismos códigos, más `pja_iniciar`/`pja_terminar` y dos códigos: `PJA_ERR_INTERNO` (una excepción adentro vuelve como código; el Rust abortaba) y `PJA_ERR_NO_INIT`. Cada función exportada es una cáscara que se niega sin runtime: un anfitrión que se olvida de `pja_iniciar` recibe `NO_INIT` en todo, también desde 8 hilos (sin la guarda, medido: SIGSEGV). **Linux**: `libpjaffi_pas.a` estática (`pas/frontera.sh`), un solo objeto con 19 símbolos globales. **Windows**: `pjaffi.dll` 32/64 (`pas/frontera_win.sh`), con ASLR+DEP. Diferencial: **el mismo programa C++** (`pas/diferencial/dif_frontera.cpp`) enlazado contra el Rust y contra el Pascal, 12.394 llamadas (nulos, buffers chicos, rangos, escritura inválida, contenedores alterados, resellados y con nombres armados a mano, contraseñas), 0 distintas; **en Windows 10 y 7 reales, 32 y 64 bits, la salida es idéntica byte a byte a la del Rust en Linux**, `test_frontera` en verde con 8 hilos y 10/10 corridas sin cuelgue al salir. `pjatool` enlazado al Pascal: round-trip con el códec, 5/5 JPEG byte a byte. 16/17 mutantes, 1 equivalente |
 
 Reglas del port, todas medidas y no obvias — las tres primeras están en `pas/pja.inc`:
 
@@ -120,6 +120,20 @@ reservar. Rust y C++ comparten un solo heap (el asignador usa `malloc`).
 `panic = "abort"`: un panic que desenrollara hacia C++ sería comportamiento
 indefinido. El perfil va en la **raíz** del workspace — puesto en el manifiesto
 de un miembro se ignora en silencio.
+
+## Núcleo Pascal detrás de `pjacore.h`
+
+```sh
+make pja-pas-lib                     # pas/build/libpjaffi_pas.a (Linux, estática)
+make pja-tests PJA_NUCLEO=pascal     # test_frontera y pjatool contra el Pascal
+```
+
+**`pja_iniciar(argc, argv, envp)` al principio de `main`**, antes de cualquier
+otra `pja_*`, y `pja_terminar()` al final. Enlazada estática no hay cargador que
+arranque el runtime de FPC, y sin runtime la protección de rango se apaga en
+silencio: por eso todo devuelve `PJA_ERR_NO_INIT` hasta que se la llame. Al
+enlazar: `-lpthread -ldl`. En Windows es una DLL (`pas/frontera_win.sh`) y el
+runtime arranca al cargarla.
 
 ## Probar
 

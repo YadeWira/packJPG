@@ -134,7 +134,7 @@ $(TARGET): $(OBJ) $(RES)
 # --- standard targets --------------------------------------------------------
 
 .PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
-        native pgo pgo-clean pja pja-tests pja-clean pja-corpus pja-pas-tests
+        native pgo pgo-clean pja pja-tests pja-clean pja-corpus pja-pas-tests pja-pas-lib
 
 all: $(TARGET)
 
@@ -375,12 +375,25 @@ pja-corpus: $(TARGET)
 # pjatool ademas usa la libreria de packJPG, asi que necesita packJPGlib.a
 # — o sea -DBUILD_LIB. Sin eso el link se cae con undefined reference a
 # pjglib_init_streams, que no dice nada sobre la causa.
-pja-tests: $(PJA_LIB) lib
+#
+# PJA_NUCLEO elige que nucleo se enlaza detras de pjacore.h: `rust` (la
+# referencia, mientras dure el port) o `pascal` (libpjaffi_pas.a, que arma
+# pas/frontera.sh). La interfaz es la misma; el Pascal ademas exige
+# pja_iniciar al principio de main.
+PJA_NUCLEO ?= rust
+PAS_LIB     = $(PAS_OUT)/libpjaffi_pas.a
+ifeq ($(PJA_NUCLEO),pascal)
+PJA_NUCLEO_LIB = $(PAS_LIB)
+else
+PJA_NUCLEO_LIB = $(PJA_LIB)
+endif
+
+pja-tests: $(PJA_NUCLEO_LIB) lib
 	$(CXX) $(CXXFLAGS) -I$(PJA_DIR)/include $(PJA_DIR)/test_frontera.cpp \
-	    $(PJA_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/test_frontera
+	    $(PJA_NUCLEO_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/test_frontera
 	$(CXX) $(CXXFLAGS) -DBUILD_LIB -I. -I$(PJA_DIR)/include $(PJA_DIR)/pjatool.cpp \
-	    $(TARGET)lib.a $(PJA_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/pjatool
-	@echo "[OK] pja tests: $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
+	    $(TARGET)lib.a $(PJA_NUCLEO_LIB) $(LDFLAGS) $(LIBS) -ldl -o $(PJA_DIR)/pjatool
+	@echo "[OK] pja tests ($(PJA_NUCLEO)): $(PJA_DIR)/test_frontera, $(PJA_DIR)/pjatool"
 	@echo "     las pruebas de Rust van aparte: $(CARGO) test --release --manifest-path $(PJA_DIR)/Cargo.toml"
 
 # --- capa Pascal del contenedor (port desde Rust) ----------------------------
@@ -394,14 +407,24 @@ FPC_PAS ?= fpc
 PAS_DIR  = $(PJA_DIR)/pas
 PAS_OUT  = $(PAS_DIR)/build
 
-pja-pas-tests: $(PJA_LIB) pja-corpus
+# La capa Pascal entera en una .a para enlazar estatica (Linux). Ver pas/frontera.sh.
+$(PAS_LIB): $(wildcard $(PAS_DIR)/*.pas) $(PAS_DIR)/pja.inc $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera.sh
+	@command -v $(FPC_PAS) >/dev/null 2>&1 || { echo "ERROR: no encuentro '$(FPC_PAS)' (FreePascal 3.2)"; exit 1; }
+	FPC=$(FPC_PAS) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) bash $(PAS_DIR)/frontera.sh
+
+pja-pas-lib: $(PAS_LIB)
+
+# `lib` porque la suite tambien hace el round-trip de pjatool enlazado al
+# nucleo Pascal, y pjatool usa el codec.
+pja-pas-tests: $(PJA_LIB) pja-corpus lib
 	@command -v $(FPC_PAS) >/dev/null 2>&1 || { \
 	  echo "ERROR: no encuentro '$(FPC_PAS)'. La capa Pascal se compila con"; \
 	  echo "       FreePascal 3.2 (https://www.freepascal.org), que NO hace falta"; \
 	  echo "       para packJPG en si. Instalalo, o pasa la ruta:"; \
 	  echo "         make pja-pas-tests FPC_PAS=/ruta/a/fpc"; \
 	  exit 1; }
-	FPC=$(FPC_PAS) CARGO=$(CARGO) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) bash $(PAS_DIR)/correr_pruebas.sh
+	FPC=$(FPC_PAS) CARGO=$(CARGO) PJA_DIR=$(PJA_DIR) PAS_OUT=$(PAS_OUT) PJG_LIB=$(TARGET)lib.a \
+	    PJG_INC=. PJG_LIBS="$(CXXFLAGS) $(LDFLAGS) $(LIBS)" bash $(PAS_DIR)/correr_pruebas.sh
 
 # Aparte de `clean` a proposito: target/ de cargo son cientos de megas de
 # dependencias compiladas y borrarlo cuesta minutos de rebuild. `clean` saca
