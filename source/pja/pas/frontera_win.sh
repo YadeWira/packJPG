@@ -37,7 +37,7 @@ for a in ${ARCH:-64 32}; do
   fi
   D=$OUT/$a; rm -rf "$D"; mkdir -p "$D/c"
   for f in pja_cripto blake3/blake3 blake3/blake3_dispatch blake3/blake3_portable monocypher/monocypher; do
-    $T-gcc -O2 -std=c99 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 \
+    $T-gcc -O2 -std=c99 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 -DBLAKE3_USE_NEON=0 \
         -I"$PAS/c" -c "$PAS/c/$f.c" -o "$D/c/$(basename "$f").o"
   done
   ( cd "$D" && "${FPCW[@]}" -O2 -Fu"$PAS" -Fi"$PAS" -Fo"$D/c" -FU"$D" -FE"$D" \
@@ -47,7 +47,9 @@ for a in ${ARCH:-64 32}; do
   # mingw-posix-thread-model), y std::thread lo necesita.
   # .def desde la tabla de exportacion real, no una lista a mano que se desactualiza
   { echo "LIBRARY pjaffi_$ARQ.dll"; echo "EXPORTS";
-    $T-objdump -p "$D/pjaffi.dll" | sed -n '/Ordinal\/Name Pointer/,/^$/p' | awk '/\+base/ {print "  " $NF}'; } > "$D/pjaffi_$ARQ.def"
+    # "[  15] +base[  16]  0000 pja_abrir" (binutils 2.4x) o "[  15] pja_abrir"
+    # (2.38, Ubuntu 22.04): en las dos, el nombre es el ultimo campo
+    $T-objdump -p "$D/pjaffi.dll" | sed -n '/Ordinal\/Name Pointer/,/^$/p' | awk '/^[ \t]*\[ *[0-9]+\]/ {print "  " $NF}'; } > "$D/pjaffi_$ARQ.def"
   n=$(grep -c '^  pja_' "$D/pjaffi_$ARQ.def")
   [ "$n" -ge 15 ] || { echo "FALLA: el .def salio con $n exportaciones"; exit 1; }
   cp "$D/pjaffi.dll" "$D/pjaffi_$ARQ.dll"

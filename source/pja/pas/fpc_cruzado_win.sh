@@ -24,8 +24,17 @@ OUT=${1:?uso: fpc_cruzado_win.sh <dir>}
 VER=$(fpc -iV)
 FUENTE=/usr/share/fpcsrc/$VER
 [ -d "$FUENTE/compiler" ] || { echo "FALLA: no estan las fuentes de FPC $VER en $FUENTE (paquete fpc-source)"; exit 1; }
-MSG=$(ls -d /usr/lib/*/fpc/$VER/msg 2>/dev/null | head -1)
+# Los .msg: Debian los pone en /usr/lib/<triple>/fpc/<ver>/msg; Ubuntu 22.04
+# los deja dentro de las fuentes (lo encontro el CI).
+# (un for y no `ls -d glob | ...`: con pipefail, el glob que no existe en
+# Ubuntu hacia salir al script con 2 y sin decir nada)
+MSG=""
+for d in /usr/lib/*/fpc/$VER/msg "$FUENTE/compiler/msg"; do
+  if [ -f "$d/errore.msg" ]; then MSG=$d; break; fi
+done
 [ -n "$MSG" ] || { echo "FALLA: no encuentro los .msg de FPC $VER"; exit 1; }
+FPCMAKE=$(command -v fpcmake || command -v "fpcmake-$VER" || true)
+[ -n "$FPCMAKE" ] || { echo "FALLA: no encuentro fpcmake (paquete fp-utils)"; exit 1; }
 mkdir -p "$OUT"; OUT=$(realpath "$OUT")
 if [ -x "$OUT/ppc386" ] && [ -f "$OUT/units/i386-win32/system.ppu" ] && [ -f "$OUT/units/x86_64-win64/system.ppu" ]; then
   echo "[OK] ya estaba: $OUT"; exit 0
@@ -33,9 +42,9 @@ fi
 S=$OUT/src; rm -rf "$S"; mkdir -p "$S"
 cp -r "$FUENTE/compiler" "$FUENTE/rtl" "$S/"
 [ -f "$FUENTE/Makefile.fpc" ] && cp "$FUENTE/Makefile.fpc" "$S/" || true
-( cd "$S/compiler" && fpcmake -Tall -r > /dev/null )
-( cd "$S/rtl" && fpcmake -Tall -r > /dev/null )
-mkdir -p "$S/compiler/msg"; cp "$MSG"/*.msg "$S/compiler/msg/"
+( cd "$S/compiler" && "$FPCMAKE" -Tall -r > /dev/null )
+( cd "$S/rtl" && "$FPCMAKE" -Tall -r > /dev/null )
+mkdir -p "$S/compiler/msg"; ls "$S/compiler/msg"/errore.msg > /dev/null 2>&1 || cp "$MSG"/*.msg "$S/compiler/msg/"
 cat > "$S/rtl/i386/makefile.cpu" <<'EOF'
 #
 # Here we set processor dependent include file names.

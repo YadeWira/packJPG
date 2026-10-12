@@ -22,7 +22,7 @@ mkdir -p "$OUT"; OUT=$(realpath "$OUT")    # absolutas: mas abajo se compila con
 F=$OUT/frontera; rm -rf "$F"; mkdir -p "$F" "$OUT/c"
 
 for f in pja_cripto blake3/blake3 blake3/blake3_dispatch blake3/blake3_portable monocypher/monocypher; do
-  $CC -O2 -fPIC -std=c99 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 \
+  $CC -O2 -fPIC -std=c99 -DBLAKE3_NO_SSE2 -DBLAKE3_NO_SSE41 -DBLAKE3_NO_AVX2 -DBLAKE3_NO_AVX512 -DBLAKE3_USE_NEON=0 \
       -I"$PAS/c" -c "$PAS/c/$f.c" -o "$OUT/c/$(basename "$f").o"
 done
 LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")

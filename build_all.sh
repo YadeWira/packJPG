@@ -129,13 +129,14 @@ PJA_WIN="pja/pas/build/win"
 # Ubuntu 22.04 not even the win64 units.
 FPCWIN="$SRC_DIR/pja/pas/build/fpcwin"
 pja_dll() {  # $1 = 64 | 32
-    bash "$SRC_DIR/pja/pas/fpc_cruzado_win.sh" "$FPCWIN" > /dev/null \
-        || fail "building the FreePascal Windows RTLs / i386 cross compiler"
+    bash "$SRC_DIR/pja/pas/fpc_cruzado_win.sh" "$FPCWIN" > /tmp/fpc_cruzado_win.log 2>&1 \
+        || { cat /tmp/fpc_cruzado_win.log; fail "building the FreePascal Windows RTLs / i386 cross compiler"; }
     local w; w=$(realpath "$FPCWIN")
     local extra=(RTLW64="$w/units/x86_64-win64")
     [ "$1" = 32 ] && extra=(PPC386="$w/ppc386" RTL386="$w/units/i386-win32")
     env PJA_DIR="$SRC_DIR/pja" OUT="$SRC_DIR/$PJA_WIN" ARCH="$1" "${extra[@]}" \
-        bash "$SRC_DIR/pja/pas/frontera_win.sh" > /dev/null || fail "pjaffi DLL ($1 bits)"
+        bash "$SRC_DIR/pja/pas/frontera_win.sh" > /tmp/frontera_win.log 2>&1 \
+        || { cat /tmp/frontera_win.log; fail "pjaffi DLL ($1 bits)"; }
 }
 
 # ─── Windows x64 ─────────────────────────────────────────────────────────────
