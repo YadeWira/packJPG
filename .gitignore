@@ -56,6 +56,8 @@
 *.jpg
 *.jpeg
 *.pjg
+# los .pjg corruptos de la regresion del decodificador si van (test/pjg_corruptos.sh)
+!source/test/pjg_corruptos/*.pjg
 *.pgm
 *.nfo
 *.hdr
