@@ -9,7 +9,8 @@
 # .def que dice LIBRARY pjaffi_x64.dll, y el .exe se enlaza contra ella.
 #   $OUT/<64|32>/pjaffi_<x64|x86>.dll y libpjaffi_<x64|x86>.dll.a
 #
-#   PJA_DIR=... OUT=... [ARCH="64 32"] [PPC386=/ruta/ppc386] [RTL386=/ruta/units/i386-win32] frontera_win.sh
+#   PJA_DIR=... OUT=... [ARCH="64 32"] [PPC386=/ruta/ppc386] [RTL386=/ruta/units/i386-win32]
+#                       [RTLW64=/ruta/units/x86_64-win64] frontera_win.sh
 #
 # Por que DLL y no estatica (medido, fpc-link/RESULTADOS.md): metida en el .exe
 # obliga a --disable-reloc-section y el ejecutable ENTERO pierde ASLR. La DLL
@@ -18,8 +19,8 @@
 # pja_iniciar solo lo confirma.
 #
 # 64 bits: el fpc del sistema con las unidades x86_64-win64.
-# 32 bits: un ppc386 cruzado y el RTL i386-win32 (Debian no los trae; receta en
-#          fpc-link/RESULTADOS.md, "El compilador cruzado de 32 bits").
+# 32 bits: un ppc386 cruzado y el RTL i386-win32 (Debian no los trae):
+#          pas/fpc_cruzado_win.sh los arma desde fpc-source.
 # Probado en Windows 10 19044 y Windows 7 SP1 reales, 32 y 64 bits.
 set -euo pipefail
 PJA=$(realpath "${PJA_DIR:?}"); PAS=$PJA/pas
@@ -27,6 +28,9 @@ OUT=${OUT:?}; mkdir -p "$OUT"; OUT=$(realpath "$OUT")
 for a in ${ARCH:-64 32}; do
   if [ "$a" = 64 ]; then
     T=x86_64-w64-mingw32; FPCW=(fpc -Twin64 -Px86_64); ARQ=x64
+    # RTLW64: las unidades win64 armadas por fpc_cruzado_win.sh, donde el
+    # sistema no las trae (Ubuntu 22.04)
+    [ -n "${RTLW64:-}" ] && FPCW+=(-Fu"$RTLW64")
   else
     T=i686-w64-mingw32; ARQ=x86
     FPCW=("${PPC386:?falta PPC386 para 32 bits}" -Twin32 -Fu"${RTL386:?falta RTL386}")

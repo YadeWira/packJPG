@@ -38,9 +38,10 @@ jobs:
         # libjxl. Dropping them also fixes ubuntu-22.04 CI, which doesn't
         # even have a libjxl-dev package in its default repos.
         # fpc: since 6.0 'a' writes .pja, whose core is FreePascal. fpc-source
-        # and the win64 units are for the Windows DLLs; the i386-win32 cross
-        # compiler is built from fpc-source by pja/pas/fpc_i386_win32.sh.
-        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm fpc fpc-source-3.2.2 fp-units-win-rtl-3.2.2
+        # is for the Windows DLLs: pja/pas/fpc_cruzado_win.sh builds the
+        # i386-win32 cross compiler and both Windows RTLs from it (jammy has
+        # no win64 units package, and no Debian has the i386 one).
+        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm fpc fpc-source-3.2.2
 
       - name: Build all targets
         run: bash build_all.sh

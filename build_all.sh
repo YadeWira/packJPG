@@ -15,8 +15,8 @@
 #
 # All binaries are collected into ./dist/
 #
-# Requirements: clang++ (or g++), mingw-w64, FreePascal 3.2 (fpc, fpc-source,
-#   fp-units-win-rtl): since 6.0 'a' writes .pja, whose core is FreePascal.
+# Requirements: clang++ (or g++), mingw-w64, FreePascal 3.2 (fpc, fpc-source):
+#   since 6.0 'a' writes .pja, whose core is FreePascal.
 #   Linux links it statically; Windows ships it as pjaffi_x64.dll /
 #   pjaffi_x86.dll next to the .exe (static would cost the .exe its ASLR).
 #   Ubuntu/Debian : sudo apt install mingw-w64
@@ -91,7 +91,7 @@ fi
 
 # ─── .pja core (FreePascal) ──────────────────────────────────────────────────
 # Not optional for a release: a packJPG without it refuses 'a' unless --pjg.
-command -v fpc &>/dev/null || fail "fpc not found: packJPG 6.0 needs FreePascal 3.2 for .pja (apt install fpc fpc-source fp-units-win-rtl)"
+command -v fpc &>/dev/null || fail "fpc not found: packJPG 6.0 needs FreePascal 3.2 for .pja (apt install fpc fpc-source)"
 (cd "$SRC_DIR" && make pja > /dev/null) || fail "make pja (the .pja core) failed"
 PJA_DEFS="-DHAVE_PJA -Ipja/include"
 PJA_LINUX="pja/pas/build/libpjaffi_pas.a -ldl"
@@ -124,17 +124,16 @@ winlibs_link() {
 # ─── Windows .pja core: pjaffi_<arch>.dll + its import library ─────────────
 # frontera_win.sh also builds and checks test_frontera.exe against it.
 PJA_WIN="pja/pas/build/win"
+# The Windows RTLs (and the 32-bit cross compiler) are built from fpc-source
+# once by fpc_cruzado_win.sh: Debian does not package the i386 one, and
+# Ubuntu 22.04 not even the win64 units.
+FPCWIN="$SRC_DIR/pja/pas/build/fpcwin"
 pja_dll() {  # $1 = 64 | 32
-    local extra=()
-    if [ "$1" = 32 ]; then
-        if [ -z "${PPC386:-}" ]; then
-            bash "$SRC_DIR/pja/pas/fpc_i386_win32.sh" "$SRC_DIR/pja/pas/build/fpc386" > /dev/null \
-                || fail "building the FreePascal i386-win32 cross compiler"
-            PPC386="$SRC_DIR/pja/pas/build/fpc386/ppc386"
-            RTL386="$SRC_DIR/pja/pas/build/fpc386/units/i386-win32"
-        fi
-        extra=(PPC386="$(realpath "$PPC386")" RTL386="$(realpath "$RTL386")")
-    fi
+    bash "$SRC_DIR/pja/pas/fpc_cruzado_win.sh" "$FPCWIN" > /dev/null \
+        || fail "building the FreePascal Windows RTLs / i386 cross compiler"
+    local w; w=$(realpath "$FPCWIN")
+    local extra=(RTLW64="$w/units/x86_64-win64")
+    [ "$1" = 32 ] && extra=(PPC386="$w/ppc386" RTL386="$w/units/i386-win32")
     env PJA_DIR="$SRC_DIR/pja" OUT="$SRC_DIR/$PJA_WIN" ARCH="$1" "${extra[@]}" \
         bash "$SRC_DIR/pja/pas/frontera_win.sh" > /dev/null || fail "pjaffi DLL ($1 bits)"
 }

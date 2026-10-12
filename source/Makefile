@@ -457,25 +457,27 @@ linux-x64: bin $(PJA_DEP)
 # Windows: el nucleo .pja va como DLL al lado del .exe (estatico le quitaria
 # el ASLR al .exe entero, medido). pjaffi_x64.dll / pjaffi_x86.dll, y el .exe
 # se enlaza contra su biblioteca de importacion: ver pas/frontera_win.sh.
-# La de 32 bits necesita el compilador cruzado (pas/fpc_i386_win32.sh).
+# pas/fpc_cruzado_win.sh arma el compilador cruzado de 32 bits y las dos RTL.
 PJA_WIN     = $(PAS_OUT)/win
-FPC386_DIR  = $(PAS_OUT)/fpc386
+# Las RTL de Windows (y el ppc386 cruzado) se arman desde fpc-source: Debian
+# no trae la de 32 bits, y Ubuntu 22.04 tampoco la de win64.
+FPCWIN_DIR  = $(PAS_OUT)/fpcwin
 ifeq ($(PJA),1)
   PJA_WIN64_LIB = $(PJA_WIN)/64/libpjaffi_x64.dll.a
   PJA_WIN86_LIB = $(PJA_WIN)/32/libpjaffi_x86.dll.a
 endif
 
-$(PJA_WIN)/64/libpjaffi_x64.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh
+$(FPCWIN_DIR)/ppc386:
 	$(PJA_SIN_FPC)
-	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=64 bash $(PAS_DIR)/frontera_win.sh
+	bash $(PAS_DIR)/fpc_cruzado_win.sh $(FPCWIN_DIR)
 
-$(FPC386_DIR)/ppc386:
-	$(PJA_SIN_FPC)
-	bash $(PAS_DIR)/fpc_i386_win32.sh $(FPC386_DIR)
+$(PJA_WIN)/64/libpjaffi_x64.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh $(FPCWIN_DIR)/ppc386
+	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=64 RTLW64=$(CURDIR)/$(FPCWIN_DIR)/units/x86_64-win64 \
+	    bash $(PAS_DIR)/frontera_win.sh
 
-$(PJA_WIN)/32/libpjaffi_x86.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh $(FPC386_DIR)/ppc386
-	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=32 PPC386=$(CURDIR)/$(FPC386_DIR)/ppc386 \
-	    RTL386=$(CURDIR)/$(FPC386_DIR)/units/i386-win32 bash $(PAS_DIR)/frontera_win.sh
+$(PJA_WIN)/32/libpjaffi_x86.dll.a: $(wildcard $(PAS_DIR)/*.pas) $(wildcard $(PAS_DIR)/c/*.c) $(PAS_DIR)/frontera_win.sh $(FPCWIN_DIR)/ppc386
+	PJA_DIR=$(PJA_DIR) OUT=$(PJA_WIN) ARCH=32 PPC386=$(CURDIR)/$(FPCWIN_DIR)/ppc386 \
+	    RTL386=$(CURDIR)/$(FPCWIN_DIR)/units/i386-win32 bash $(PAS_DIR)/frontera_win.sh
 
 win-x64: JLS=0
 win-x64: bin $(PJA_WIN64_LIB)

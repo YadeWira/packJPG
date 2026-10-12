@@ -29,6 +29,14 @@ LIBGCC=$(dirname "$($CC -print-libgcc-file-name)")
 
 ( cd "$F" && $FPC -O2 -s -Fu"$PAS" -Fi"$PAS" -Fo"$OUT/c" -FU"$F" -FE"$F" -Fl"$LIBGCC" "$PAS/pjaffi.pas" > fpc.log 2>&1 ) \
   || { cat "$F/fpc.log"; exit 1; }
+# Con ensamblador EXTERNO (aarch64; en x86_64, con -Aas), -s deja .s y un
+# ppas.sh con lo que falta, y ningun .o: se corre solo la parte de ensamblar,
+# hasta el primer "Linking". Lo destapo el CI de ARM64 (12/10/2026). En
+# x86_64 FPC ensambla adentro y ppas.sh solo trae el enlace, que no se corre.
+if [ -f "$F/ppas.sh" ]; then
+  ( cd "$F" && sed '/^echo Linking/,$d' ppas.sh > ppas_asm.sh && sh ppas_asm.sh > asm.log 2>&1 ) \
+    || { cat "$F/asm.log"; exit 1; }
+fi
 
 # objetos del primer INPUT( ... ) de link.res, sin los crt* del cargador
 mapfile -t OBJS < <(awk '/^INPUT\(/{n++; next} /^\)/{next} n==1 && /\.o$/ {print}' "$F"/link*.res \

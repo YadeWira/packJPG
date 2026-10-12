@@ -23,7 +23,7 @@ Windows executables. Requires clang++ (or g++) for Linux, mingw-w64
 
 ```
 # Ubuntu/Debian
-sudo apt install clang mingw-w64 fpc fpc-source fp-units-win-rtl
+sudo apt install clang mingw-w64 fpc fpc-source
 
 # Arch
 sudo pacman -S clang mingw-w64-gcc
@@ -114,7 +114,7 @@ size and its BLAKE3-128 hash, optionally encrypted. Its core lives in
 
 ```
 sudo apt install fpc                          # Linux build
-sudo apt install fpc-source fp-units-win-rtl  # + the Windows DLLs (build_all.sh)
+sudo apt install fpc-source                   # + the Windows DLLs (build_all.sh)
 make                  # builds pja/pas/build/libpjaffi_pas.a first, links it statically
 make PJA=0            # without FreePascal: then `a` needs --pjg, it never falls back in silence
 make pja-check        # the format's own suite
@@ -127,9 +127,10 @@ it somewhere else.
 On Windows the core is a DLL next to the executable, `pjaffi_x64.dll` /
 `pjaffi_x86.dll` (linked statically it would cost the whole `.exe` its ASLR):
 `make win-x64` / `make win-x86` and `build_all.sh` build it and put it beside
-the `.exe`. The 32-bit one needs the FreePascal i386-win32 cross compiler, which
-Debian does not package; `pja/pas/fpc_i386_win32.sh` builds it from
-`fpc-source` in about 12 seconds.
+the `.exe`. Both need FreePascal's Windows RTL, and the 32-bit one an i386 cross compiler:
+Debian packages neither the latter nor, on Ubuntu 22.04, the win64 units.
+`pja/pas/fpc_cruzado_win.sh` builds all three from `fpc-source` in about 20
+seconds.
 
 The library (`make lib`, `dll`, `so`) does not include the core: it reads and
 writes the bare `.pjg` stream, as before.

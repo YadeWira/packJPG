@@ -44,7 +44,7 @@ pjatool x foto.pja foto.jpg [contraseña]     # decodifica, verifica tamaño y h
 | `pas/pjaffi.pas` | la frontera C (`include/pjacore.h`) |
 | `pas/frontera.sh` | `libpjaffi_pas.a` para enlazar estática en Linux |
 | `pas/frontera_win.sh` | `pjaffi_x64.dll` / `pjaffi_x86.dll` para Windows, con ASLR y DEP, y su biblioteca de importación |
-| `pas/fpc_i386_win32.sh` | el compilador cruzado de FreePascal para Windows de 32 bits, armado desde `fpc-source` (Debian no lo trae); ~12 s |
+| `pas/fpc_cruzado_win.sh` | el compilador cruzado de FreePascal para Windows de 32 bits y las dos RTL de Windows, armados desde `fpc-source` (Debian no trae el primero, y Ubuntu 22.04 tampoco las unidades de win64) |
 | `test_frontera.cpp`, `pjatool.cpp` | consumidores C++ de la frontera |
 
 ## Frontera C
