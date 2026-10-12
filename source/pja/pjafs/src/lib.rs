@@ -116,6 +116,8 @@ pub fn destino_de(destino: &Path, nombre: &[u8], rutas: bool, sobrescribir: bool
 
     // Limite de Windows, sobre la ruta resuelta y en unidades UTF-16, que es
     // lo que cuenta MAX_PATH. Se rechaza con mensaje; nunca se trunca.
+    // En TODAS las plataformas, a proposito (POLITICA 3.4): lo que se extrae
+    // en Linux tiene que poder extraerse en Windows.
     let largo = largo_windows(&candidato);
     if largo > MAX_PATH_WINDOWS {
         return Err(ErrorExtraccion::RutaMuyLargaParaWindows(largo));

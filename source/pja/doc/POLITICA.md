@@ -106,7 +106,7 @@ Y no hay **un** límite sino cuatro que no coinciden:
 |---|---|---|
 | `NAME_MAX` por componente | **255 bytes** | Linux (medido) |
 | `PATH_MAX` ruta completa | **4096 bytes** | Linux (medido) |
-| `MAX_PATH` ruta completa | **260 caracteres** | Windows, salvo opt-in explícito |
+| `MAX_PATH` ruta completa | **260 caracteres** | Windows — y lo aplicamos **en todas las plataformas** (ver abajo) |
 | NTFS por componente | 255 unidades UTF-16 | Windows |
 
 **Lo que se guarda y se valida va en bytes**, que es lo inequívoco y lo que el
@@ -121,13 +121,21 @@ incluye el directorio destino, que se elige al extraer. Una ruta de 800 bytes es
 válida en Linux e **inextraíble en Windows**. Entonces se verifica la ruta
 *resuelta* al extraer, y se falla con un mensaje claro — nunca truncando.
 
+**Decidido (12/10): el límite de 260 se aplica al extraer en todas las
+plataformas, no sólo en Windows.** Así, lo que se extrae en Linux también se
+puede extraer en Windows con el mismo destino: un árbol que en Linux pasa y en
+Windows no es justo el caso que esta política quiere evitar. El costo es
+rechazar en Linux rutas que su sistema de archivos admitiría (hasta 4096
+bytes); la salida es elegir un destino más corto.
+
 ### 3.5 Al extraer — defensa en profundidad
 
 Además de repetir 3.1 y aplicar 3.2 según la plataforma:
 
 - se resuelve la ruta contra el directorio destino y se **verifica que la ruta
   resuelta siga adentro**
-- se verifica el largo de la ruta resuelta contra el límite de la plataforma
+- se verifica el largo de la ruta resuelta contra `MAX_PATH` (260 unidades
+  UTF-16), en todas las plataformas
 - se rechaza si el destino existe y no se pidió sobrescribir
 
 Resolver-y-verificar es redundante con la validación, y va igual: la validación

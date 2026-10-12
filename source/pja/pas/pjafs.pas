@@ -410,7 +410,9 @@ begin
   end;
   if not EmpiezaCon(padreR, base) then Exit(RE(exEscapaDelDestino));
 
-  { Limite de Windows, sobre la ruta resuelta, en unidades UTF-16. }
+  { Limite de Windows, sobre la ruta resuelta, en unidades UTF-16. En TODAS
+    las plataformas, a proposito (POLITICA 3.4): lo que se extrae en Linux
+    tiene que poder extraerse en Windows. }
   i := LargoWindows(candidato);
   if i > MAX_PATH_WINDOWS then Exit(RE(exRutaMuyLargaParaWindows, i));
 
