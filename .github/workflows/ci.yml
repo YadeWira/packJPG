@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, 'maint/**' ]
     tags:     [ '[0-9]*', 'v[0-9]*' ]
   pull_request:
     branches: [ master ]
@@ -33,7 +33,7 @@ jobs:
         # README.md) — the Makefile prefers those over any system libcharls/
         # libjxl. Dropping them also fixes ubuntu-22.04 CI, which doesn't
         # even have a libjxl-dev package in its default repos.
-        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm
+        run: sudo apt-get update -q && sudo apt-get install -y mingw-w64 rpm g++-aarch64-linux-gnu qemu-user
 
       - name: Build all targets
         run: bash build_all.sh
@@ -59,6 +59,26 @@ jobs:
           ./dist/packJPG_linux_x64 a -np -o -od/tmp "$f"
           ./dist/packJPG_linux_x64 x -np -o -od/tmp /tmp/grayscale.pjg
           cmp "$f" /tmp/grayscale.jls && echo "PASS: $f (JPEG-LS)" || { echo "FAIL: $f (JPEG-LS)"; exit 1; }
+
+      - name: Smoke test (Linux ARM64 binary, under qemu)
+        run: |
+          # Cross-built here, run with qemu-user: the release binary itself,
+          # not a rebuild. cross-platform.yml also builds and round-trips
+          # natively on an ARM64 runner.
+          file dist/packJPG_linux_arm64 | grep -q 'ARM aarch64'
+          A64="qemu-aarch64 -L /usr/aarch64-linux-gnu ./dist/packJPG_linux_arm64"
+          mkdir -p /tmp/a64
+          n=0
+          for f in test-files/*.jpg test-files/grayscale.jls; do
+            b=$(basename "$f"); stem="${b%.*}"
+            $A64 a -np -o -od/tmp/a64 "$f"
+            ./dist/packJPG_linux_x64 a -np -o -od/tmp "$f"
+            # same .pjg on both architectures
+            cmp "/tmp/a64/${stem}.pjg" "/tmp/${stem}.pjg"
+            mkdir -p /tmp/a64/x && $A64 x -np -o -od/tmp/a64/x "/tmp/a64/${stem}.pjg"
+            cmp "$f" "/tmp/a64/x/$b" && echo "PASS: $f (arm64)" && n=$((n+1))
+          done
+          [ "$n" -eq 6 ] || { echo "FAIL: $n of 6"; exit 1; }
 
       - name: Lib batch API smoke (v4.0e)
         run: |
@@ -86,9 +106,60 @@ jobs:
         working-directory: source
         run: test/pjg_corruptos.sh
 
+  # macOS: one universal binary (arm64 + x86_64), built on Apple Silicon and
+  # then run on an Intel runner too, so each slice is executed on its own
+  # hardware and not only linked.
+  build-macos:
+    name: Build & test (macOS universal)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        working-directory: source
+        run: |
+          make macos CXX=clang++
+          lipo bin/packJPG_macos -verify_arch arm64 x86_64
+          lipo -info bin/packJPG_macos
+          otool -L bin/packJPG_macos
+      - name: Round-trip (arm64 slice)
+        run: bash .github/roundtrip_testfiles.sh source/bin/packJPG_macos
+      - name: Package
+        run: |
+          APP=$(sed -n 's/.*appversion *= *\([0-9]*\);.*/\1/p' source/packjpg.cpp)
+          SUB=$(sed -n 's/.*subversion *= *"\([a-z]*\)";.*/\1/p' source/packjpg.cpp)
+          V="${APP:0:1}.${APP:1}${SUB}"
+          mkdir -p dist/packjpg-$V-macos
+          cp source/bin/packJPG_macos dist/
+          cp source/bin/packJPG_macos dist/packjpg-$V-macos/packjpg
+          cp LICENSE dist/packjpg-$V-macos/
+          tar -C dist -czf dist/packjpg-$V-macos.tar.gz packjpg-$V-macos
+          rm -rf dist/packjpg-$V-macos
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packJPG-macos
+          path: dist/
+          if-no-files-found: error
+
+  test-macos-intel:
+    name: Test (macOS Intel, x86_64 slice)
+    needs: build-macos
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: packJPG-macos
+          path: dist/
+      - name: Round-trip (x86_64 slice)
+        run: |
+          chmod +x dist/packJPG_macos
+          [ "$(uname -m)" = x86_64 ]
+          bash .github/roundtrip_testfiles.sh dist/packJPG_macos
+
   release:
     name: Create GitHub release
-    needs: build
+    needs: [ build, build-macos, test-macos-intel ]
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
 
@@ -102,6 +173,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: packJPG-binaries
+          path: dist/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: packJPG-macos
           path: dist/
 
       - name: Extract release notes from CHANGELOG
@@ -119,7 +196,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.changelog.outputs.tag }}
-          name: "${{ steps.changelog.outputs.tag }} Windows & Linux"
+          name: "${{ steps.changelog.outputs.tag }} Windows, Linux & macOS"
           files: dist/*
           body: ${{ steps.changelog.outputs.notes }}
 

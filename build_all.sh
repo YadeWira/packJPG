@@ -3,6 +3,7 @@
 #
 # Targets:
 #   Linux x64      (native, requires g++ or clang++)
+#   Linux ARM64    (cross, requires aarch64-linux-gnu-g++)
 #   Windows x64    (Windows 7 SP1+, requires x86_64-w64-mingw32-g++-posix)
 #   Windows x86    (Windows 7 SP1+, requires i686-w64-mingw32-g++-posix)
 #
@@ -97,6 +98,34 @@ ok "dist/packJPG_linux_x64"
     -o "../$DIST/packJPG_linux_x64_native" \
     $SRC $JLS_SRC $JLS_LIBS)
 ok "dist/packJPG_linux_x64_native (native, do not distribute)"
+
+# ─── Linux ARM64 (cross) ─────────────────────────────────────────────────────
+# Cross-compiled from the same x86_64 host, so it gets the same glibc floor
+# as the x64 binary. JPEG-LS from the vendored source/linuxlibs/aarch64/.
+
+echo ""
+echo "==> Linux ARM64"
+ARM64="aarch64-linux-gnu-g++"
+if ! command -v "$ARM64" &>/dev/null; then
+    skip "$ARM64 not found — skipping Linux ARM64"
+    skip "Install with: sudo apt install g++-aarch64-linux-gnu"
+else
+    ARM64_JLS=""; ARM64_JLS_SRC=""; ARM64_JLS_LIBS=""
+    if [ -f "$SRC_DIR/linuxlibs/aarch64/libcharls.a" ]; then
+        ARM64_JLS="-DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include"
+        ARM64_JLS_SRC="jpegls.cpp"
+        d="linuxlibs/aarch64"
+        ARM64_JLS_LIBS="$d/libcharls.a $d/libjxl.a $d/libjxl_threads.a $d/libjxl_cms.a $d/liblcms2.a $d/libhwy.a $d/libbrotlienc.a $d/libbrotlidec.a $d/libbrotlicommon.a"
+        ok "Linux ARM64 JPEG-LS: linuxlibs/aarch64 found"
+    else
+        skip "Linux ARM64 JPEG-LS: source/linuxlibs/aarch64 not found"
+    fi
+    (cd "$SRC_DIR" && $ARM64 $CFLAGS -DUNIX $ARM64_JLS \
+        -o "../$DIST/packJPG_linux_arm64" \
+        $SRC $ARM64_JLS_SRC $ARM64_JLS_LIBS -lpthread \
+        && aarch64-linux-gnu-strip --strip-unneeded "../$DIST/packJPG_linux_arm64")
+    ok "dist/packJPG_linux_arm64"
+fi
 
 # ─── Windows JPEG-LS (vendored) ─────────────────────────────────────────────
 # No mingw packages of CharLS/libjxl exist, so the static libs are vendored

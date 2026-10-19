@@ -32,14 +32,29 @@ LIBS     = -lpthread
 # via apt but crashed at runtime on a system with only libjxl.so.0.11).
 # Static linking removes the runtime dependency entirely.
 JLS ?= $(shell echo 'int main(){}' | $(CXX) $(CXXFLAGS) -x c++ -lcharls -ljxl -ljxl_threads -o /dev/null - 2>/dev/null && echo 1 || echo 0)
-HAVE_LINUXLIBS_X64 := $(wildcard linuxlibs/x86_64/libcharls.a)
-ifneq ($(HAVE_LINUXLIBS_X64),)
-  CXXFLAGS += -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include
-  LIBS     += linuxlibs/x86_64/libcharls.a linuxlibs/x86_64/libjxl.a \
-              linuxlibs/x86_64/libjxl_threads.a linuxlibs/x86_64/libjxl_cms.a \
-              linuxlibs/x86_64/liblcms2.a linuxlibs/x86_64/libhwy.a \
-              linuxlibs/x86_64/libbrotlienc.a linuxlibs/x86_64/libbrotlidec.a \
-              linuxlibs/x86_64/libbrotlicommon.a
+# The vendored set is picked by host OS and CPU: linuxlibs/x86_64,
+# linuxlibs/aarch64, or maclibs/universal (arm64 + x86_64 in each .a). Up to
+# v5.0f this always linked linuxlibs/x86_64, which is why the macOS build
+# failed at link time from 2026-07-19 on ("not a mach-o file") and why the
+# Linux ARM64 CI job had to build without JPEG-LS.
+UNAME_S := $(shell uname -s 2>/dev/null)
+UNAME_M := $(shell uname -m 2>/dev/null)
+ifeq ($(UNAME_S),Darwin)
+  VENDOR_DIR := maclibs/universal
+else ifneq ($(filter aarch64 arm64,$(UNAME_M)),)
+  VENDOR_DIR := linuxlibs/aarch64
+else ifeq ($(UNAME_M),x86_64)
+  VENDOR_DIR := linuxlibs/x86_64
+endif
+# Link order matters: libcharls before libjxl before libjxl's own deps.
+VENDOR_NAMES = libcharls.a libjxl.a libjxl_threads.a libjxl_cms.a liblcms2.a \
+               libhwy.a libbrotlienc.a libbrotlidec.a libbrotlicommon.a
+vendor_libs  = $(addprefix $(1)/,$(VENDOR_NAMES))
+HAVE_VENDOR := $(if $(VENDOR_DIR),$(wildcard $(VENDOR_DIR)/libcharls.a))
+VENDOR_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include
+ifneq ($(HAVE_VENDOR),)
+  CXXFLAGS += $(VENDOR_DEFS)
+  LIBS     += $(call vendor_libs,$(VENDOR_DIR))
 else ifeq ($(JLS),1)
   CXXFLAGS += -DHAVE_JPEGLS
   LIBS     += -lcharls -ljxl -ljxl_threads
@@ -116,7 +131,19 @@ UPX       =
 # binary built with a newer GCC on a newer distro otherwise refuses to
 # start on an older one. Added to CXXFLAGS (not LDFLAGS) since `so:`
 # compiles+links in one invocation without referencing $(LDFLAGS).
+# Not on macOS: Apple's toolchain has no static libstdc++, and libc++ is part
+# of the OS there, so the floor is the deployment target instead.
+ifneq ($(UNAME_S),Darwin)
 CXXFLAGS += -static-libgcc -static-libstdc++
+endif
+endif
+
+# Strip at link time. Apple's ld calls -s obsolete; there `strip -x` runs
+# after the link instead.
+ifeq ($(UNAME_S),Darwin)
+STRIP_LD  =
+else
+STRIP_LD  = -s
 endif
 
 # --- default rules -----------------------------------------------------------
@@ -128,12 +155,15 @@ endif
 	@-$(RC) $< $@
 
 $(TARGET): $(OBJ) $(RES)
-	$(CXX) -o $@ $^ -s $(LDFLAGS) $(LIBS)
+	$(CXX) -o $@ $^ $(STRIP_LD) $(LDFLAGS) $(LIBS)
+ifeq ($(UNAME_S),Darwin)
+	strip -x $@
+endif
 	$(UPX)
 
 # --- standard targets --------------------------------------------------------
 
-.PHONY: all dev lib lib-tests dll so clean linux-x64 win-x64 win-x86 all-platforms \
+.PHONY: all dev lib lib-tests dll so clean linux-x64 linux-arm64 macos win-x64 win-x86 all-platforms \
         native pgo pgo-clean
 
 all: $(TARGET)
@@ -281,7 +311,7 @@ so:
 clean:
 	@echo clean...
 	@-rm -f *.o *.a $(TARGET) $(TARGET).exe $(TARGET).dll *.so \
-	        bin/$(TARGET)_linux_x64 \
+	        bin/$(TARGET)_linux_x64 bin/$(TARGET)_linux_arm64 bin/$(TARGET)_macos \
 	        bin/$(TARGET)_win_x64.exe \
 	        bin/$(TARGET)_win_x86.exe
 
@@ -294,6 +324,8 @@ clean:
 #
 # Usage:
 #   make linux-x64      -> bin/packJPG_linux_x64
+#   make linux-arm64    -> bin/packJPG_linux_arm64 (cross: g++-aarch64-linux-gnu)
+#   make macos          -> bin/packJPG_macos (on a Mac; arm64 + x86_64)
 #   make win-x64        -> bin/packJPG_win_x64.exe
 #   make win-x86        -> bin/packJPG_win_x86.exe
 #   make all-platforms  -> all three
@@ -339,6 +371,46 @@ else
 	$(WIN32) $(CROSS_FLAGS) -o bin/$(TARGET)_win_x86.exe $(CXXSRC) -s $(CROSS_LD)
 endif
 	@echo "[OK] bin/$(TARGET)_win_x86.exe"
+
+# Linux ARM64: cross-compiled on an x86_64 host (g++-aarch64-linux-gnu), or
+# native on an ARM64 one. Its own flags, not $(CXXFLAGS): those carry the
+# host's vendored set.
+ARM64_CXX   ?= $(if $(filter aarch64 arm64,$(UNAME_M)),$(CXX),aarch64-linux-gnu-g++)
+ARM64_FLAGS  = -I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer \
+               -flto -std=c++17 -DUNIX -static-libgcc -static-libstdc++
+HAVE_LINUXLIBS_ARM64 := $(wildcard linuxlibs/aarch64/libcharls.a)
+
+linux-arm64: bin
+ifneq ($(HAVE_LINUXLIBS_ARM64),)
+	$(ARM64_CXX) $(ARM64_FLAGS) $(VENDOR_DEFS) -o bin/$(TARGET)_linux_arm64 $(CXXSRC) -s \
+	    $(call vendor_libs,linuxlibs/aarch64) -lpthread
+else
+	@echo "[--] linuxlibs/aarch64 not found — building linux-arm64 without JPEG-LS"
+	$(ARM64_CXX) $(ARM64_FLAGS) -o bin/$(TARGET)_linux_arm64 $(CXXSRC) -s -lpthread
+endif
+	@echo "[OK] bin/$(TARGET)_linux_arm64"
+
+# macOS: one universal binary (Apple Silicon + Intel), macOS 10.15 or later
+# (std::filesystem). Built on a Mac: Apple's clang compiles both slices.
+MACOS_ARCHS ?= -arch arm64 -arch x86_64
+MACOS_MIN   ?= -mmacosx-version-min=10.15
+MACOS_FLAGS  = -I. -O3 -Wall -funroll-loops -ffast-math -fomit-frame-pointer \
+               -flto -std=c++17 -DUNIX $(MACOS_ARCHS) $(MACOS_MIN)
+HAVE_MACLIBS := $(wildcard maclibs/universal/libcharls.a)
+
+macos: bin
+ifneq ($(UNAME_S),Darwin)
+	@echo "ERROR: the macos target builds on macOS (Apple's clang and SDK)."; exit 1
+endif
+ifneq ($(HAVE_MACLIBS),)
+	$(CXX) $(MACOS_FLAGS) $(VENDOR_DEFS) -o bin/$(TARGET)_macos $(CXXSRC) \
+	    $(call vendor_libs,maclibs/universal) -lpthread
+else
+	@echo "[--] maclibs/universal not found — building macos without JPEG-LS"
+	$(CXX) $(MACOS_FLAGS) -o bin/$(TARGET)_macos $(CXXSRC) -lpthread
+endif
+	strip -x bin/$(TARGET)_macos
+	@echo "[OK] bin/$(TARGET)_macos"
 
 all-platforms: linux-x64 win-x64 win-x86
 	@echo ""

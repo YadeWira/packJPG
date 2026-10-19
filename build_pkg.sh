@@ -135,6 +135,24 @@ if $BUILD_TAR; then
     tar -C "$DIST" -czf "$DIST/${TAR_NAME}.tar.gz" "$TAR_NAME"
     rm -rf "$STAGING"
     ok "dist/${TAR_NAME}.tar.gz  ($(du -h "$DIST/${TAR_NAME}.tar.gz" | cut -f1))"
+
+    # Linux ARM64: only a .tar.gz, from the binary build_all.sh cross-compiled.
+    # No arm64 .deb: the apt repos (gh-pages here, and pack-apt, which takes
+    # every *.deb of the release) index binary-amd64 only, and an arm64
+    # package there would land in the amd64 index.
+    if [ -f "$DIST/packJPG_linux_arm64" ]; then
+        TAR_NAME="${PKG}-${VERSION}-linux-arm64"
+        STAGING="$DIST/$TAR_NAME"
+        rm -rf "$STAGING"
+        install -d "$STAGING"
+        install -m 755 "$DIST/packJPG_linux_arm64" "$STAGING/packjpg"
+        install -m 644 LICENSE "$STAGING/LICENSE"
+        tar -C "$DIST" -czf "$DIST/${TAR_NAME}.tar.gz" "$TAR_NAME"
+        rm -rf "$STAGING"
+        ok "dist/${TAR_NAME}.tar.gz  ($(du -h "$DIST/${TAR_NAME}.tar.gz" | cut -f1))"
+    else
+        skip "dist/packJPG_linux_arm64 not found (build_all.sh) — no linux-arm64 .tar.gz"
+    fi
 fi
 
 # ─── .deb ────────────────────────────────────────────────────────────────────

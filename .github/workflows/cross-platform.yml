@@ -2,7 +2,7 @@ name: Cross-platform verification
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, 'maint/**' ]
     tags:     [ '[0-9]*' ]
   pull_request:
     branches: [ master ]
@@ -17,20 +17,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS (macos-14 Apple Silicon / macos-13 Intel) was dropped: the
-          # Apple Silicon job had been failing on every run since 2026-07-19
-          # while the main CI stayed green, so it verified nothing and hid its
-          # own breakage. macOS is not a target we ship or test — see the
-          # supported-platform list in docs/howtocompile.md.
+          # Linux ARM64 is the only job covering a non-x86_64 Linux host,
+          # which is where the `padbit` signedness bug showed up (bare `char`
+          # is unsigned on ARM64, breaking the `== -1` sentinel and corrupting
+          # the arithmetic coder). x86_64 builds cannot catch that class.
           #
-          # Linux ARM64 stays, and is the reason this workflow exists: it is
-          # the only job covering a non-x86_64 host, which is where the
-          # `padbit` signedness bug showed up (bare `char` is unsigned on
-          # ARM64, breaking the `== -1` sentinel and corrupting the
-          # arithmetic coder). x86_64 builds cannot catch that class.
+          # macOS was dropped after v5.0c because the Apple Silicon job failed
+          # on every run from 2026-07-19 on. The cause was the Makefile, which
+          # linked linuxlibs/x86_64 on every host ("not a mach-o file"). Since
+          # v5.0g it picks the vendored set by host, and macOS is a supported
+          # target again, with its own maclibs/universal.
           - os: ubuntu-24.04-arm
             label: Linux ARM64
             install: sudo apt-get update -q && sudo apt-get install -y libjpeg-turbo-progs imagemagick
+          - os: macos-14
+            label: macOS Apple Silicon
+            install: brew install imagemagick
+          - os: macos-15-intel
+            label: macOS Intel
+            install: brew install imagemagick
 
     steps:
       - uses: actions/checkout@v4
@@ -57,8 +62,11 @@ jobs:
         working-directory: source
         run: |
           make clean
-          make CXX=c++ CXXFLAGS="-I. -O2 -Wall -DUNIX -std=c++17" -j$(getconf _NPROCESSORS_ONLN)
+          # Default flags, so the vendored JPEG-LS set for this host is linked
+          # in (linuxlibs/aarch64 or maclibs/universal) and gets exercised.
+          make CXX=c++ -j$(getconf _NPROCESSORS_ONLN)
           ls -la packJPG
+          ./packJPG 2>&1 | head -1
 
       - name: Generate test JPEG corpus
         run: |
@@ -87,19 +95,20 @@ jobs:
             stem=$(basename "${f%.*}")
             pjg="rt_out/${stem}.pjg"
             if [ ! -f "$pjg" ]; then
-              # Was misdiagnosed as an ImageMagick JPEG quirk — it wasn't.
-              # Root cause was padbit declared as bare `char` (signed on
-              # x86_64, unsigned on ARM64), breaking the `padbit == -1`
-              # sentinel check and corrupting the arithmetic coder on
-              # ARM64 (see the padbit fix commit). Fixed now; this branch
-              # is a safety net, not an expected outcome.
-              echo "SKIP (compress warned/errored): $stem"
+              # Used to be a SKIP that kept the job green. The one time it
+              # fired it was the padbit bug (bare `char`, unsigned on ARM64),
+              # not an ImageMagick quirk: a JPEG that does not compress here
+              # is a failure.
+              echo "FAIL (not compressed): $stem"; fail=1
               continue
             fi
             ./source/packJPG x -np -o -od/tmp "$pjg" || true
             cmp "$f" "/tmp/${stem}.jpg" && echo "PASS: $stem" || { echo "FAIL: $stem"; fail=1; }
           done
           exit $fail
+
+      - name: Round-trip of test-files/, JPEG-LS included
+        run: bash .github/roundtrip_testfiles.sh source/packJPG
 
       - name: Round-trip (library harness)
         working-directory: source
