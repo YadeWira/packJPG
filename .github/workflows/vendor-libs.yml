@@ -60,7 +60,7 @@ jobs:
             mkdir -p out-$arch
             cp build-$arch/charls/libcharls.a out-$arch/
             cp build-$arch/jxl/lib/libjxl.a build-$arch/jxl/lib/libjxl_threads.a build-$arch/jxl/lib/libjxl_cms.a out-$arch/
-            cp build-$arch/jxl/third_party/lcms2/liblcms2.a build-$arch/jxl/third_party/highway/libhwy.a out-$arch/
+            cp build-$arch/jxl/third_party/liblcms2.a build-$arch/jxl/third_party/highway/libhwy.a out-$arch/
             cp build-$arch/jxl/third_party/brotli/libbrotlienc.a build-$arch/jxl/third_party/brotli/libbrotlidec.a \
                build-$arch/jxl/third_party/brotli/libbrotlicommon.a out-$arch/
           done
