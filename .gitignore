@@ -34,6 +34,9 @@
 # runtime-dependency drift that broke the v5.0a .deb) — deliberately
 # committed, not built. See source/linuxlibs/README.md.
 !/source/linuxlibs/**/*.a
+# source/maclibs/ is vendored the same way (universal arm64 + x86_64, built by
+# .github/workflows/vendor-libs.yml). See source/maclibs/README.md.
+!/source/maclibs/**/*.a
 
 # Executables
 *.exe

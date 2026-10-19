@@ -23,10 +23,14 @@ system-wide.
 
 ```
 linuxlibs/
-  x86_64/
+  x86_64/    native build
+  aarch64/   cross-built from x86_64 (since v5.0g, see below)
     libcharls.a libjxl.a libjxl_threads.a libjxl_cms.a
     liblcms2.a libhwy.a libbrotlienc.a libbrotlidec.a libbrotlicommon.a
 ```
+
+The Makefile picks the directory by host CPU (`uname -m`); `make linux-arm64`
+and `build_all.sh` use `aarch64/` to cross-compile the ARM64 release binary.
 
 Headers are shared with `source/winlibs/include/` (portable C API;
 `CHARLS_STATIC`/`JXL_STATIC_DEFINE` make the export-macro annotations
@@ -97,10 +101,34 @@ cmake --build . --target jxl jxl_threads -j$(nproc)
 
 cp build-charls/libcharls.a source/linuxlibs/x86_64/
 cp build-jxl/lib/{libjxl,libjxl_threads,libjxl_cms}.a source/linuxlibs/x86_64/
-cp build-jxl/third_party/lcms2/liblcms2.a source/linuxlibs/x86_64/
+cp build-jxl/third_party/liblcms2.a source/linuxlibs/x86_64/
 cp build-jxl/third_party/highway/libhwy.a source/linuxlibs/x86_64/
 cp build-jxl/third_party/brotli/{libbrotlienc,libbrotlidec,libbrotlicommon}.a source/linuxlibs/x86_64/
 ```
+
+### aarch64
+
+The same recipe, cross-compiled inside an `ubuntu:22.04` container, so the
+libraries get the same glibc floor (2.35) as the x86_64 release:
+
+```bash
+apt-get install -y cmake make curl g++-aarch64-linux-gnu
+cat > tc.cmake <<'T'
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+T
+# then both cmake invocations above with -DCMAKE_TOOLCHAIN_FILE=$PWD/tc.cmake,
+# and copy into source/linuxlibs/aarch64/
+```
+
+CharLS comes from its GitHub tag
+(`https://github.com/team-charls/charls/archive/refs/tags/2.4.2.tar.gz`)
+instead of `apt-get source`: same 2.4.2, no deb-src needed.
 
 `-DCMAKE_POSITION_INDEPENDENT_CODE=ON` is required — without it, linking
 these into `libpackJPG.so` (the `make so` target) fails since PIC/non-PIC
