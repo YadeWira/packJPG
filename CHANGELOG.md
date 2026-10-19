@@ -1,5 +1,53 @@
 # packJPG Changelog
 
+## v5.0g (2026-10-19) — Linux ARM64 and macOS, and five decoder fixes from the 6.0 line
+
+> No format change: `.pjg` output stays byte-identical to v5.0f (checked on
+> 156 real JPEGs, in normal and `-sfth` mode), and v5.0f files decode with
+> this build. The fixes below were written for the 6.0 line and are backported
+> unchanged; none of them needs anything from 6.0.
+
+### Added
+
+- **Linux ARM64 release binary** (`packJPG_linux_arm64`, and a `.tar.gz`),
+  with JPEG-LS. Cross-built on the same Ubuntu 22.04 runner as the x64 one, so
+  it needs glibc 2.35 or later, like x64. Its `.pjg` are byte-identical to the
+  x64 binary's: checked on the 156 JPEGs plus the JPEG-LS sample under qemu,
+  and on every CI run. No arm64 `.deb` yet: both apt repositories index
+  `binary-amd64` only, and an arm64 package would land in the amd64 index.
+- **macOS release binary** (`packJPG_macos`, and a `.tar.gz`): one universal
+  binary for Apple Silicon and Intel, macOS 10.15 or later, with JPEG-LS. CI
+  builds it on Apple Silicon and runs it on an Intel Mac as well.
+- `install.sh` installs on Linux ARM64 and macOS (from the release tarball),
+  and keeps the apt path for Debian/Ubuntu x86_64 only.
+
+### Fixed
+
+- **The macOS build had failed since 2026-07-19, and Linux ARM64 built without
+  JPEG-LS.** The Makefile linked `linuxlibs/x86_64/` on every host. It now picks
+  the vendored set by host OS and CPU: `linuxlibs/x86_64`, `linuxlibs/aarch64`
+  or `maclibs/universal`, the last two new in this release.
+- **A `.pjg` with one bit flipped could write through a null pointer or read
+  past the heap** (`recode_jpeg` with no SOS in the header;
+  `pjg_unoptimize_header` and `jpg_parse_jfif` with unvalidated segment and
+  table lengths). Six one-bit cases are in `source/test/pjg_corruptos/`, and a
+  new CI job runs them under ASan and UBSan. v5.0f fails all six.
+- **A truncated `.pjg` was accepted and decoded to a different JPEG.** The
+  arithmetic decoder now counts the zero bits it fabricates past the end and
+  rejects past 64. Shallow truncations decoded silently wrong: 95 of 160 cells
+  before, 46 after. The remaining ones are valid encodings of another JPEG, and
+  only a checksum in the format tells those apart.
+- **The `.pjg` settings block was used without a check.** `nois_trs` and
+  `segm_cnt` came straight from the file into a shift width and an array index.
+  One byte could also stall the decoder for 32 s.
+- **Two out-of-range reads on the compression path, reachable from an ordinary
+  JPEG:** the scan-component lookup tested the bound after the dereference
+  (CMYK files), and the Huffman tree builder could walk into a leaf marker.
+- **`-sfth` files ignored short reads.** A truncated `-sfth` `.pjg` decoded the
+  zero-filled rest of its buffer; now it is rejected at the declared size.
+
+---
+
 ## v5.0f (2026-08-25) — out-of-range reads in the decoder, and a validation that was never wired
 
 > No format change and no codec change: `.pjg` output stays byte-identical to
