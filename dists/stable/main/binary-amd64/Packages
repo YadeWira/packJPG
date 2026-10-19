@@ -255,3 +255,20 @@ Description: Lossless JPEG compressor
  achieving better compression than standard JPEG storage. Supports
  single-file parallel compression (-sfth) and batch multi-threading (-th).
 
+Package: packjpg
+Version: 5.0g
+Architecture: amd64
+Maintainer: Yade Bravo <https://github.com/YadeWira/packJPG>
+Installed-Size: 7172
+Filename: pool/main/packjpg_5.0g_amd64.deb
+Size: 2423004
+MD5sum: 240de5b1d3b63e971e79ce2199e05a73
+SHA1: 4981db434e219bbd7f0d577746ba1cfc2f522b7a
+SHA256: c29a0e30f535715f446087dd2bc1466b697885b4e905f813ab24567629de7a54
+Section: utils
+Priority: optional
+Description: Lossless JPEG compressor
+ packJPG compresses JPEG files to the PJG format for lossless archival,
+ achieving better compression than standard JPEG storage. Supports
+ single-file parallel compression (-sfth) and batch multi-threading (-th).
+
