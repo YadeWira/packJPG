@@ -4,7 +4,7 @@ This document explains how to compile packJPG as an executable or as a
 static/shared library. Requires a C++17 compliant compiler.
 
 **Tested with:** clang 18, g++ 13.
-**Supported targets:** Linux x64, Windows x64 (cross), Windows x86 (cross) — all Windows 7 SP1+.
+**Supported targets:** Linux x64, Linux ARM64 (cross or native), macOS 10.15+ (universal: Apple Silicon + Intel), Windows x64 (cross), Windows x86 (cross) — all Windows 7 SP1+.
 
 
 ## Quick build (all platforms at once)
@@ -15,26 +15,47 @@ From the `source/` directory, run:
 ./build_all.sh
 ```
 
-This builds Linux x64, Windows x64, and Windows x86 binaries into
-`bin/`. Requires clang++ (or g++) for Linux and mingw-w64 (**posix**
-thread model, see below) for Windows targets.
+This builds Linux x64, Linux ARM64, Windows x64, and Windows x86 binaries
+into `dist/`. Requires clang++ (or g++) for Linux, g++-aarch64-linux-gnu for
+ARM64, and mingw-w64 (**posix** thread model, see below) for Windows targets.
+A missing cross compiler skips that target.
 
 ```
 # Ubuntu/Debian
-sudo apt install clang mingw-w64
+sudo apt install clang mingw-w64 g++-aarch64-linux-gnu
 
 # Arch
 sudo pacman -S clang mingw-w64-gcc
 ```
 
-> **macOS is not a supported build host.** It was covered by the
-> cross-platform CI workflow up to and including v5.0c, and removed after it:
-> the Apple Silicon job had failed on every run for weeks while the rest of CI
-> stayed green, so it verified nothing and hid its own breakage. The code is
-> portable C++17 and probably still builds there (`brew install llvm
-> mingw-w64` used to be the recipe), but nothing measures it, so no claim is
-> made. The verified set is the **Supported targets** line at the top of this
-> document, plus Linux ARM64, which CI builds and round-trip-checks.
+### macOS
+
+Supported again since v5.0g. It was dropped after v5.0c because the Apple
+Silicon CI job failed on every run from 2026-07-19 on; the cause was the
+Makefile, which linked the Linux x86_64 libraries on every host. It now picks
+the vendored set by host, and macOS has its own: `source/maclibs/universal/`.
+
+On a Mac, with the Xcode command line tools (`xcode-select --install`):
+
+```
+cd source
+make            # this Mac's architecture
+make macos      # bin/packJPG_macos: universal (arm64 + x86_64), macOS 10.15+
+```
+
+CI builds the universal binary on Apple Silicon and runs it on an Intel
+runner too, so each slice is executed on its own hardware.
+
+### Linux ARM64
+
+`make linux-arm64` cross-compiles `bin/packJPG_linux_arm64` with
+`aarch64-linux-gnu-g++` (on an ARM64 host it uses the native compiler), and
+plain `make` on an ARM64 host builds natively. Both link
+`source/linuxlibs/aarch64/`. The release binary is cross-built on the same
+Ubuntu 22.04 runner as the x64 one, so it needs glibc 2.35 or later; CI runs
+it under qemu and checks that its `.pjg` match the x64 binary's byte for byte,
+and the cross-platform workflow also builds and round-trips on a real ARM64
+runner.
 
 
 ## Compiling with make
@@ -45,6 +66,8 @@ Individual targets are available via the Makefile:
 |---|---|
 | `make` (or `make all`) | Linux x64 executable (default, portable) |
 | `make linux-x64` | Linux x64 executable into `bin/` |
+| `make linux-arm64` | Linux ARM64 executable into `bin/` (cross with `aarch64-linux-gnu-g++`, or native) |
+| `make macos` | macOS universal executable into `bin/` (on a Mac) |
 | `make win-x64` | Windows x64 executable (requires mingw-w64's posix thread model — used automatically, see below) |
 | `make win-x86` | Windows x86 executable (requires mingw-w64's posix thread model — used automatically, see below) |
 | `make all-platforms` | all three targets above |

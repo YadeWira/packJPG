@@ -4,9 +4,9 @@
 # Usage:
 #   curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash
 #
-# On Debian/Ubuntu this sets up the apt repository so future updates
-# arrive via 'apt upgrade'. On other distros it installs from the
-# latest GitHub release directly.
+# On Debian/Ubuntu x86_64 this sets up the apt repository so future
+# updates arrive via 'apt upgrade'. Elsewhere (other distros, Linux ARM64,
+# macOS) it installs from the latest GitHub release directly.
 #
 # Options:
 #   --apt-only    set up apt repo and exit without fallback
@@ -38,15 +38,21 @@ need curl
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
-[[ "$OS" == "Linux" ]]    || { echo "error: unsupported OS '$OS' (only Linux is supported)" >&2; exit 1; }
-[[ "$ARCH" == "x86_64" ]] || { echo "error: unsupported arch '$ARCH' (only x86_64 is supported)" >&2; exit 1; }
+# PLAT is the suffix of the release tarball: packjpg-<version>-<PLAT>.tar.gz
+case "$OS/$ARCH" in
+    Linux/x86_64)                  PLAT="linux-x64" ;;
+    Linux/aarch64|Linux/arm64)     PLAT="linux-arm64" ;;
+    Darwin/arm64|Darwin/x86_64)    PLAT="macos" ;;   # one universal binary
+    *) echo "error: unsupported platform '$OS $ARCH' (Linux x86_64/ARM64, macOS)" >&2; exit 1 ;;
+esac
 
 SUDO=""
 [[ "$EUID" -ne 0 ]] && command -v sudo &>/dev/null && SUDO="sudo"
 
 # ─── apt path (Debian/Ubuntu) ────────────────────────────────────────────────
 
-if command -v apt &>/dev/null; then
+# The apt repository only carries amd64 packages.
+if [[ "$PLAT" == "linux-x64" ]] && command -v apt &>/dev/null; then
     echo "Setting up packJPG apt repository ..."
 
     # Add GPG key
@@ -88,11 +94,16 @@ DEB_URL=""
 RPM_URL=""
 TAR_URL=""
 
+# By exact name: the release also carries the library archives
+# (packJPG-<v>-linux-x64-lib.tar.gz) and one tarball per platform, and
+# "the last *.tar.gz in the list" used to be whichever the API listed last.
+# .deb and .rpm are x86_64 only.
 while IFS= read -r url; do
-    case "$url" in
-        *.deb)    DEB_URL="$url" ;;
-        *.rpm)    RPM_URL="$url" ;;
-        *.tar.gz) TAR_URL="$url" ;;
+    f="${url##*/}"
+    case "$f" in
+        packjpg_*_amd64.deb)       [[ "$PLAT" == "linux-x64" ]] && DEB_URL="$url" ;;
+        packjpg-*.x86_64.rpm)      [[ "$PLAT" == "linux-x64" ]] && RPM_URL="$url" ;;
+        packjpg-*-"$PLAT".tar.gz)  TAR_URL="$url" ;;
     esac
 done < <(echo "$RELEASE_JSON" | grep '"browser_download_url"' | sed 's/.*"browser_download_url": *"\(.*\)".*/\1/')
 
@@ -115,7 +126,7 @@ elif [[ -n "$TAR_URL" ]]; then
     INSTALL_METHOD="tar"
     DOWNLOAD_URL="$TAR_URL"
 else
-    echo "error: no compatible package found in release assets" >&2
+    echo "error: the latest release ($VERSION) has no package for $PLAT" >&2
     exit 1
 fi
 

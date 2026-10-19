@@ -7,22 +7,26 @@ reconstruction. Typical file size reduction: ~20%.
 It also recompresses **JPEG-LS** (`.jls`) files, typically ~16% smaller —
 see [JPEG-LS support](#jpeg-ls-support).
 
-**Supported platforms:** Linux x64, Windows 7 SP1+ (x86 + x64).
+**Supported platforms:** Linux x64 and ARM64, macOS 10.15+ (Apple Silicon and Intel), Windows 7 SP1+ (x86 + x64).
 
 **📖 [Wiki](https://github.com/YadeWira/packJPG/wiki)** — FAQ, troubleshooting, use cases, comparison with other tools, release archive.
 
 
 ## Installation
 
-### Linux (one-liner)
+### Linux and macOS (one-liner)
 
 ```bash
 curl -sL https://raw.githubusercontent.com/YadeWira/packJPG/master/install.sh | bash
 ```
 
-On **Debian/Ubuntu**, this sets up the apt repository so future updates
-arrive via `apt upgrade`. On other distros it installs from the latest
-GitHub release directly.
+On **Debian/Ubuntu x86_64**, this sets up the apt repository so future updates
+arrive via `apt upgrade`. On other distros, on Linux ARM64 and on macOS it
+installs from the latest GitHub release directly, into `/usr/local/bin`.
+
+The macOS binary is not signed. Installed this way it runs as is; downloaded
+with a browser, macOS quarantines it, and `xattr -d com.apple.quarantine
+packJPG_macos` lets it run.
 
 #### Debian/Ubuntu — apt repository (manual setup)
 
@@ -44,6 +48,9 @@ Download the latest binary from the [Releases](https://github.com/YadeWira/packJ
 |---|---|
 | `packJPG_win_x64.exe` | Windows 7 SP1+ 64-bit (no ANSI colors before Windows 10) |
 | `packJPG_win_x86.exe` | Windows 7 SP1+ 32-bit (no ANSI colors before Windows 10) |
+| `packJPG_linux_x64` | Linux x64, glibc 2.35+ (also as `.tar.gz`, `.deb`, `.rpm`) |
+| `packJPG_linux_arm64` | Linux ARM64, glibc 2.35+ (also as `.tar.gz`) |
+| `packJPG_macos` | macOS 10.15+, one universal binary for Apple Silicon and Intel (also as `.tar.gz`) |
 
 
 ## Usage
@@ -453,7 +460,7 @@ format**:
 
 | Source tree | Target platforms | Format produced |
 |---|---|---|
-| `source/` | Linux x64, Linux ARM64, Windows 7 SP1+ (x86 + x64) | byte `0x28` + sub-marker `0x02` |
+| `source/` | Linux x64, Linux ARM64, macOS 10.15+, Windows 7 SP1+ (x86 + x64) | byte `0x28` + sub-marker `0x02` |
 
 A single codebase now covers every platform — the former `sourcelegacy/`
 (C++14, Win32-API-only) tree existed solely to support Windows XP, which
@@ -466,12 +473,10 @@ was verified bidirectionally against v4.0f: each decodes the other's
 output byte-exact for non-JPEG-LS content).
 
 The platforms in that table are the ones CI builds and round-trip-verifies.
-The code is portable C++17 and other Unix hosts (macOS among them) are
-expected to build, but nothing measures it: macOS was covered by the
-cross-platform workflow up to and including v5.0c, and removed after it
-because the Apple Silicon job had failed on every run for weeks while the
-rest of CI stayed green — a permanently red check verifies nothing and hides
-its own breakage. Treat macOS as unsupported until someone measures it.
+macOS was dropped after v5.0c because its CI job failed on every run from
+2026-07-19 on, and came back in v5.0g once the cause was found: the Makefile
+linked the Linux x86_64 libraries on every host. CI now builds the universal
+binary on Apple Silicon and runs it on an Intel Mac as well.
 
 **Version numbering:**
 
@@ -600,6 +605,8 @@ error rather than silently producing lossy or non-reproducible output.
 | Build | JPEG-LS? | Notes |
 |---|---|---|
 | Linux x64 (`packJPG_linux_x64`) | ✅ | via vendored static libs (`source/linuxlibs/`), zero runtime deps |
+| Linux ARM64 (`packJPG_linux_arm64`) | ✅ | via vendored static libs (`source/linuxlibs/aarch64/`), zero runtime deps |
+| macOS (`packJPG_macos`) | ✅ | via vendored static libs (`source/maclibs/universal/`), zero runtime deps beyond the OS |
 | Windows x64 (`packJPG_win_x64.exe`) | ✅ | via vendored static libs (`source/winlibs/`) |
 | Windows x86 (`packJPG_win_x86.exe`) | ✅ | via vendored static libs (`source/winlibs/`) |
 | `packJPG.dll` / library SDK archives | ✅ | via the same `winlibs/` vendored set (posix thread model, shared with the CLI) |
