@@ -1,0 +1,84 @@
+name: Vendored libs (macOS)
+
+# Builds the static CharLS + libjxl set for macOS that source/maclibs/
+# vendors, same versions and flags as source/linuxlibs/README.md. Runs only
+# when this file changes (or by hand): the build scripts never rebuild these,
+# they link the committed .a files. Download the artifact, check it with
+# `lipo -info`, and commit it under source/maclibs/universal/.
+#
+# One build per architecture and `lipo -create` at the end, not a single
+# CMAKE_OSX_ARCHITECTURES="arm64;x86_64" build: libjxl and highway probe
+# compiler flags per target ISA, and a probe that passes for x86_64 is then
+# applied to the arm64 half of the same compile.
+
+on:
+  push:
+    paths: [ '.github/workflows/vendor-libs.yml' ]
+  workflow_dispatch:
+
+jobs:
+  maclibs:
+    name: macOS universal (arm64 + x86_64)
+    runs-on: macos-14
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '10.15'
+    steps:
+      - name: Sources
+        run: |
+          mkdir src && cd src
+          curl -sL https://github.com/team-charls/charls/archive/refs/tags/2.4.2.tar.gz | tar xz
+          curl -sL https://github.com/libjxl/libjxl/archive/refs/tags/v0.11.2.tar.gz | tar xz
+          cd libjxl-0.11.2/third_party
+          curl -sL https://github.com/google/highway/archive/refs/tags/1.2.0.tar.gz | tar xz && rm -rf highway && mv highway-1.2.0 highway
+          curl -sL https://github.com/google/brotli/archive/refs/tags/v1.1.0.tar.gz | tar xz && rm -rf brotli && mv brotli-1.1.0 brotli
+          curl -sL https://github.com/mm2/Little-CMS/archive/refs/tags/lcms2.16.tar.gz | tar xz && rm -rf lcms && mv Little-CMS-lcms2.16 lcms
+          touch lcms/.git
+
+      - name: Build per architecture
+        run: |
+          for arch in arm64 x86_64; do
+            cmake -S src/charls-2.4.2 -B build-$arch/charls \
+              -DCMAKE_OSX_ARCHITECTURES=$arch \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+              -DCHARLS_BUILD_TESTS=OFF -DCHARLS_BUILD_SAMPLES=OFF -DCHARLS_INSTALL=OFF \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_CXX_FLAGS="-O2"
+            cmake --build build-$arch/charls --target charls -j$(sysctl -n hw.ncpu)
+            cmake -S src/libjxl-0.11.2 -B build-$arch/jxl \
+              -DCMAKE_OSX_ARCHITECTURES=$arch \
+              -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF \
+              -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_DEVTOOLS=OFF \
+              -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF \
+              -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_MANPAGES=OFF \
+              -DJPEGXL_ENABLE_JNI=OFF -DJPEGXL_ENABLE_SJPEG=OFF \
+              -DJPEGXL_ENABLE_OPENEXR=OFF -DJPEGXL_ENABLE_VIEWERS=OFF \
+              -DJPEGXL_ENABLE_PLUGINS=OFF -DJPEGXL_ENABLE_JPEGLI=OFF \
+              -DJPEGXL_ENABLE_TRANSCODE_JPEG=OFF -DJPEGXL_ENABLE_SKCMS=OFF \
+              -DJPEGXL_BUNDLE_LIBPNG=OFF -DJPEGXL_ENABLE_AVX512=OFF \
+              -DJPEGXL_FORCE_SYSTEM_BROTLI=OFF \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_CXX_FLAGS="-O2"
+            cmake --build build-$arch/jxl --target jxl jxl_threads -j$(sysctl -n hw.ncpu)
+            mkdir -p out-$arch
+            cp build-$arch/charls/libcharls.a out-$arch/
+            cp build-$arch/jxl/lib/libjxl.a build-$arch/jxl/lib/libjxl_threads.a build-$arch/jxl/lib/libjxl_cms.a out-$arch/
+            cp build-$arch/jxl/third_party/lcms2/liblcms2.a build-$arch/jxl/third_party/highway/libhwy.a out-$arch/
+            cp build-$arch/jxl/third_party/brotli/libbrotlienc.a build-$arch/jxl/third_party/brotli/libbrotlidec.a \
+               build-$arch/jxl/third_party/brotli/libbrotlicommon.a out-$arch/
+          done
+
+      - name: lipo
+        run: |
+          mkdir -p maclibs/universal
+          for f in out-arm64/*.a; do
+            n=$(basename $f)
+            lipo -create out-arm64/$n out-x86_64/$n -output maclibs/universal/$n
+            lipo -info maclibs/universal/$n
+          done
+          # both slices of every library, or nothing
+          [ "$(ls maclibs/universal/*.a | wc -l)" -eq 9 ]
+          for f in maclibs/universal/*.a; do lipo -verify_arch $f arm64 x86_64; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maclibs-universal
+          path: maclibs/universal/
+          if-no-files-found: error
