@@ -50,7 +50,14 @@ endif
 VENDOR_NAMES = libcharls.a libjxl.a libjxl_threads.a libjxl_cms.a liblcms2.a \
                libhwy.a libbrotlienc.a libbrotlidec.a libbrotlicommon.a
 vendor_libs  = $(addprefix $(1)/,$(VENDOR_NAMES))
+# `make JLS=0` turns JPEG-LS off even with the vendored set present. Only when
+# given on the command line: JLS's default is the system-library probe above,
+# which says 0 on any machine without libcharls-dev, vendored set or not.
+ifeq ($(origin JLS)$(JLS),command line0)
+HAVE_VENDOR :=
+else
 HAVE_VENDOR := $(if $(VENDOR_DIR),$(wildcard $(VENDOR_DIR)/libcharls.a))
+endif
 VENDOR_DEFS  = -DHAVE_JPEGLS -DCHARLS_STATIC -DJXL_STATIC_DEFINE -Iwinlibs/include
 ifneq ($(HAVE_VENDOR),)
   CXXFLAGS += $(VENDOR_DEFS)
