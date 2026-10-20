@@ -64,8 +64,8 @@ Quick API
   pjglib_set_intra/inter_file_threads(n), pjglib_suggest_batch_threads()
   pjglib_set_max_output_size(bytes)   // decompression-bomb guard; 0 = off
 
-Full reference + example: README "Library / DLL API" at
-https://github.com/YadeWira/packJPG
+Full reference + example: the "Library API" wiki page,
+https://github.com/YadeWira/packJPG/wiki/Library-API
 EOF
 
 tar -C "$DIST" -czf "$DIST/packJPG-${VERSION}-linux-x64-lib.tar.gz" "packJPG-${VERSION}-linux-x64-lib"
@@ -127,8 +127,8 @@ Quick API
 Untrusted .pjg input: set a ceiling once at startup, e.g.
   pjglib_set_max_output_size(64u*1024*1024);   // refuse >64 MB reconstructions
 
-Full reference + example: README "Library / DLL API" at
-https://github.com/YadeWira/packJPG
+Full reference + example: the "Library API" wiki page,
+https://github.com/YadeWira/packJPG/wiki/Library-API
 EOF
 
     (cd "$DIST" && zip -q -r "packJPG-${VERSION}-${ARCH}-lib.zip" "packJPG-${VERSION}-${ARCH}-lib")

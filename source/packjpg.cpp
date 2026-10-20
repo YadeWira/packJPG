@@ -1128,7 +1128,7 @@ INTERN const char*  appname      = "packjpg";
 // decode header loop in unpack_pjg(). What is NOT decoded: legacy
 // v3.1d (version byte 31) — a different version byte yields a clean
 // "incompatible file" error. Keep an old binary for v3.x/v2.x
-// archives, or re-encode. See README "Format and versioning policy".
+// archives, or re-encode. See the "Format and compatibility" wiki page.
 INTERN const unsigned char format_version_current = 40;
 INTERN const char*  author       = "Yade Bravo";
 #if !defined(BUILD_LIB)
